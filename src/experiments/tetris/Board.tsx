@@ -1,4 +1,14 @@
-import { COLORS, COLS, ROWS, ghostY, previewMatrix, visualY, type GameState, type PieceType } from './engine'
+import {
+  COLORS,
+  COLS,
+  ROWS,
+  animProgress,
+  ghostY,
+  previewMatrix,
+  visualY,
+  type GameState,
+  type PieceType,
+} from './engine'
 
 const CELL = 28
 
@@ -15,6 +25,24 @@ function colorOf(type: PieceType): number {
   return map[type]
 }
 
+function drawCell(
+  ctx: CanvasRenderingContext2D,
+  c: number,
+  r: number,
+  colorIndex: number,
+  alpha = 1,
+  cell = CELL,
+) {
+  ctx.globalAlpha = alpha
+  const x = c * cell
+  const y = r * cell
+  ctx.fillStyle = COLORS[colorIndex] ?? '#888'
+  ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2)
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)'
+  ctx.strokeRect(x + 1, y + 1, cell - 2, cell - 2)
+  ctx.globalAlpha = 1
+}
+
 function drawMatrix(
   ctx: CanvasRenderingContext2D,
   matrix: number[][],
@@ -24,19 +52,30 @@ function drawMatrix(
   alpha = 1,
   cell = CELL,
 ) {
-  ctx.globalAlpha = alpha
   for (let r = 0; r < matrix.length; r++) {
     for (let c = 0; c < matrix[r]!.length; c++) {
       if (!matrix[r]![c]) continue
-      const x = (ox + c) * cell
-      const y = (oy + r) * cell
-      ctx.fillStyle = COLORS[colorIndex] ?? '#888'
-      ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2)
-      ctx.strokeStyle = 'rgba(255,255,255,0.15)'
-      ctx.strokeRect(x + 1, y + 1, cell - 2, cell - 2)
+      drawCell(ctx, ox + c, oy + r, colorIndex, alpha, cell)
     }
   }
-  ctx.globalAlpha = 1
+}
+
+function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  ctx.fillStyle = '#0a1020'
+  ctx.fillRect(0, 0, w, h)
+  ctx.strokeStyle = '#1a2438'
+  for (let x = 0; x <= COLS; x++) {
+    ctx.beginPath()
+    ctx.moveTo(x * CELL, 0)
+    ctx.lineTo(x * CELL, h)
+    ctx.stroke()
+  }
+  for (let y = 0; y <= ROWS; y++) {
+    ctx.beginPath()
+    ctx.moveTo(0, y * CELL)
+    ctx.lineTo(w, y * CELL)
+    ctx.stroke()
+  }
 }
 
 export function Board({ state }: { state: GameState }) {
@@ -47,38 +86,60 @@ export function Board({ state }: { state: GameState }) {
     const w = COLS * CELL
     const h = ROWS * CELL
     ctx.clearRect(0, 0, w, h)
-    ctx.fillStyle = '#0a1020'
-    ctx.fillRect(0, 0, w, h)
+    drawGrid(ctx, w, h)
 
-    ctx.strokeStyle = '#1a2438'
-    for (let x = 0; x <= COLS; x++) {
-      ctx.beginPath()
-      ctx.moveTo(x * CELL, 0)
-      ctx.lineTo(x * CELL, h)
-      ctx.stroke()
-    }
-    for (let y = 0; y <= ROWS; y++) {
-      ctx.beginPath()
-      ctx.moveTo(0, y * CELL)
-      ctx.lineTo(w, y * CELL)
-      ctx.stroke()
-    }
+    const anim = state.anim
 
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        const v = state.board[r]![c]!
-        if (!v) continue
-        ctx.fillStyle = COLORS[v]!
-        ctx.fillRect(c * CELL + 1, r * CELL + 1, CELL - 2, CELL - 2)
+    if (anim?.kind === 'clear') {
+      const t = animProgress(anim)
+      const flash = 0.45 + 0.55 * Math.abs(Math.sin(t * Math.PI * 3))
+      const cleared = new Set(anim.rows)
+
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const v = anim.board[r]![c]!
+          if (!v) continue
+          if (cleared.has(r)) {
+            ctx.globalAlpha = flash
+            ctx.fillStyle = '#ffffff'
+            ctx.fillRect(c * CELL + 1, r * CELL + 1, CELL - 2, CELL - 2)
+            ctx.globalAlpha = 1
+            drawCell(ctx, c, r, v, 0.35 + 0.4 * flash)
+          } else {
+            drawCell(ctx, c, r, v)
+          }
+        }
       }
-    }
+    } else if (anim?.kind === 'fall') {
+      // Constant fall speed: shorter drops settle earlier; longer ones keep moving.
+      const t = animProgress(anim)
+      const fallen = t * Math.max(1, anim.maxDrop)
+      for (const cell of anim.staticCells) {
+        drawCell(ctx, cell.c, cell.fromR, cell.color)
+      }
+      for (const cell of anim.movers) {
+        const drop = cell.toR - cell.fromR
+        const local = drop <= 0 ? 1 : Math.min(1, fallen / drop)
+        const eased = 1 - (1 - local) ** 3
+        const y = cell.fromR + drop * eased
+        drawCell(ctx, cell.c, y, cell.color)
+      }
+    } else {
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const v = state.board[r]![c]!
+          if (!v) continue
+          drawCell(ctx, c, r, v)
+        }
+      }
 
-    if (state.piece) {
-      const gy = ghostY(state.board, state.piece)
-      const color = colorOf(state.piece.type)
-      const vy = visualY(state.piece)
-      drawMatrix(ctx, state.piece.matrix, state.piece.x, gy, color, 0.22)
-      drawMatrix(ctx, state.piece.matrix, state.piece.x, vy, color, 1)
+      if (state.piece) {
+        const gy = ghostY(state.board, state.piece)
+        const color = colorOf(state.piece.type)
+        const vy = visualY(state.piece)
+        drawMatrix(ctx, state.piece.matrix, state.piece.x, gy, color, 0.22)
+        drawMatrix(ctx, state.piece.matrix, state.piece.x, vy, color, 1)
+      }
     }
 
     if (state.gameOver) {

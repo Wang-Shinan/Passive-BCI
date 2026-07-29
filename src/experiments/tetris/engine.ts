@@ -265,11 +265,6 @@ const I_KICKS: [number, number][][] = [
   ],
 ]
 
-export interface CascadeStep {
-  cleared: number
-  rows: number[]
-}
-
 export interface GameState {
   board: Cell[][]
   piece: Piece | null
@@ -281,7 +276,48 @@ export interface GameState {
   gameOver: boolean
   paused: boolean
   lockTimer: number
+  /** Line-clear / independent-fall animation; blocks input & piece gravity while set. */
+  anim: BoardAnim | null
 }
+
+export type FallingCell = {
+  c: number
+  fromR: number
+  toR: number
+  color: number
+}
+
+export type BoardAnim =
+  | {
+      kind: 'clear'
+      rows: number[]
+      /** Board with locked piece still showing (including full rows). */
+      board: Cell[][]
+      elapsed: number
+      duration: number
+      /** Lines cleared in this cascade step. */
+      stepCleared: number
+      /** Cumulative lines cleared across the whole cascade so far (incl. this step). */
+      totalCleared: number
+      /** Cumulative score across the whole cascade so far (incl. this step). */
+      totalScoreGain: number
+      /** 1-based cascade chain index. */
+      chainIndex: number
+    }
+  | {
+      kind: 'fall'
+      /** Each cell falls independently (may have different distances). */
+      movers: FallingCell[]
+      staticCells: FallingCell[]
+      finalBoard: Cell[][]
+      maxDrop: number
+      elapsed: number
+      duration: number
+      stepCleared: number
+      totalCleared: number
+      totalScoreGain: number
+      chainIndex: number
+    }
 
 export type GameEvent =
   | { type: 'spawn'; piece: PieceType }
@@ -290,10 +326,16 @@ export type GameEvent =
       linesCleared: number
       scoreGain: number
       chains: number
-      cascadeSteps: CascadeStep[]
     }
+  | { type: 'clear_anim'; rows: number[]; linesCleared: number; chainIndex: number }
+  | { type: 'fall_anim'; linesCleared: number; chainIndex: number }
   | { type: 'topout' }
   | { type: 'hardDrop'; distance: number }
+
+export const CLEAR_ANIM_MS = 320
+/** Base fall duration; scaled by how far the farthest cell drops. */
+export const FALL_ANIM_MS = 220
+export const FALL_ANIM_PER_CELL_MS = 55
 
 function emptyBoard(): Cell[][] {
   return Array.from({ length: ROWS }, () => Array(COLS).fill(0))
@@ -327,6 +369,7 @@ export function createGame(seed = 1): GameState {
     gameOver: false,
     paused: false,
     lockTimer: 0,
+    anim: null,
   }
 }
 
@@ -359,73 +402,104 @@ function merge(board: Cell[][], piece: Piece): Cell[][] {
   return next
 }
 
-function clearFullRows(board: Cell[][]): { board: Cell[][]; cleared: number; rows: number[] } {
+function findFullRows(board: Cell[][]): number[] {
   const rows: number[] = []
-  const next = board.map((row, r) => {
-    const full = row.every((c) => c !== 0)
-    if (full) {
-      rows.push(r)
-      return Array(COLS).fill(0) as Cell[]
-    }
-    return [...row]
-  })
-  return { board: next, cleared: rows.length, rows }
+  for (let r = 0; r < ROWS; r++) {
+    if (board[r]!.every((c) => c !== 0)) rows.push(r)
+  }
+  return rows
 }
 
-/** Per-column gravity: each block falls down into empty cells below. */
-function applyColumnGravity(board: Cell[][]): Cell[][] {
-  const next = emptyBoard()
-  for (let c = 0; c < COLS; c++) {
-    const stack: Cell[] = []
-    for (let r = ROWS - 1; r >= 0; r--) {
-      const v = board[r]![c]!
-      if (v) stack.push(v)
-    }
-    for (let i = 0; i < stack.length; i++) {
-      next[ROWS - 1 - i]![c] = stack[i]!
-    }
-  }
-  return next
+/** Blank out cleared rows; other cells stay put (gaps open for independent fall). */
+function blankClearedRows(board: Cell[][], clearedRows: number[]): Cell[][] {
+  const cleared = new Set(clearedRows)
+  return board.map((row, r) => (cleared.has(r) ? (Array(COLS).fill(0) as Cell[]) : [...row]))
 }
 
 /**
- * Clear full rows → column gravity → repeat until stable.
- * Enables chain reactions when falling blocks form new full rows.
+ * Independent per-column gravity: each block falls down into empty cells below it.
+ * Blocks in different columns (and stacked ones) move independently.
  */
-export function cascadeClear(board: Cell[][]): {
-  board: Cell[][]
-  totalCleared: number
-  chains: number
-  steps: CascadeStep[]
-} {
-  let current = board.map((row) => [...row])
-  let totalCleared = 0
-  const steps: CascadeStep[] = []
+export function planIndependentFall(
+  boardAfterBlank: Cell[][],
+): { movers: FallingCell[]; staticCells: FallingCell[]; finalBoard: Cell[][]; maxDrop: number } {
+  const finalBoard = emptyBoard()
+  const movers: FallingCell[] = []
+  const staticCells: FallingCell[] = []
+  let maxDrop = 0
 
-  for (let guard = 0; guard < ROWS + 2; guard++) {
-    const { board: afterClear, cleared, rows } = clearFullRows(current)
-    if (cleared === 0) break
-    steps.push({ cleared, rows })
-    totalCleared += cleared
-    current = applyColumnGravity(afterClear)
+  for (let c = 0; c < COLS; c++) {
+    // Collect blocks from bottom to top so stacking order is preserved
+    const stack: { fromR: number; color: number }[] = []
+    for (let r = ROWS - 1; r >= 0; r--) {
+      const color = boardAfterBlank[r]![c]!
+      if (color) stack.push({ fromR: r, color })
+    }
+    // Place from bottom upward
+    for (let i = 0; i < stack.length; i++) {
+      const toR = ROWS - 1 - i
+      const { fromR, color } = stack[i]!
+      finalBoard[toR]![c] = color
+      const drop = toR - fromR
+      maxDrop = Math.max(maxDrop, drop)
+      const cell = { c, fromR, toR, color }
+      if (drop > 0) movers.push(cell)
+      else staticCells.push(cell)
+    }
   }
 
-  return {
-    board: current,
-    totalCleared,
-    chains: steps.length,
-    steps,
-  }
-}
-
-/** Score for one cascade step; later chains get a multiplier. */
-function cascadeStepScore(cleared: number, chainIndex: number, level: number): number {
-  const base = LINE_SCORES[Math.min(cleared, 4)] ?? LINE_SCORES[4]!
-  const chainMul = chainIndex // 1, 2, 3, ...
-  return base * Math.max(1, level) * chainMul
+  return { movers, staticCells, finalBoard, maxDrop }
 }
 
 const LINE_SCORES = [0, 100, 300, 500, 800]
+
+function lineClearScore(cleared: number, level: number, chainIndex: number): number {
+  const base = (LINE_SCORES[Math.min(cleared, 4)] ?? LINE_SCORES[4])!
+  return base * Math.max(1, level) * chainIndex
+}
+
+function fallDurationMs(maxDrop: number): number {
+  return FALL_ANIM_MS + Math.max(0, maxDrop - 1) * FALL_ANIM_PER_CELL_MS
+}
+
+function startClearAnim(
+  state: GameState,
+  board: Cell[][],
+  fullRows: number[],
+  chainIndex: number,
+  prevTotalCleared: number,
+  prevTotalScore: number,
+): StepResult {
+  const stepCleared = fullRows.length
+  const stepScore = lineClearScore(stepCleared, state.level, chainIndex)
+  return {
+    state: {
+      ...state,
+      board,
+      piece: null,
+      lockTimer: 0,
+      anim: {
+        kind: 'clear',
+        rows: fullRows,
+        board,
+        elapsed: 0,
+        duration: CLEAR_ANIM_MS,
+        stepCleared,
+        totalCleared: prevTotalCleared + stepCleared,
+        totalScoreGain: prevTotalScore + stepScore,
+        chainIndex,
+      },
+    },
+    events: [
+      {
+        type: 'clear_anim',
+        rows: fullRows,
+        linesCleared: stepCleared,
+        chainIndex,
+      },
+    ],
+  }
+}
 
 function pullNext(state: GameState, rng: () => number): { piece: Piece; next: PieceType; bag: PieceType[] } {
   const bag = [...state.bag]
@@ -449,7 +523,7 @@ export interface StepResult {
 
 export function move(state: GameState, dx: number, _rng: () => number): StepResult {
   void _rng
-  if (!state.piece || state.gameOver || state.paused) return { state, events: [] }
+  if (!state.piece || state.gameOver || state.paused || state.anim) return { state, events: [] }
   if (!collides(state.board, state.piece, dx, 0)) {
     return {
       state: {
@@ -474,7 +548,7 @@ export function softDropBurst(
 }
 
 export function hardDrop(state: GameState, rng: () => number): StepResult {
-  if (!state.piece || state.gameOver || state.paused) return { state, events: [] }
+  if (!state.piece || state.gameOver || state.paused || state.anim) return { state, events: [] }
   let dist = 0
   let s = state
   while (s.piece && !collides(s.board, s.piece, 0, 1)) {
@@ -495,7 +569,7 @@ export function hardDrop(state: GameState, rng: () => number): StepResult {
 
 export function rotate(state: GameState, dir: 1 | -1, _rng: () => number): StepResult {
   void _rng
-  if (!state.piece || state.gameOver || state.paused) return { state, events: [] }
+  if (!state.piece || state.gameOver || state.paused || state.anim) return { state, events: [] }
   const piece = state.piece
   if (piece.type === 'O') return { state, events: [] }
 
@@ -526,26 +600,23 @@ export function rotate(state: GameState, dir: 1 | -1, _rng: () => number): StepR
   return { state, events: [] }
 }
 
-function lockPiece(state: GameState, rng: () => number): StepResult {
-  if (!state.piece) return { state, events: [] }
-  const merged = merge(state.board, state.piece)
-  const { board, totalCleared, chains, steps } = cascadeClear(merged)
-
-  let scoreGain = 0
-  for (let i = 0; i < steps.length; i++) {
-    scoreGain += cascadeStepScore(steps[i]!.cleared, i + 1, state.level)
-  }
-
-  const lines = state.lines + totalCleared
+function finishLockSpawn(
+  state: GameState,
+  board: Cell[][],
+  linesCleared: number,
+  scoreGain: number,
+  chains: number,
+  rng: () => number,
+): StepResult {
+  const lines = state.lines + linesCleared
   const level = Math.floor(lines / 10) + 1
+  const score = state.score + scoreGain
   const pulled = pullNext({ ...state, bag: state.bag, next: state.next }, rng)
-
   const lockEvent = {
     type: 'lock' as const,
-    linesCleared: totalCleared,
+    linesCleared,
     scoreGain,
     chains,
-    cascadeSteps: steps,
   }
 
   if (collides(board, pulled.piece)) {
@@ -554,11 +625,12 @@ function lockPiece(state: GameState, rng: () => number): StepResult {
         ...state,
         board,
         piece: null,
-        score: state.score + scoreGain,
+        score,
         lines,
         level,
         gameOver: true,
         lockTimer: 0,
+        anim: null,
       },
       events: [lockEvent, { type: 'topout' }],
     }
@@ -571,13 +643,145 @@ function lockPiece(state: GameState, rng: () => number): StepResult {
       piece: pulled.piece,
       next: pulled.next,
       bag: pulled.bag,
-      score: state.score + scoreGain,
+      score,
       lines,
       level,
       lockTimer: 0,
+      anim: null,
     },
     events: [lockEvent, { type: 'spawn', piece: pulled.piece.type }],
   }
+}
+
+function lockPiece(state: GameState, rng: () => number): StepResult {
+  if (!state.piece) return { state, events: [] }
+  const merged = merge(state.board, state.piece)
+  const fullRows = findFullRows(merged)
+
+  if (fullRows.length === 0) {
+    return finishLockSpawn(state, merged, 0, 0, 0, rng)
+  }
+
+  return startClearAnim(state, merged, fullRows, 1, 0, 0)
+}
+
+function easeOutCubic(t: number): number {
+  return 1 - (1 - t) ** 3
+}
+
+/**
+ * Advance clear / independent-fall board animation.
+ * After fall settles, newly formed full rows trigger another clear (chain).
+ */
+export function advanceBoardAnim(
+  state: GameState,
+  rng: () => number,
+  dtMs: number,
+): StepResult {
+  if (!state.anim || state.paused) return { state, events: [] }
+
+  const anim = state.anim
+  const elapsed = anim.elapsed + dtMs
+
+  if (anim.kind === 'clear') {
+    if (elapsed < anim.duration) {
+      return {
+        state: { ...state, anim: { ...anim, elapsed } },
+        events: [],
+      }
+    }
+
+    const blanked = blankClearedRows(anim.board, anim.rows)
+    const { movers, staticCells, finalBoard, maxDrop } = planIndependentFall(blanked)
+
+    if (movers.length === 0) {
+      // No movement — check for further clears on the blanked/compact board
+      const more = findFullRows(finalBoard)
+      if (more.length > 0) {
+        return startClearAnim(
+          { ...state, board: finalBoard },
+          finalBoard,
+          more,
+          anim.chainIndex + 1,
+          anim.totalCleared,
+          anim.totalScoreGain,
+        )
+      }
+      return finishLockSpawn(
+        state,
+        finalBoard,
+        anim.totalCleared,
+        anim.totalScoreGain,
+        anim.chainIndex,
+        rng,
+      )
+    }
+
+    return {
+      state: {
+        ...state,
+        board: finalBoard,
+        anim: {
+          kind: 'fall',
+          movers,
+          staticCells,
+          finalBoard,
+          maxDrop,
+          elapsed: 0,
+          duration: fallDurationMs(maxDrop),
+          stepCleared: anim.stepCleared,
+          totalCleared: anim.totalCleared,
+          totalScoreGain: anim.totalScoreGain,
+          chainIndex: anim.chainIndex,
+        },
+      },
+      events: [
+        {
+          type: 'fall_anim',
+          linesCleared: anim.stepCleared,
+          chainIndex: anim.chainIndex,
+        },
+      ],
+    }
+  }
+
+  // fall in progress
+  if (elapsed < anim.duration) {
+    return {
+      state: { ...state, anim: { ...anim, elapsed } },
+      events: [],
+    }
+  }
+
+  // Fall done — chain if new full rows formed
+  const more = findFullRows(anim.finalBoard)
+  if (more.length > 0) {
+    return startClearAnim(
+      { ...state, board: anim.finalBoard },
+      anim.finalBoard,
+      more,
+      anim.chainIndex + 1,
+      anim.totalCleared,
+      anim.totalScoreGain,
+    )
+  }
+
+  return finishLockSpawn(
+    state,
+    anim.finalBoard,
+    anim.totalCleared,
+    anim.totalScoreGain,
+    anim.chainIndex,
+    rng,
+  )
+}
+
+export function animProgress(anim: BoardAnim): number {
+  return Math.min(1, anim.elapsed / anim.duration)
+}
+
+export function animEasedProgress(anim: BoardAnim): number {
+  return easeOutCubic(animProgress(anim))
 }
 
 /**
@@ -591,12 +795,13 @@ export function advanceFall(
   cellsPerSec: number,
   scoring = false,
 ): StepResult {
-  if (!state.piece || state.gameOver || state.paused) return { state, events: [] }
+  if (!state.piece || state.gameOver || state.paused || state.anim) {
+    return { state, events: [] }
+  }
 
   let piece = state.piece
   let score = state.score
 
-  // Already resting on a surface — lock on this gravity tick
   if (collides(state.board, piece, 0, 1)) {
     return lockPiece({ ...state, piece: { ...piece, fy: 0 } }, rng)
   }
@@ -615,7 +820,6 @@ export function advanceFall(
     if (scoring) score += 1
   }
 
-  // Fractional settle against the floor of the next cell
   if (collides(state.board, piece, 0, 1)) {
     return lockPiece({ ...state, piece: { ...piece, fy: 0 }, score }, rng)
   }

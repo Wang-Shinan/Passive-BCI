@@ -9,6 +9,7 @@ import { Panel } from '../../lib/ui/Panel'
 import { Slider } from '../../lib/ui/Slider'
 import { Board, NextPreview } from './Board'
 import {
+  advanceBoardAnim,
   advanceFall,
   createGame,
   hardDrop,
@@ -84,10 +85,18 @@ export function TetrisExperiment() {
     setState(next)
     for (const ev of events) {
       loggerRef.current.log(ev.type, ev as unknown as Record<string, unknown>)
-      if (ev.type === 'lock' && ev.chains > 1) {
-        setCascadeFlash(`连锁 ×${ev.chains}（消除 ${ev.linesCleared} 行）`)
-      } else if (ev.type === 'lock' && ev.linesCleared > 0) {
-        setCascadeFlash(`消除 ${ev.linesCleared} 行`)
+      if (ev.type === 'lock' && ev.linesCleared > 0) {
+        setCascadeFlash(
+          ev.chains > 1
+            ? `连锁 ×${ev.chains}（共消除 ${ev.linesCleared} 行）`
+            : `消除 ${ev.linesCleared} 行`,
+        )
+      } else if (ev.type === 'clear_anim') {
+        setCascadeFlash(
+          ev.chainIndex > 1
+            ? `连锁 ×${ev.chainIndex} · 消除 ${ev.linesCleared} 行`
+            : `消除 ${ev.linesCleared} 行`,
+        )
       }
     }
   }, [])
@@ -123,14 +132,19 @@ export function TetrisExperiment() {
       }
 
       const s = stateRef.current
-      if (!s.gameOver && !s.paused && s.piece) {
-        const speed = softDropHeldRef.current
-          ? Math.max(gState.smoothed, 22)
-          : gState.smoothed
-        const result = softDropHeldRef.current
-          ? softDropBurst(s, rngRef.current, dtSec, speed)
-          : advanceFall(s, rngRef.current, dtSec, speed, false)
-        applyResult(result.state, result.events)
+      if (!s.gameOver && !s.paused) {
+        if (s.anim) {
+          const result = advanceBoardAnim(s, rngRef.current, dt)
+          applyResult(result.state, result.events)
+        } else if (s.piece) {
+          const speed = softDropHeldRef.current
+            ? Math.max(gState.smoothed, 22)
+            : gState.smoothed
+          const result = softDropHeldRef.current
+            ? softDropBurst(s, rngRef.current, dtSec, speed)
+            : advanceFall(s, rngRef.current, dtSec, speed, false)
+          applyResult(result.state, result.events)
+        }
       }
 
       raf = requestAnimationFrame(loop)
@@ -166,7 +180,7 @@ export function TetrisExperiment() {
         softDropHeldRef.current = true
         return
       }
-      if (s.gameOver || s.paused) return
+      if (s.gameOver || s.paused || s.anim) return
 
       let result
       if (e.key === 'ArrowLeft') result = move(s, -1, rngRef.current)
