@@ -12,7 +12,13 @@ export interface Piece {
   type: PieceType
   rot: number
   x: number
+  /** Integer grid row (collision / lock). */
   y: number
+  /**
+   * Sub-cell fall progress in [0, 1). Visual Y = y + fy.
+   * Accumulates continuously for smooth gravity.
+   */
+  fy: number
   matrix: Matrix
 }
 
@@ -259,6 +265,11 @@ const I_KICKS: [number, number][][] = [
   ],
 ]
 
+export interface CascadeStep {
+  cleared: number
+  rows: number[]
+}
+
 export interface GameState {
   board: Cell[][]
   piece: Piece | null
@@ -274,7 +285,13 @@ export interface GameState {
 
 export type GameEvent =
   | { type: 'spawn'; piece: PieceType }
-  | { type: 'lock'; linesCleared: number; scoreGain: number }
+  | {
+      type: 'lock'
+      linesCleared: number
+      scoreGain: number
+      chains: number
+      cascadeSteps: CascadeStep[]
+    }
   | { type: 'topout' }
   | { type: 'hardDrop'; distance: number }
 
@@ -290,7 +307,7 @@ function spawnPiece(type: PieceType): Piece {
   const matrix = SHAPES[type][0]!
   const x = Math.floor((COLS - matrix[0]!.length) / 2)
   const y = type === 'I' ? -1 : 0
-  return { type, rot: 0, x, y, matrix }
+  return { type, rot: 0, x, y, fy: 0, matrix }
 }
 
 export function createGame(seed = 1): GameState {
@@ -342,11 +359,70 @@ function merge(board: Cell[][], piece: Piece): Cell[][] {
   return next
 }
 
-function clearLines(board: Cell[][]): { board: Cell[][]; cleared: number } {
-  const kept = board.filter((row) => row.some((c) => c === 0))
-  const cleared = ROWS - kept.length
-  while (kept.length < ROWS) kept.unshift(Array(COLS).fill(0))
-  return { board: kept, cleared }
+function clearFullRows(board: Cell[][]): { board: Cell[][]; cleared: number; rows: number[] } {
+  const rows: number[] = []
+  const next = board.map((row, r) => {
+    const full = row.every((c) => c !== 0)
+    if (full) {
+      rows.push(r)
+      return Array(COLS).fill(0) as Cell[]
+    }
+    return [...row]
+  })
+  return { board: next, cleared: rows.length, rows }
+}
+
+/** Per-column gravity: each block falls down into empty cells below. */
+function applyColumnGravity(board: Cell[][]): Cell[][] {
+  const next = emptyBoard()
+  for (let c = 0; c < COLS; c++) {
+    const stack: Cell[] = []
+    for (let r = ROWS - 1; r >= 0; r--) {
+      const v = board[r]![c]!
+      if (v) stack.push(v)
+    }
+    for (let i = 0; i < stack.length; i++) {
+      next[ROWS - 1 - i]![c] = stack[i]!
+    }
+  }
+  return next
+}
+
+/**
+ * Clear full rows → column gravity → repeat until stable.
+ * Enables chain reactions when falling blocks form new full rows.
+ */
+export function cascadeClear(board: Cell[][]): {
+  board: Cell[][]
+  totalCleared: number
+  chains: number
+  steps: CascadeStep[]
+} {
+  let current = board.map((row) => [...row])
+  let totalCleared = 0
+  const steps: CascadeStep[] = []
+
+  for (let guard = 0; guard < ROWS + 2; guard++) {
+    const { board: afterClear, cleared, rows } = clearFullRows(current)
+    if (cleared === 0) break
+    steps.push({ cleared, rows })
+    totalCleared += cleared
+    current = applyColumnGravity(afterClear)
+  }
+
+  return {
+    board: current,
+    totalCleared,
+    chains: steps.length,
+    steps,
+  }
+}
+
+/** Score for one cascade step; later chains get a multiplier. */
+function cascadeStepScore(cleared: number, chainIndex: number, level: number): number {
+  const base = LINE_SCORES[Math.min(cleared, 4)] ?? LINE_SCORES[4]!
+  const chainMul = chainIndex // 1, 2, 3, ...
+  return base * Math.max(1, level) * chainMul
 }
 
 const LINE_SCORES = [0, 100, 300, 500, 800]
@@ -376,27 +452,25 @@ export function move(state: GameState, dx: number, _rng: () => number): StepResu
   if (!state.piece || state.gameOver || state.paused) return { state, events: [] }
   if (!collides(state.board, state.piece, dx, 0)) {
     return {
-      state: { ...state, piece: { ...state.piece, x: state.piece.x + dx }, lockTimer: 0 },
+      state: {
+        ...state,
+        piece: { ...state.piece, x: state.piece.x + dx },
+        lockTimer: 0,
+      },
       events: [],
     }
   }
   return { state, events: [] }
 }
 
-export function softDrop(state: GameState, rng: () => number): StepResult {
-  if (!state.piece || state.gameOver || state.paused) return { state, events: [] }
-  if (!collides(state.board, state.piece, 0, 1)) {
-    return {
-      state: {
-        ...state,
-        piece: { ...state.piece, y: state.piece.y + 1 },
-        score: state.score + 1,
-        lockTimer: 0,
-      },
-      events: [],
-    }
-  }
-  return lockPiece(state, rng)
+/** Soft-drop boost: advance fall by a burst of cells/sec for one frame's worth. */
+export function softDropBurst(
+  state: GameState,
+  rng: () => number,
+  dtSec: number,
+  boostCellsPerSec = 24,
+): StepResult {
+  return advanceFall(state, rng, dtSec, boostCellsPerSec, true)
 }
 
 export function hardDrop(state: GameState, rng: () => number): StepResult {
@@ -406,12 +480,13 @@ export function hardDrop(state: GameState, rng: () => number): StepResult {
   while (s.piece && !collides(s.board, s.piece, 0, 1)) {
     s = {
       ...s,
-      piece: { ...s.piece, y: s.piece.y + 1 },
+      piece: { ...s.piece, y: s.piece.y + 1, fy: 0 },
       score: s.score + 2,
     }
     dist++
   }
-  const locked = lockPiece(s, rng)
+  const grounded = s.piece ? { ...s, piece: { ...s.piece, fy: 0 } } : s
+  const locked = lockPiece(grounded, rng)
   return {
     state: locked.state,
     events: [{ type: 'hardDrop', distance: dist }, ...locked.events],
@@ -436,7 +511,14 @@ export function rotate(state: GameState, dir: 1 | -1, _rng: () => number): StepR
     const ox = dir === 1 ? kx : -kx
     const oy = dir === 1 ? ky : -ky
     // Note: our y grows downward, SRS y is upward — negate ky
-    const test = { ...piece, rot: to, matrix, x: piece.x + ox, y: piece.y - oy }
+    const test = {
+      ...piece,
+      rot: to,
+      matrix,
+      x: piece.x + ox,
+      y: piece.y - oy,
+      fy: 0,
+    }
     if (!collides(state.board, test)) {
       return { state: { ...state, piece: test, lockTimer: 0 }, events: [] }
     }
@@ -447,11 +529,24 @@ export function rotate(state: GameState, dir: 1 | -1, _rng: () => number): StepR
 function lockPiece(state: GameState, rng: () => number): StepResult {
   if (!state.piece) return { state, events: [] }
   const merged = merge(state.board, state.piece)
-  const { board, cleared } = clearLines(merged)
-  const scoreGain = LINE_SCORES[cleared]! * Math.max(1, state.level)
-  const lines = state.lines + cleared
+  const { board, totalCleared, chains, steps } = cascadeClear(merged)
+
+  let scoreGain = 0
+  for (let i = 0; i < steps.length; i++) {
+    scoreGain += cascadeStepScore(steps[i]!.cleared, i + 1, state.level)
+  }
+
+  const lines = state.lines + totalCleared
   const level = Math.floor(lines / 10) + 1
   const pulled = pullNext({ ...state, bag: state.bag, next: state.next }, rng)
+
+  const lockEvent = {
+    type: 'lock' as const,
+    linesCleared: totalCleared,
+    scoreGain,
+    chains,
+    cascadeSteps: steps,
+  }
 
   if (collides(board, pulled.piece)) {
     return {
@@ -465,10 +560,7 @@ function lockPiece(state: GameState, rng: () => number): StepResult {
         gameOver: true,
         lockTimer: 0,
       },
-      events: [
-        { type: 'lock', linesCleared: cleared, scoreGain },
-        { type: 'topout' },
-      ],
+      events: [lockEvent, { type: 'topout' }],
     }
   }
 
@@ -484,32 +576,71 @@ function lockPiece(state: GameState, rng: () => number): StepResult {
       level,
       lockTimer: 0,
     },
-    events: [
-      { type: 'lock', linesCleared: cleared, scoreGain },
-      { type: 'spawn', piece: pulled.piece.type },
-    ],
+    events: [lockEvent, { type: 'spawn', piece: pulled.piece.type }],
   }
 }
 
 /**
- * Gravity tick: drop by one cell, or lock if grounded.
+ * Continuous gravity: advance sub-cell fall by `cellsPerSec * dtSec`.
+ * When fy crosses 1, step down one grid cell; if blocked, lock.
  */
-export function gravityTick(state: GameState, rng: () => number, _lockDelayMs = 500): StepResult {
-  void _lockDelayMs
+export function advanceFall(
+  state: GameState,
+  rng: () => number,
+  dtSec: number,
+  cellsPerSec: number,
+  scoring = false,
+): StepResult {
   if (!state.piece || state.gameOver || state.paused) return { state, events: [] }
-  if (!collides(state.board, state.piece, 0, 1)) {
-    return {
-      state: {
-        ...state,
-        piece: { ...state.piece, y: state.piece.y + 1 },
-        lockTimer: 0,
-      },
-      events: [],
-    }
+
+  let piece = state.piece
+  let score = state.score
+
+  // Already resting on a surface — lock on this gravity tick
+  if (collides(state.board, piece, 0, 1)) {
+    return lockPiece({ ...state, piece: { ...piece, fy: 0 } }, rng)
   }
-  return lockPiece(state, rng)
+
+  let fy = piece.fy + Math.max(0, cellsPerSec) * Math.max(0, dtSec)
+  const maxSteps = 8
+  let steps = 0
+
+  while (fy >= 1 && steps < maxSteps) {
+    if (collides(state.board, piece, 0, 1)) {
+      return lockPiece({ ...state, piece: { ...piece, fy: 0 }, score }, rng)
+    }
+    piece = { ...piece, y: piece.y + 1 }
+    fy -= 1
+    steps++
+    if (scoring) score += 1
+  }
+
+  // Fractional settle against the floor of the next cell
+  if (collides(state.board, piece, 0, 1)) {
+    return lockPiece({ ...state, piece: { ...piece, fy: 0 }, score }, rng)
+  }
+
+  return {
+    state: {
+      ...state,
+      score,
+      piece: { ...piece, fy },
+      lockTimer: 0,
+    },
+    events: [],
+  }
+}
+
+/** @deprecated Use advanceFall for smooth gravity. */
+export function gravityTick(state: GameState, rng: () => number): StepResult {
+  return advanceFall(state, rng, 1, 1, false)
 }
 
 export function previewMatrix(type: PieceType): Matrix {
   return SHAPES[type][0]!
+}
+
+/** Visual row including sub-cell offset. */
+export function visualY(piece: Piece): number {
+  return piece.y + piece.fy
 }

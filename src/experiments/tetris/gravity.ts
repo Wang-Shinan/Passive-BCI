@@ -23,25 +23,26 @@ export interface GravityState {
 
 export function defaultGravityConfig(): GravityConfig {
   return {
-    mode: 'regulate',
-    minGravity: 0.4,
-    maxGravity: 8,
+    mode: 'challenge',
+    minGravity: 0.8,
+    maxGravity: 12,
     setpoint: 50,
     kp: 0.04,
     ki: 0.005,
-    smooth: 0.15,
+    smooth: 0.2,
   }
 }
 
 export function initGravityState(cfg: GravityConfig): GravityState {
-  const mid = (cfg.minGravity + cfg.maxGravity) / 2
-  return { gravity: mid, integral: 0, smoothed: mid }
+  const g = challengeGravity(40, cfg)
+  return { gravity: g, integral: 0, smoothed: g }
 }
 
-/** Challenge: higher stress → faster fall (exponential-ish). */
+/** Challenge: higher stress → faster fall (smooth linear + slight ease). */
 function challengeGravity(stress: number, cfg: GravityConfig): number {
   const t = clamp(stress / 100, 0, 1)
-  const curved = t * t
+  // Slight ease-in so low stress stays playable, high stress ramps up
+  const curved = t * (0.35 + 0.65 * t)
   return cfg.minGravity + curved * (cfg.maxGravity - cfg.minGravity)
 }
 
@@ -55,7 +56,7 @@ function regulateGravity(
   state: GravityState,
   dtSec: number,
 ): { gravity: number; integral: number } {
-  const error = cfg.setpoint - stress // positive when stress too low → speed up
+  const error = cfg.setpoint - stress
   const integral = clamp(state.integral + error * dtSec, -200, 200)
   const raw = state.gravity + cfg.kp * error + cfg.ki * integral
   return {
@@ -83,9 +84,4 @@ export function updateGravity(
 
   const smoothed = state.smoothed + cfg.smooth * (gravity - state.smoothed)
   return { gravity, integral, smoothed }
-}
-
-/** Convert cells/sec gravity to ms per cell drop. */
-export function gravityToIntervalMs(gravity: number): number {
-  return 1000 / Math.max(0.05, gravity)
 }

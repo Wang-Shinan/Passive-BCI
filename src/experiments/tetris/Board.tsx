@@ -1,4 +1,4 @@
-import { COLORS, COLS, ROWS, ghostY, previewMatrix, type GameState, type PieceType } from './engine'
+import { COLORS, COLS, ROWS, ghostY, previewMatrix, visualY, type GameState, type PieceType } from './engine'
 
 const CELL = 28
 
@@ -76,8 +76,9 @@ export function Board({ state }: { state: GameState }) {
     if (state.piece) {
       const gy = ghostY(state.board, state.piece)
       const color = colorOf(state.piece.type)
-      drawMatrix(ctx, state.piece.matrix, state.piece.x, gy, color, 0.25)
-      drawMatrix(ctx, state.piece.matrix, state.piece.x, state.piece.y, color, 1)
+      const vy = visualY(state.piece)
+      drawMatrix(ctx, state.piece.matrix, state.piece.x, gy, color, 0.22)
+      drawMatrix(ctx, state.piece.matrix, state.piece.x, vy, color, 1)
     }
 
     if (state.gameOver) {

@@ -9,18 +9,17 @@ import { Panel } from '../../lib/ui/Panel'
 import { Slider } from '../../lib/ui/Slider'
 import { Board, NextPreview } from './Board'
 import {
+  advanceFall,
   createGame,
   hardDrop,
   move,
   rotate,
-  softDrop,
-  gravityTick,
+  softDropBurst,
   type GameEvent,
   type GameState,
 } from './engine'
 import {
   defaultGravityConfig,
-  gravityToIntervalMs,
   initGravityState,
   updateGravity,
   type GravityConfig,
@@ -46,14 +45,22 @@ export function TetrisExperiment() {
   const gravityRef = useRef<GravityState>(initGravityState(defaultGravityConfig()))
   const [gravityDisplay, setGravityDisplay] = useState(gravityRef.current.smoothed)
   const [trace, setTrace] = useState<TracePoint[]>([])
+  const [cascadeFlash, setCascadeFlash] = useState<string | null>(null)
   const loggerRef = useRef(new SessionLogger('tetris', subjectId))
   const signalRef = useRef(new ManualSignalSource({ kind: 'stress', initial: 40 }))
-  const dropAccRef = useRef(0)
   const lastTsRef = useRef(0)
   const t0Ref = useRef(performance.now())
   const stateRef = useRef(state)
   const stressRef = useRef(stress)
   const cfgRef = useRef(cfg)
+  const softDropHeldRef = useRef(false)
+  const traceAccRef = useRef(0)
+
+  useEffect(() => {
+    if (!cascadeFlash) return
+    const id = window.setTimeout(() => setCascadeFlash(null), 1200)
+    return () => clearTimeout(id)
+  }, [cascadeFlash])
 
   useEffect(() => {
     loggerRef.current.setSubjectId(subjectId)
@@ -73,13 +80,19 @@ export function TetrisExperiment() {
   }, [cfg])
 
   const applyResult = useCallback((next: GameState, events: GameEvent[]) => {
+    stateRef.current = next
     setState(next)
     for (const ev of events) {
       loggerRef.current.log(ev.type, ev as unknown as Record<string, unknown>)
+      if (ev.type === 'lock' && ev.chains > 1) {
+        setCascadeFlash(`连锁 ×${ev.chains}（消除 ${ev.linesCleared} 行）`)
+      } else if (ev.type === 'lock' && ev.linesCleared > 0) {
+        setCascadeFlash(`消除 ${ev.linesCleared} 行`)
+      }
     }
   }, [])
 
-  // Game loop
+  // Smooth game loop — update every frame
   useEffect(() => {
     let raf = 0
     const loop = (ts: number) => {
@@ -92,30 +105,32 @@ export function TetrisExperiment() {
       gravityRef.current = gState
       setGravityDisplay(gState.smoothed)
 
-      const elapsed = (performance.now() - t0Ref.current) / 1000
-      setTrace((prev) => {
-        const next = [
-          ...prev,
-          {
-            t: Math.round(elapsed * 10) / 10,
-            stress: stressRef.current,
-            gravity: Math.round(gState.smoothed * 100) / 100,
-          },
-        ]
-        return next.length > 300 ? next.slice(-300) : next
-      })
+      traceAccRef.current += dt
+      if (traceAccRef.current >= 100) {
+        traceAccRef.current = 0
+        const elapsed = (performance.now() - t0Ref.current) / 1000
+        setTrace((prev) => {
+          const next = [
+            ...prev,
+            {
+              t: Math.round(elapsed * 10) / 10,
+              stress: stressRef.current,
+              gravity: Math.round(gState.smoothed * 100) / 100,
+            },
+          ]
+          return next.length > 300 ? next.slice(-300) : next
+        })
+      }
 
       const s = stateRef.current
       if (!s.gameOver && !s.paused && s.piece) {
-        dropAccRef.current += dt
-        const interval = gravityToIntervalMs(gState.smoothed)
-        while (dropAccRef.current >= interval) {
-          dropAccRef.current -= interval
-          const result = gravityTick(stateRef.current, rngRef.current)
-          stateRef.current = result.state
-          applyResult(result.state, result.events)
-          if (result.state.gameOver) break
-        }
+        const speed = softDropHeldRef.current
+          ? Math.max(gState.smoothed, 22)
+          : gState.smoothed
+        const result = softDropHeldRef.current
+          ? softDropBurst(s, rngRef.current, dtSec, speed)
+          : advanceFall(s, rngRef.current, dtSec, speed, false)
+        applyResult(result.state, result.events)
       }
 
       raf = requestAnimationFrame(loop)
@@ -126,17 +141,29 @@ export function TetrisExperiment() {
 
   // Keyboard controls
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (['ArrowLeft', 'ArrowRight', 'ArrowDown', 'ArrowUp', ' ', 'c', 'C', 'p', 'P', 'r', 'R'].includes(e.key)) {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        ['ArrowLeft', 'ArrowRight', 'ArrowDown', 'ArrowUp', ' ', 'c', 'C', 'p', 'P', 'r', 'R', 'z', 'Z', 'x', 'X'].includes(
+          e.key,
+        )
+      ) {
         e.preventDefault()
       }
       const s = stateRef.current
       if (e.key === 'p' || e.key === 'P') {
-        setState((prev) => ({ ...prev, paused: !prev.paused }))
+        setState((prev) => {
+          const next = { ...prev, paused: !prev.paused }
+          stateRef.current = next
+          return next
+        })
         return
       }
       if (e.key === 'r' || e.key === 'R') {
         restart()
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        softDropHeldRef.current = true
         return
       }
       if (s.gameOver || s.paused) return
@@ -144,17 +171,24 @@ export function TetrisExperiment() {
       let result
       if (e.key === 'ArrowLeft') result = move(s, -1, rngRef.current)
       else if (e.key === 'ArrowRight') result = move(s, 1, rngRef.current)
-      else if (e.key === 'ArrowDown') result = softDrop(s, rngRef.current)
       else if (e.key === 'ArrowUp' || e.key === 'x' || e.key === 'X') result = rotate(s, 1, rngRef.current)
       else if (e.key === 'z' || e.key === 'Z') result = rotate(s, -1, rngRef.current)
       else if (e.key === ' ') result = hardDrop(s, rngRef.current)
       else return
 
-      stateRef.current = result.state
       applyResult(result.state, result.events)
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown') softDropHeldRef.current = false
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
   }, [applyResult])
 
   const restart = () => {
@@ -164,9 +198,9 @@ export function TetrisExperiment() {
     stateRef.current = g
     setState(g)
     gravityRef.current = initGravityState(cfgRef.current)
-    dropAccRef.current = 0
     lastTsRef.current = 0
     t0Ref.current = performance.now()
+    softDropHeldRef.current = false
     setTrace([])
     loggerRef.current.log('restart', { seed: nextSeed })
   }
@@ -191,8 +225,15 @@ export function TetrisExperiment() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[auto_1fr_300px]">
-        <div className="flex justify-center">
+        <div className="relative flex justify-center">
           <Board state={state} />
+          {cascadeFlash && (
+            <div className="pointer-events-none absolute inset-x-0 top-6 text-center">
+              <span className="inline-block rounded-full border border-[#f5a52466] bg-[#1a1520ee] px-3 py-1 text-sm font-semibold text-[#f5a524] shadow-lg">
+                {cascadeFlash}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="space-y-4">
@@ -209,7 +250,17 @@ export function TetrisExperiment() {
                 <NextPreview type={state.next} />
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn" onClick={() => setState((s) => ({ ...s, paused: !s.paused }))}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() =>
+                    setState((s) => {
+                      const next = { ...s, paused: !s.paused }
+                      stateRef.current = next
+                      return next
+                    })
+                  }
+                >
                   {state.paused ? '继续' : '暂停'}
                 </button>
                 <button type="button" className="btn btn-primary" onClick={restart}>
@@ -219,16 +270,19 @@ export function TetrisExperiment() {
             </div>
           </Panel>
 
-          <Panel title="压力 ↔ 重力 映射">
+          <Panel title="压力 ↔ 下落速度">
+            <p className="muted mb-3 text-sm">
+              方块按亚格子连续平滑下落。默认：压力越大，下落越快。
+            </p>
             <div className="mb-3 flex gap-2">
-              {(['regulate', 'challenge'] as GravityMode[]).map((m) => (
+              {(['challenge', 'regulate'] as GravityMode[]).map((m) => (
                 <button
                   key={m}
                   type="button"
                   className={`btn ${cfg.mode === m ? 'btn-primary' : ''}`}
                   onClick={() => setCfg((c) => ({ ...c, mode: m }))}
                 >
-                  {m === 'regulate' ? '调节模式 (PI)' : '挑战模式'}
+                  {m === 'challenge' ? '挑战（压↑速↑）' : '调节模式 (PI)'}
                 </button>
               ))}
             </div>
@@ -262,29 +316,29 @@ export function TetrisExperiment() {
                 />
               </div>
             ) : (
-              <p className="muted text-sm">压力越高，下落越快（二次曲线映射）。</p>
+              <p className="muted text-sm">线性偏加速曲线：低压可玩，高压明显加快。</p>
             )}
             <div className="mt-3 space-y-3">
               <Slider
                 label="最小重力"
                 value={cfg.minGravity}
                 min={0.2}
-                max={3}
+                max={4}
                 step={0.1}
-                format={(v) => v.toFixed(1)}
+                format={(v) => `${v.toFixed(1)} 格/秒`}
                 onChange={(v) => setCfg((c) => ({ ...c, minGravity: v }))}
               />
               <Slider
                 label="最大重力"
                 value={cfg.maxGravity}
                 min={2}
-                max={15}
+                max={20}
                 step={0.5}
-                format={(v) => v.toFixed(1)}
+                format={(v) => `${v.toFixed(1)} 格/秒`}
                 onChange={(v) => setCfg((c) => ({ ...c, maxGravity: v }))}
               />
               <Slider
-                label="平滑系数"
+                label="速度平滑"
                 value={cfg.smooth}
                 min={0.02}
                 max={0.5}
