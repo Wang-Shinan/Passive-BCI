@@ -1,0 +1,238 @@
+.draw-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid #2a3550;
+  background: #f7f3ea;
+  touch-action: none;
+  user-select: none;
+}
+
+.draw-canvas {
+  display: block;
+  width: 100%;
+  height: min(58vh, 520px);
+  min-height: 360px;
+  cursor: crosshair;
+  background: #fffdf8;
+}
+
+.draw-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.draw-swatch {
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  padding: 0;
+}
+
+.draw-swatch.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px #5b8cff;
+}
+
+.draw-guess-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.draw-guess-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid #2a3550;
+  background: #0f1628;
+}
+
+.draw-guess-item.hit {
+  border-color: color-mix(in srgb, #38d39f 55%, #2a3550);
+  background: color-mix(in srgb, #38d39f 12%, #0f1628);
+}
+
+.draw-transcript {
+  display: grid;
+  gap: 0.85rem;
+  max-height: min(58vh, 560px);
+  overflow: auto;
+}
+
+.draw-turn {
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid #2a3550;
+}
+
+.draw-turn.assistant {
+  background: #0f1628;
+}
+
+.draw-turn.user {
+  background: color-mix(in srgb, #5b8cff 10%, #0d1425);
+  border-color: color-mix(in srgb, #5b8cff 35%, #2a3550);
+}
+
+.draw-turn.streaming {
+  border-color: color-mix(in srgb, #5b8cff 45%, #2a3550);
+}
+
+.draw-stream {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: #e8eefc;
+}
+
+.draw-caret {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: #8eb6ff;
+  animation: draw-caret-blink 1s steps(1) infinite;
+}
+
+@keyframes draw-caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.draw-turn .draw-md {
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.draw-md {
+  max-height: 320px;
+  overflow: auto;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid #2a3550;
+  background: #0d1425;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: #e8eefc;
+}
+
+.draw-md > :first-child {
+  margin-top: 0;
+}
+
+.draw-md > :last-child {
+  margin-bottom: 0;
+}
+
+.draw-md h1,
+.draw-md h2,
+.draw-md h3,
+.draw-md h4 {
+  margin: 0.85em 0 0.35em;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.draw-md p {
+  margin: 0.55em 0;
+}
+
+.draw-md ul,
+.draw-md ol {
+  margin: 0.45em 0;
+  padding-left: 1.25rem;
+}
+
+.draw-md li {
+  margin: 0.2em 0;
+}
+
+.draw-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: #1a2338;
+}
+
+.draw-md pre {
+  overflow: auto;
+  margin: 0.65em 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  background: #10182b;
+  border: 1px solid #2a3550;
+}
+
+.draw-md pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.draw-md blockquote {
+  margin: 0.65em 0;
+  padding-left: 0.85rem;
+  border-left: 3px solid #5b8cff;
+  color: #9aa8c7;
+}
+
+.draw-raw-error {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #ff5d6c 45%, #2a3550);
+  background: color-mix(in srgb, #ff5d6c 10%, #0d1425);
+  color: #ffb4bc;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.draw-feedback {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid #2a3550;
+  background: #0d1425;
+  color: var(--text);
+  padding: 0.7rem 0.85rem;
+}
+
+.draw-word-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, #ff8a5c 18%, #141b2d);
+  border: 1px solid color-mix(in srgb, #ff8a5c 45%, #2a3550);
+  color: #ffd0bc;
+  font-weight: 600;
+}
+
+.draw-signals {
+  display: grid;
+  gap: 0.85rem;
+}

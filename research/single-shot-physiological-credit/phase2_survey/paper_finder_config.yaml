@@ -1,0 +1,20 @@
+searches:
+  - query: "error-related potential single-trial decoding adaptive BCI"
+    num_results: 100
+    venues:
+      neurips: [2023, 2024, 2025]
+      iclr: [2024, 2025, 2026]
+  - query: "EEG foundation model benchmarking cross-subject"
+    num_results: 100
+    venues:
+      neurips: [2023, 2024, 2025]
+      iclr: [2024, 2025, 2026]
+  - query: "multi-agent credit assignment counterfactual Shapley"
+    num_results: 100
+    venues:
+      neurips: [2023, 2024, 2025]
+      iclr: [2024, 2025, 2026]
+      icml: [2023, 2024, 2025, 2026]
+output:
+  root: "research/single-shot-physiological-credit/phase2_survey/search_results"
+  overwrite: true

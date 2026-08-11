@@ -4,6 +4,8 @@ export interface StressMessage {
   type: 'stress'
   value: number
   t: number
+  /** user = experimenter gesture; sync = mirror / hello reply (must not steal feature mode). */
+  origin?: 'user' | 'sync'
 }
 
 export interface StressHello {
@@ -12,8 +14,13 @@ export interface StressHello {
 
 export type StressPacket = StressMessage | StressHello
 
-export function publishStress(value: number): void {
+export function publishStress(value: number, origin: 'user' | 'sync' = 'sync'): void {
   const ch = new BroadcastChannel(STRESS_CHANNEL)
-  ch.postMessage({ type: 'stress', value, t: performance.now() } satisfies StressMessage)
+  ch.postMessage({
+    type: 'stress',
+    value,
+    t: performance.now(),
+    origin,
+  } satisfies StressMessage)
   ch.close()
 }

@@ -1,0 +1,49 @@
+.dino-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, #535353 40%, var(--border));
+  background: #f7f7f7;
+  user-select: none;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.dino-stage.status-gameover {
+  outline: 2px solid color-mix(in srgb, #ff5d6c 55%, white);
+}
+
+.dino-canvas {
+  display: block;
+  width: 100%;
+  height: 220px;
+}
+
+.dino-hud {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.dino-hud > div {
+  padding: 0.65rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 88%, #121212);
+}
+
+.dino-hud span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.dino-hud strong {
+  font-size: 1.1rem;
+}
+
+@media (max-width: 640px) {
+  .dino-hud {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

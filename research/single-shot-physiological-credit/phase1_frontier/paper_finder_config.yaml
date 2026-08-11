@@ -1,0 +1,19 @@
+searches:
+  - query: "EEG foundation model cross-subject calibration closed-loop"
+    num_results: 50
+    venues:
+      neurips: [2025]
+      iclr: [2025, 2026]
+  - query: "LLM multi-agent credit assignment Shapley failure attribution"
+    num_results: 50
+    venues:
+      neurips: [2025]
+      iclr: [2025, 2026]
+  - query: "error-related potential calibration-free online BCI"
+    num_results: 50
+    venues:
+      neurips: [2025]
+      iclr: [2025, 2026]
+output:
+  root: "research/single-shot-physiological-credit/phase1_frontier/search_results"
+  overwrite: true

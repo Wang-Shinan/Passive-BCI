@@ -1,0 +1,7 @@
+# Passive BCI — Oracle Path Evaluation
+#
+# Offline experiment: shortest-path oracle ratings train Q-learning vs TAMER
+# under Gaussian / discrete decoder noise.
+
+numpy>=1.24
+matplotlib>=3.7

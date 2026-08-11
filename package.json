@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "neuracle-bridge": "bash -c 'ROOT=\"${OI_MI_ROOT:-$HOME/Documents/oi-mi}\"; PY=\"$ROOT/.venv/bin/python\"; if [ ! -x \"$PY\" ]; then PY=python3; fi; OI_MI_ROOT=\"$ROOT\" \"$PY\" bridges/neuracle/ws_bridge.py'"
   },
   "dependencies": {
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.2",
     "recharts": "^3.10.1"
   },

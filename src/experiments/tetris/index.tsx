@@ -27,8 +27,9 @@ import {
   type GravityMode,
   type GravityState,
 } from './gravity'
+import { FeatureMonitorPanel, SignalModeControls, useStressControl } from '../../lib/features'
 import { StressPanel } from './StressPanel'
-import { useStressChannel } from './useStressChannel'
+import { useStressBroadcast } from './useStressBroadcast'
 
 interface TracePoint {
   t: number
@@ -41,7 +42,25 @@ export function TetrisExperiment() {
   const [seed] = useState(() => (Math.random() * 0xffffffff) >>> 0)
   const rngRef = useRef(mulberry32(seed))
   const [state, setState] = useState<GameState>(() => createGame(seed))
-  const { stress, setStress } = useStressChannel(40)
+  const {
+    mode,
+    setMode,
+    driverFeature,
+    setDriverFeature,
+    stress,
+    setStress,
+    takeManualControl,
+    setManualStressQuiet,
+    features,
+  } = useStressControl({
+    initial: 40,
+    manualModulators: (s) => ({
+      stress: s,
+      focus: 100 - s * 0.35,
+      arousal: s * 0.7 + 20,
+    }),
+  })
+  useStressBroadcast(stress, { mode, takeManualControl, setManualStressQuiet })
   const [cfg, setCfg] = useState<GravityConfig>(() => defaultGravityConfig())
   const gravityRef = useRef<GravityState>(initGravityState(defaultGravityConfig()))
   const [gravityDisplay, setGravityDisplay] = useState(gravityRef.current.smoothed)
@@ -376,7 +395,32 @@ export function TetrisExperiment() {
           </Panel>
         </div>
 
-        <StressPanel stress={stress} onChange={setStress} />
+        <StressPanel
+          stress={stress}
+          onChange={setStress}
+          mode={mode}
+          modeControls={
+            <SignalModeControls
+              mode={mode}
+              onModeChange={setMode}
+              driverFeature={driverFeature}
+              onDriverChange={setDriverFeature}
+            />
+          }
+        />
+        <FeatureMonitorPanel
+          compact
+          latest={features.latest}
+          history={features.history}
+          analyzing={features.analyzing}
+          enabledIds={features.enabledIds}
+          onEnabledChange={features.onEnabledChange}
+            note={
+              mode === 'features'
+                ? `演示数据调控中（${driverFeature}）→ 压力应持续波动。点「手动输入」接管。`
+                : '手动模式：合成 EEG 随压力调制。可切「演示数据」让压力自动波动。'
+            }
+        />
       </div>
     </div>
   )

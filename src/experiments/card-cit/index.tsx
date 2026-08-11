@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { FeatureMonitorPanel, useFeatureMonitor } from '../../lib/features'
 import { SessionLogger } from '../../lib/logger'
 import { calibratedNow, keyTimestamp, sleep } from '../../lib/timing'
 import { ExportButtons } from '../../lib/ui/ExportButtons'
@@ -36,6 +37,7 @@ interface RoundHistory {
 
 export function CardCitExperiment() {
   const [subjectId, setSubjectId] = useState('S01')
+  const features = useFeatureMonitor({ active: true })
   const [handSize, setHandSize] = useState(10)
   const [seed, setSeed] = useState(() => (Math.random() * 0xffffffff) >>> 0)
   const [cards, setCards] = useState<Card[]>(() => dealHand(10, seed))
@@ -155,7 +157,6 @@ export function CardCitExperiment() {
       })
 
       await sleep(flashMs)
-      setHighlightId(null)
 
       // Wait remaining deadline window for late responses, then ISI
       const afterFlash = performance.now()
@@ -182,6 +183,9 @@ export function CardCitExperiment() {
 
       onsetRef.current = null
       currentTrialRef.current = null
+      // Keep the card highlighted during the whole response window to make
+      // the stimulus feel like a continuous slideshow.
+      setHighlightId(null)
 
       // ISI after deadline window (trial.isiMs is inter-stimulus idle)
       await sleep(trial.isiMs)
@@ -233,6 +237,8 @@ export function CardCitExperiment() {
   }))
 
   const guessCard = cards.find((c) => c.id === detection?.guessId)
+  const flashCard =
+    phase === 'flash' && highlightId ? cards.find((c) => c.id === highlightId) ?? null : null
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6">
@@ -375,8 +381,26 @@ export function CardCitExperiment() {
               </div>
             )}
           </Panel>
+
+          <FeatureMonitorPanel
+            compact
+            latest={features.latest}
+            history={features.history}
+            analyzing={features.analyzing}
+            enabledIds={features.enabledIds}
+            onEnabledChange={features.onEnabledChange}
+            note="演示用合成 EEG 特征流（与 RT 检测独立）。勾选与采集调试共用。"
+          />
         </div>
       </div>
+
+      {flashCard && (
+        <div className="flash-fullscreen" aria-hidden>
+          <div key={flashCard.id} className="flash-fullscreen-card flash-fullscreen-fade">
+            <CardFace card={flashCard} size="lg" highlight />
+          </div>
+        </div>
+      )}
 
       {(phase === 'guess' || phase === 'feedback') && chartData.length > 0 && (
         <Panel title="各牌反应时 z-score（越高越像目标牌）" className="mt-4">

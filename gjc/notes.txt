@@ -1,0 +1,50 @@
+GJC experiment notes
+====================
+
+Purpose
+-------
+Run the proposal's immediate substrate amendments before decoder work:
+
+1. Compare checkpoint deadlines on/off with identical random tapes.
+2. Pair every epoch with an explicit completion/timeout behavioral bit.
+3. Carry observed, artifact-rejected, and no-response verdicts without
+   collapsing absence into a numerical zero.
+4. Add an explicitly assumed workload response f(w,a), make channel reliability
+   a function of workload/engagement, exhibit evaluator degradation, and apply
+   a frozen-observation-model plus two-sided-band structural block.
+5. Measure the Stage 1 sensitivity curve at 100/90/80/70/65/55% effective
+   single-shot accuracy.
+
+Run
+---
+python experiment.py --out_dir=run_1
+python plot.py run_1
+python selfcheck.py
+
+Interpretation constraints
+--------------------------
+- The workload response model is synthetic and is not a calibrated human model.
+- The simulator is a compact replacement because the proposal's referenced
+  prior gjc/ implementation was not present in the supplied workspace.
+- Checkpoint-on and checkpoint-off variants are both reported.
+- Tonic state never enters the per-agent structural prior or credit inference.
+- The completion/timeout bit is available to both the behavioral baseline and
+  the neural-plus-behavior method.
+
+Run 1 results (seed 20260730)
+-----------------------------
+- Checkpoint-off: 8.86% of timed-out trials had no violated gate event.
+- Checkpoint-on: 0.00% of timed-out trials were silent.
+- The paired checkpoint variants had identical elapsed time and gates passed.
+- Behavioral-only event-credit MAE: 0.10054.
+- Neural + behavioral event-credit MAE:
+  100% 0.04287; 90% 0.06642; 80% 0.08259; 70% 0.09394;
+  65% 0.09668; 55% 0.10017.
+- Relative MAE gain over behavior only:
+  100% 57.4%; 90% 33.9%; 80% 17.9%; 70% 6.6%; 65% 3.8%; 55% 0.4%.
+- Unsafe pathology choice: load action 0.5, true violation 0.4095,
+  apparent violation 0.2350, verdict supply 0.4943, task performance 0.5788.
+- Guarded choice: load action 0.0, true violation 0.2270,
+  apparent violation 0.3315, verdict supply 0.9397, task performance 0.9988.
+- Byte-for-byte reproducibility was verified by a second run under the same
+  Python 3.9 environment.

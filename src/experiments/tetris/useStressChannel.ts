@@ -24,6 +24,7 @@ export function useStressChannel(initial = 40) {
           type: 'stress',
           value: latest,
           t: performance.now(),
+          origin: 'sync',
         } satisfies StressMessage)
       }
     }
@@ -33,7 +34,7 @@ export function useStressChannel(initial = 40) {
 
   const setStress = (value: number) => {
     setStressState(value)
-    publishStress(value)
+    publishStress(value, 'user')
   }
 
   return { stress, setStress }

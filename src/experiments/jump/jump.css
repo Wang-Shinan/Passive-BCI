@@ -1,0 +1,60 @@
+.jump-hud {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.jump-hud > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 88%, #1a1208);
+}
+
+.jump-hud span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.jump-hud strong {
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.jump-stage {
+  position: relative;
+  height: min(68vh, 640px);
+  min-height: 420px;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, #c4b39a 35%, var(--border));
+  background: #efe4d4;
+  touch-action: none;
+  user-select: none;
+  cursor: pointer;
+}
+
+.jump-stage:focus-visible {
+  outline: 2px solid color-mix(in srgb, #ff6b3d 70%, white);
+  outline-offset: 2px;
+}
+
+.jump-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 720px) {
+  .jump-hud {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .jump-stage {
+    height: min(62vh, 540px);
+    min-height: 380px;
+  }
+}
