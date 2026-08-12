@@ -4,6 +4,7 @@ import {
   ema,
   loadSignalMode,
   mapFeatureToControl100,
+  resolveDriverRaw,
   saveSignalMode,
   type AffectChannel,
   type SignalControlMode,
@@ -48,11 +49,12 @@ export function useAffectControl(initial?: Partial<AffectSignals>) {
 
   const ensure = [
     ...Object.values(AFFECT_DRIVER_DEFAULTS),
+    'rms',
+    'std',
+    'hjorth_complexity',
     'pow_freq_bands',
-    'cognitive_load',
-    'focus_score',
-    'engagement_score',
     'relaxation_score',
+    'energy_freq_bands',
   ]
 
   const features = useFeatureMonitor({
@@ -70,8 +72,8 @@ export function useAffectControl(initial?: Partial<AffectSignals>) {
     let changed = false
     for (const ch of Object.keys(AFFECT_DRIVER_DEFAULTS) as AffectChannel[]) {
       const fid = AFFECT_DRIVER_DEFAULTS[ch]
-      const raw = snap.values[fid]
-      if (raw === undefined || !Number.isFinite(raw)) continue
+      const raw = resolveDriverRaw(snap.values, fid)
+      if (raw === undefined) continue
       const mapped = mapFeatureToControl100(fid, raw)
       next[ch] = ema(next[ch], mapped, 0.18)
       changed = true

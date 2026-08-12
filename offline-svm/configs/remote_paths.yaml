@@ -1,0 +1,27 @@
+# Remote / cluster paths (COS mount or rclone VFS).
+# On the training box these usually appear under /mnt/omni-eeg-01/...
+
+cos_remote: cos
+bucket_root: omni-eeg-1442740494/omni-eeg-01
+
+# Where this experiment package lives after upload
+code_uri: cos:omni-eeg-1442740494/omni-eeg-01/wsn/passive-bci-offline-svm
+
+datasets:
+  workload:
+    zarr: cos:omni-eeg-1442740494/omni-eeg-01/downstream_preprocess/Workload/Workload.zarr
+    mount: /mnt/omni-eeg-01/downstream_preprocess/Workload/Workload.zarr
+  eegmat:
+    zarr: cos:omni-eeg-1442740494/omni-eeg-01/downstream_preprocess/EEGMAT/EEGMAT.zarr
+    mount: /mnt/omni-eeg-01/downstream_preprocess/EEGMAT/EEGMAT.zarr
+  deap:
+    zarr: cos:omni-eeg-1442740494/omni-eeg-01/downstream_preprocess/DEAP/DEAP.zarr
+    mount: /mnt/omni-eeg-01/downstream_preprocess/DEAP/DEAP.zarr
+    ratings: cos:omni-eeg-1442740494/omni-eeg-01/raw_data/DEAP/metadata_csv/participant_ratings.csv
+    ratings_mount: /mnt/omni-eeg-01/raw_data/DEAP/metadata_csv/participant_ratings.csv
+    preprocessed_python_zip: cos:omni-eeg-1442740494/omni-eeg-01/raw_data/DEAP/data_preprocessed_python.zip
+  stew:
+    status: missing_on_cos
+    note: Place under data/stew/stew_windows.npz after IEEE DataPort download
+
+results_uri: cos:omni-eeg-1442740494/omni-eeg-01/wsn/passive-bci-offline-svm/results

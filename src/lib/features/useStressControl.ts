@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   DEMO_ENVELOPE_DRIVER,
+  DEFAULT_STRESS_DRIVER,
   adaptiveScale100,
   ema,
+  ensureIdsForDriver,
   loadSignalMode,
   loadStressDriver,
   mapFeatureToControl100,
+  resolveDriverRaw,
   saveSignalMode,
   saveStressDriver,
   type SignalControlMode,
@@ -19,9 +22,7 @@ function clamp100(v: number): number {
 
 /**
  * Stress (0–100) for games: manual slider OR demo/feature-driven.
- *
- * Demo mode updates on its own 10 Hz timer so the stress panel visibly tracks
- * the autonomous envelope (not a compressed softScore that looks flat).
+ * Drivers = C-tier and above control signals (default rms).
  */
 export function useStressControl(opts?: {
   initial?: number
@@ -31,10 +32,10 @@ export function useStressControl(opts?: {
   const [mode, setModeState] = useState<SignalControlMode>(() => loadSignalMode())
   const [driverFeature, setDriverFeatureState] = useState(() => {
     const d = loadStressDriver()
-    // Previous default (cognitive_load + softScore) barely moved the stress UI.
+    // Migrate old weak defaults toward S-tier rms.
     if (d === 'cognitive_load') {
-      saveStressDriver(DEMO_ENVELOPE_DRIVER)
-      return DEMO_ENVELOPE_DRIVER
+      saveStressDriver(DEFAULT_STRESS_DRIVER)
+      return DEFAULT_STRESS_DRIVER
     }
     return d
   })
@@ -51,10 +52,7 @@ export function useStressControl(opts?: {
   const setMode = useCallback((m: SignalControlMode) => {
     setModeState(m)
     saveSignalMode(m)
-    if (m === 'features') {
-      // Reset adaptive window when entering demo so scale can re-learn.
-      adaptRef.current = { min: 40, max: 60 }
-    }
+    if (m === 'features') adaptRef.current = { min: 40, max: 60 }
   }, [])
 
   const setDriverFeature = useCallback((id: string) => {
@@ -76,16 +74,14 @@ export function useStressControl(opts?: {
     autonomous: mode === 'features',
     modulators: mode === 'manual' ? manualMods : undefined,
     ensureFeatures: [
-      driverFeature === DEMO_ENVELOPE_DRIVER ? 'cognitive_load' : driverFeature,
-      'cognitive_load',
+      ...ensureIdsForDriver(driverFeature),
+      'rms',
+      'std',
       'pow_freq_bands',
-      'focus_score',
-      'engagement_score',
     ],
   })
   latestRef.current = features.latest
 
-  // Dedicated demo clock — stress panel must move even if feature softScore is flat.
   useEffect(() => {
     if (mode !== 'features') return
     const id = window.setInterval(() => {
@@ -95,11 +91,11 @@ export function useStressControl(opts?: {
       let target = envelope
 
       if (driver !== DEMO_ENVELOPE_DRIVER) {
-        const raw = latestRef.current?.values[driver]
-        if (raw !== undefined && Number.isFinite(raw)) {
+        const snap = latestRef.current
+        const raw = snap ? resolveDriverRaw(snap.values, driver) : undefined
+        if (raw !== undefined) {
           const mapped = mapFeatureToControl100(driver, raw)
           target = adaptiveScale100(mapped, adaptRef.current)
-          // If adaptive span still tiny, blend with envelope so UI never looks frozen.
           const span = adaptRef.current.max - adaptRef.current.min
           if (span < 5) target = 0.55 * envelope + 0.45 * target
         } else {

@@ -1,0 +1,33 @@
+datasets:
+  workload:
+    role: primary_cognitive_load
+    labels: [easy, med, diff]
+    frontend: [cognitive_load, stress]
+  eegmat:
+    role: secondary_cognitive_load
+    labels: [0, 1]
+    frontend: [cognitive_load, focus_score]
+  deap:
+    role: affect_regression
+    targets: [valence, arousal, dominance, liking]
+    frontend: [relaxation_score, arousal, satisfaction, engagement_score]
+  stew:
+    role: cognitive_load_transfer
+    status: missing_on_cos
+    frontend: [cognitive_load, stress]
+    acquire: IEEE DataPort STEW → data/stew/stew_windows.npz
+
+cv:
+  scheme: GroupKFold_by_subject
+  n_splits: 5
+
+models:
+  classification: SVM_RBF + CalibratedClassifierCV(sigmoid)
+  regression: SVR_RBF
+  confidence:
+    classification: max_predicted_proba
+    regression: 1 - |err| / (2 * y_std)
+
+features:
+  align_with: src/lib/features/bandFeatures.ts
+  vector: [rel_bands_5, scores_8, rms]

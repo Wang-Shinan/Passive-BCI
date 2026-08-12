@@ -1,8 +1,11 @@
 import {
-  STRESS_DRIVER_OPTIONS,
+  CONTROL_SIGNAL_OPTIONS,
+  CONTROL_SIGNAL_TIER_LABEL,
+  CONTROL_SIGNAL_TIER_ORDER,
+  type AffectChannel,
+  type ControlSignalTier,
   type SignalControlMode,
 } from './controlMapping'
-import type { AffectChannel } from './controlMapping'
 
 /** Compact mode switch + optional stress-driver picker for experiment sidebars. */
 export function SignalModeControls({
@@ -43,22 +46,31 @@ export function SignalModeControls({
       <p className="muted mb-2 text-xs leading-relaxed">
         {mode === 'manual'
           ? '滑块 / 快捷键直接控制游戏；合成 EEG 仅作特征预览。'
-          : '演示合成 EEG → 压力输入应明显波动（默认「演示包络」）。点「手动输入」才接管。'}
+          : '演示 EEG → 可选 C 档及以上特征驱动难度（默认 rms）。点「手动输入」接管。'}
       </p>
       {driverFeature !== undefined && onDriverChange ? (
         <label className="mb-0 block text-xs">
-          <span className="muted">压力驱动特征</span>
+          <span className="muted">难度 / 信息驱动信号</span>
           <select
             className="mt-1 w-full rounded-lg border border-[#2a3550] bg-[#0d1425] px-2 py-1.5 text-sm"
             value={driverFeature}
             onChange={(e) => onDriverChange(e.target.value)}
             disabled={mode !== 'features'}
           >
-            {STRESS_DRIVER_OPTIONS.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
+            {CONTROL_SIGNAL_TIER_ORDER.map((tier) => {
+              const opts = CONTROL_SIGNAL_OPTIONS.filter((o) => o.tier === tier)
+              if (!opts.length) return null
+              return (
+                <optgroup key={tier} label={CONTROL_SIGNAL_TIER_LABEL[tier as ControlSignalTier]}>
+                  {opts.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                      {o.note ? ` — ${o.note}` : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              )
+            })}
           </select>
         </label>
       ) : null}
