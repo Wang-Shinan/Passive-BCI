@@ -21,6 +21,7 @@ import {
   BAUD,
   CHANNEL_NAMES,
   CHANNELS,
+  FRAME_BYTES,
   FS,
   MODE_ITEMS,
   MONTAGE_PRESETS,
@@ -42,6 +43,13 @@ import { FeaturePanel } from './FeaturePanel'
 import { ChannelRail, ChannelSettingsDialog } from './ChannelRail'
 import { ensureBridge } from './bridgeApi'
 import { acqRuntime, ingestBridgeToHub, setAcquisitionUi, waitConfigAck } from './runtime'
+import {
+  LIVE_CATCHUP_THRESHOLD_S,
+  liveLagSec,
+  resetCatchup,
+  setCatchupClock,
+  setFirmwareQueueDepth,
+} from './liveCatchup'
 import { liveEegHub } from '../lib/eeg/liveHub'
 import {
   copyLatestChannel,
@@ -65,6 +73,21 @@ const RING_SECONDS = 12
 const FEATURE_HISTORY = 60
 const CFG_STORAGE_KEY = 'passive-bci.acquisition.channel-config'
 const DEVICE_STORAGE_KEY = 'passive-bci.acquisition.device'
+
+const EMPTY_STATS = {
+  samples: 0,
+  rateHz: 0,
+  crcBad: 0,
+  syncDrop: 0,
+  invalid: 0,
+  seqGaps: 0,
+  lastSeq: null as number | null,
+  mode: 0,
+  queueDepth: 0,
+  packetLoss: 0,
+  packetCount: 0,
+  saturation: 0,
+}
 
 type DeviceKind = 'omni' | 'neuracle' | 'bcigo'
 type ConnUi = 'idle' | 'connecting' | 'open' | 'streaming' | 'error' | 'unsupported' | 'demo'
@@ -229,21 +252,8 @@ export function AcquisitionDebugPage() {
   const [featureLatest, setFeatureLatest] = useState<LiveFeatureSnapshot | null>(null)
   const [featureHistory, setFeatureHistory] = useState<LiveFeatureSnapshot[]>([])
   const [enabledFeatures, setEnabledFeatures] = useState<string[]>(() => loadEnabledFeatures())
-  const [stats, setStats] = useState({
-    samples: 0,
-    rateHz: 0,
-    crcBad: 0,
-    syncDrop: 0,
-    invalid: 0,
-    seqGaps: 0,
-    lastSeq: null as number | null,
-    mode: 0,
-    queueDepth: 0,
-    packetLoss: 0,
-    packetCount: 0,
-    saturation: 0,
-  })
-  const [, setTick] = useState(0)
+  const [stats, setStats] = useState(() => ({ ...EMPTY_STATS }))
+  const statsRef = useRef({ ...EMPTY_STATS })
 
   const transportRef = useRef(acqRuntime.transport)
   const neuracleRef = useRef<NeuracleWsClient | null>(acqRuntime.neuracle)
@@ -322,7 +332,7 @@ export function AcquisitionDebugPage() {
         !acqRuntime.impedanceActive &&
         (streamingRef.current || acqRuntime.streaming || acqRuntime.status === 'demo')
       ) {
-        liveEegHub.pushFrame(filtered)
+        liveEegHub.pushFrame(uv)
       }
     },
     [capacity],
@@ -368,23 +378,18 @@ export function AcquisitionDebugPage() {
       }
 
       const parser = parserRef.current
-      setStats((s) => ({
-        samples: s.samples + frames.length,
-        rateHz: rateHz || s.rateHz,
-        crcBad: parser?.crcBad ?? s.crcBad,
-        syncDrop: parser?.syncDrop ?? s.syncDrop,
-        invalid: s.invalid + invalid,
-        seqGaps: s.seqGaps + gaps,
-        lastSeq: lastSeqRef.current,
-        mode: lastMode,
-        queueDepth: lastQ,
-        packetLoss: s.packetLoss,
-        packetCount: s.packetCount,
-        saturation: s.saturation + sat,
-      }))
-      if (recorderRef.current.recording && !acqRuntime.impedanceActive) {
-        setRecBytes(recorderRef.current.byteLength)
-      }
+      const s = statsRef.current
+      s.samples += frames.length
+      if (rateHz) s.rateHz = rateHz
+      s.crcBad = parser?.crcBad ?? s.crcBad
+      s.syncDrop = parser?.syncDrop ?? s.syncDrop
+      s.invalid += invalid
+      s.seqGaps += gaps
+      s.lastSeq = lastSeqRef.current
+      s.mode = lastMode
+      s.queueDepth = lastQ
+      s.saturation += sat
+      setFirmwareQueueDepth(lastQ)
     },
     [pushFrame],
   )
@@ -450,7 +455,12 @@ export function AcquisitionDebugPage() {
 
   useEffect(() => {
     if (status !== 'streaming' && status !== 'demo') return
-    const id = window.setInterval(() => setTick((t) => t + 1), 250)
+    const id = window.setInterval(() => {
+      setStats({ ...statsRef.current })
+      if (recorderRef.current.recording) {
+        setRecBytes(recorderRef.current.byteLength)
+      }
+    }, 250)
     return () => clearInterval(id)
   }, [status])
 
@@ -459,7 +469,7 @@ export function AcquisitionDebugPage() {
     saveEnabledFeatures(ids)
   }
 
-  // Sliding-window feature analysis on the filtered ring (demo + live).
+  // Sliding-window feature analysis on the raw ring (band scores need θ/δ).
   useEffect(() => {
     if (status !== 'streaming' && status !== 'demo') {
       setFeatureLatest(null)
@@ -471,7 +481,7 @@ export function AcquisitionDebugPage() {
     }
     const id = window.setInterval(() => {
       const snap = computeLiveFeatures({
-        buffers: filtRingRef.current,
+        buffers: rawRingRef.current,
         writeHead: writeHeadRef.current,
         filled: filledRef.current,
         sampleRate,
@@ -535,6 +545,7 @@ export function AcquisitionDebugPage() {
       await applyHardwareConfig(cfg)
       acqRuntime.device = 'omni'
       acqRuntime.status = 'open'
+      setCatchupClock(FS, FRAME_BYTES)
       const msg = '串口已打开。可改通道参数后点「开始采集」。'
       liveEegHub.configure({
         device: 'omni',
@@ -561,20 +572,9 @@ export function AcquisitionDebugPage() {
     resizeBuffers(n)
     lastSeqRef.current = null
     rateWinRef.current = { t0: performance.now(), n: 0, samplesBase: 0 }
-    setStats({
-      samples: 0,
-      rateHz: 0,
-      crcBad: 0,
-      syncDrop: 0,
-      invalid: 0,
-      seqGaps: 0,
-      lastSeq: null,
-      mode: 0,
-      queueDepth: 0,
-      packetLoss: 0,
-      packetCount: 0,
-      saturation: 0,
-    })
+    resetCatchup()
+    statsRef.current = { ...EMPTY_STATS }
+    setStats({ ...EMPTY_STATS })
   }
 
   const disconnect = async () => {
@@ -598,6 +598,7 @@ export function AcquisitionDebugPage() {
     }
     acqRuntime.impedanceActive = false
     setImpedanceMeasuring(false)
+    resetCatchup()
     neuracleRef.current?.disconnect()
     neuracleRef.current = null
     acqRuntime.neuracle = null
@@ -635,6 +636,7 @@ export function AcquisitionDebugPage() {
       setStreamLabels([...cfg.labels])
       setVisible(Array.from({ length: CHANNELS }, () => true))
       setSampleRate(FS)
+      setCatchupClock(FS, FRAME_BYTES)
       setStatus(supported ? 'idle' : 'unsupported')
       setDetail(deviceDetail('omni', supported))
     } else {
@@ -716,6 +718,7 @@ export function AcquisitionDebugPage() {
           setStreamLabels(names)
           setStreamTypes(hello.channel_types ?? [])
           setSampleRate(hello.sample_rate)
+          setCatchupClock(hello.sample_rate)
           setVisible(names.map(() => true))
           streamingRef.current = false
           acqRuntime.streaming = false
@@ -754,11 +757,9 @@ export function AcquisitionDebugPage() {
     packetCount: number
   }) => {
     if (!streamingRef.current) {
-      setStats((st) => ({
-        ...st,
-        packetLoss: batch.packetLoss,
-        packetCount: batch.packetCount,
-      }))
+      const st = statsRef.current
+      st.packetLoss = batch.packetLoss
+      st.packetCount = batch.packetCount
       return
     }
     const n = batch.channels
@@ -775,17 +776,14 @@ export function AcquisitionDebugPage() {
       rateHz = rateWinRef.current.n / elapsed
       rateWinRef.current = { t0: now, n: 0, samplesBase: 0 }
     }
-    setStats((st) => ({
-      ...st,
-      samples: st.samples + batch.samples,
-      rateHz: rateHz || st.rateHz,
-      packetLoss: batch.packetLoss,
-      packetCount: batch.packetCount,
-    }))
+    const st = statsRef.current
+    st.samples += batch.samples
+    if (rateHz) st.rateHz = rateHz
+    st.packetLoss = batch.packetLoss
+    st.packetCount = batch.packetCount
     if (recorderRef.current.recording && !acqRuntime.impedanceActive) {
       const bytes = new Uint8Array(batch.values.buffer, batch.values.byteOffset, batch.values.byteLength)
       recorderRef.current.append(bytes)
-      setRecBytes(recorderRef.current.byteLength)
     }
   }
   ingestBridgeBatchRef.current = ingestBridgeBatch
@@ -858,6 +856,7 @@ export function AcquisitionDebugPage() {
           setStreamLabels(names)
           setStreamTypes(hello.channel_types ?? [])
           setSampleRate(hello.sample_rate)
+          setCatchupClock(hello.sample_rate)
           setVisible(names.map(() => true))
           streamingRef.current = false
           acqRuntime.streaming = false
@@ -925,7 +924,10 @@ export function AcquisitionDebugPage() {
       setRecBytes(0)
       setFeatureLatest(null)
       setFeatureHistory([])
-      setStats((st) => ({ ...st, samples: 0, rateHz: 0 }))
+      resetCatchup()
+      setCatchupClock(sampleRate)
+      statsRef.current = { ...statsRef.current, samples: 0, rateHz: 0 }
+      setStats({ ...statsRef.current })
       setStatus('streaming')
       const streamDetail =
         device === 'bcigo'
@@ -951,6 +953,7 @@ export function AcquisitionDebugPage() {
     setStreamLabels(cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!))
     setVisible(Array.from({ length: CHANNELS }, () => true))
     setSampleRate(FS)
+    setCatchupClock(FS, FRAME_BYTES)
     try {
       await applyHardwareConfig(cfg)
       await t.write(CMD_STOP)
@@ -988,6 +991,7 @@ export function AcquisitionDebugPage() {
     }
     streamingRef.current = false
     acqRuntime.streaming = false
+    resetCatchup()
     if (device === 'omni') {
       try {
         if (transportRef.current.connected) await transportRef.current.write(CMD_STOP)
@@ -1033,6 +1037,7 @@ export function AcquisitionDebugPage() {
       setStreamLabels([...CHANNEL_NAMES])
       setVisible(Array.from({ length: CHANNELS }, () => true))
       setSampleRate(FS)
+      setCatchupClock(FS, FRAME_BYTES)
       liveEegHub.configure({
         device: 'demo',
         sampleRate: FS,
@@ -1071,20 +1076,13 @@ export function AcquisitionDebugPage() {
         phase += batch
         samples += batch
         lastSeqRef.current = samples - 1
-        setStats({
+        statsRef.current = {
+          ...EMPTY_STATS,
           samples,
           rateHz: samples / Math.max(0.001, (performance.now() - t0) / 1000),
-          crcBad: 0,
-          syncDrop: 0,
-          invalid: 0,
-          seqGaps: 0,
           lastSeq: samples - 1,
           mode: 4,
-          queueDepth: 0,
-          packetLoss: 0,
-          packetCount: 0,
-          saturation: 0,
-        })
+        }
       }, 100)
     })
   }
@@ -1382,6 +1380,8 @@ export function AcquisitionDebugPage() {
   const filterLabel = viewFiltered
     ? `${bandLoHz}–${bandHiHz} Hz${useNotch ? ' + 50/100 Hz 谐波陷波' : ''}`
     : '未滤波（不修改记录数据）'
+  const lagSec = liveLagSec()
+  const catchingUp = lagSec > LIVE_CATCHUP_THRESHOLD_S
 
   return (
     <div className="acq-omni">
@@ -1946,10 +1946,15 @@ export function AcquisitionDebugPage() {
         <span>
           滤波 <strong>{filterLabel}</strong>
         </span>
+        <span>
+          积压 <strong>{lagSec > 0.005 ? `${lagSec.toFixed(2)} s` : '0'}</strong>
+        </span>
+        {catchingUp ? <span className="acq-catchup">追帧中</span> : null}
         {device === 'omni' ? (
           <>
             <span>CRC {stats.crcBad}</span>
             <span>gaps {stats.seqGaps}</span>
+            <span>Q {stats.queueDepth}</span>
             <span>
               饱和{' '}
               <strong>

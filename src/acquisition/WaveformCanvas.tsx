@@ -1,4 +1,9 @@
 import { useEffect, useRef } from 'react'
+import {
+  LIVE_CATCHUP_THRESHOLD_S,
+  PLOT_INTERVAL_MS,
+  liveLagSec,
+} from './liveCatchup'
 
 const CHANNEL_COLORS = [
   '#5b8cff',
@@ -96,13 +101,13 @@ export function WaveformCanvas({
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    let raf = 0
+    let timer = 0
 
     const draw = () => {
       const ctx = canvas.getContext('2d')
       const p = propsRef.current
       if (!ctx) {
-        raf = requestAnimationFrame(draw)
+        timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
         return
       }
 
@@ -128,8 +133,12 @@ export function WaveformCanvas({
         .filter((i) => p.visibleChannels[i] !== false && buffers[i])
       const nVis = Math.max(1, visibleIdx.length)
       const rowH = cssH / nVis
+      const bufLen = buffers[0]?.length ?? 0
+      // X axis is always the selected window, never stretched to however
+      // many samples have arrived. Catch-up therefore cannot compress a
+      // backlog into one screen.
       const windowSamples = Math.max(8, Math.floor(p.windowSec * p.sampleRate))
-      const avail = Math.min(filled, windowSamples)
+      const avail = Math.min(filled, windowSamples, bufLen)
       const labelW = p.showChannelLabels ? 52 : 8
       const plotW = Math.max(1, cssW - labelW - 8)
 
@@ -154,62 +163,62 @@ export function WaveformCanvas({
         ctx.fillStyle = omni ? '#5d6870' : '#9aa8c7'
         ctx.font = '13px IBM Plex Sans, sans-serif'
         ctx.fillText('等待数据…', labelW + 12, cssH / 2)
-        raf = requestAnimationFrame(draw)
+        timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
         return
       }
 
-      const bufLen = buffers[0]?.length ?? 0
       const pixels = Math.floor(plotW)
+      const samplesPerPixel = windowSamples / pixels
+      const winStart = windowSamples - avail
 
       visibleIdx.forEach((ch, row) => {
-        const buf = buffers[ch]!
-        const yTop = row * rowH
-        const yBot = yTop + rowH
-        const midY = yTop + rowH / 2
-        // px / µV: ±yScaleUv fills ~84% of the row. Never floor this to 1 —
-        // with 32 ch a 25 px row would otherwise draw ±100 px and flood the plot.
-        const amp = (rowH * 0.42) / Math.max(1e-6, p.yScaleUv)
+        const midY = row * rowH + rowH / 2
         const color = pal[ch % pal.length]!
-        const clipY = (y: number) => Math.max(yTop + 0.5, Math.min(yBot - 0.5, y))
-
         if (p.showChannelLabels) {
           ctx.fillStyle = color
           ctx.font = '12px IBM Plex Sans, sans-serif'
           ctx.fillText(p.channelNames[ch] ?? `CH${ch + 1}`, 8, midY + 4)
         }
-
         ctx.strokeStyle = omni ? '#d8dde3' : '#243049'
         ctx.beginPath()
         ctx.moveTo(labelW, midY)
         ctx.lineTo(cssW - 4, midY)
         ctx.stroke()
+      })
 
-        ctx.save()
-        ctx.beginPath()
-        ctx.rect(labelW, yTop, plotW, rowH)
-        ctx.clip()
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(labelW, 0, plotW, cssH)
+      ctx.clip()
+
+      visibleIdx.forEach((ch, row) => {
+        const buf = buffers[ch]!
+        const midY = row * rowH + rowH / 2
+        const amp = (rowH * 0.42) / Math.max(1e-6, p.yScaleUv)
+        const color = pal[ch % pal.length]!
 
         ctx.strokeStyle = color
         ctx.lineWidth = 1.15
         ctx.beginPath()
 
-        const samplesPerPixel = avail / pixels
         let started = false
         for (let px = 0; px < pixels; px++) {
           const i0 = Math.floor(px * samplesPerPixel)
-          const i1 = Math.min(avail - 1, Math.floor((px + 1) * samplesPerPixel))
+          const i1 = Math.min(windowSamples - 1, Math.floor((px + 1) * samplesPerPixel))
+          if (i1 < winStart) continue
           let minV = Infinity
           let maxV = -Infinity
-          for (let i = i0; i <= i1; i++) {
-            const idx = (((writeHead - avail + i) % bufLen) + bufLen) % bufLen
+          for (let i = Math.max(i0, winStart); i <= i1; i++) {
+            const k = i - winStart
+            const idx = (((writeHead - avail + k) % bufLen) + bufLen) % bufLen
             const v = buf[idx]!
             if (!Number.isFinite(v)) continue
             if (v < minV) minV = v
             if (v > maxV) maxV = v
           }
           if (minV === Infinity) continue
-          const yHi = clipY(midY - Math.max(-p.yScaleUv, Math.min(p.yScaleUv, maxV)) * amp)
-          const yLo = clipY(midY - Math.max(-p.yScaleUv, Math.min(p.yScaleUv, minV)) * amp)
+          const yHi = midY - maxV * amp
+          const yLo = midY - minV * amp
           const x = labelW + px
           if (!started) {
             ctx.moveTo(x, yHi)
@@ -218,14 +227,23 @@ export function WaveformCanvas({
           if (yLo !== yHi) ctx.lineTo(x, yLo)
         }
         ctx.stroke()
-        ctx.restore()
       })
+      ctx.restore()
 
       ctx.fillStyle = omni ? '#5d6870' : '#9aa8c7'
       ctx.font = '11px IBM Plex Sans, sans-serif'
       ctx.fillText(`±${p.yScaleUv} μV · ${p.windowSec.toFixed(1)}s`, labelW + 8, 14)
 
-      raf = requestAnimationFrame(draw)
+      const lag = liveLagSec()
+      if (lag > LIVE_CATCHUP_THRESHOLD_S) {
+        ctx.fillStyle = omni ? '#fff4ed' : '#1a2438'
+        ctx.fillRect(8, 4, 280, 18)
+        ctx.fillStyle = omni ? '#b83c00' : '#f5a524'
+        ctx.font = '12px IBM Plex Sans, sans-serif'
+        ctx.fillText(`追帧中：估计积压 ${lag.toFixed(2)} s`, 16, 17)
+      }
+
+      timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
     }
 
     const hitIndex = (clientY: number): number | null => {
@@ -253,9 +271,9 @@ export function WaveformCanvas({
     canvas.addEventListener('click', onClick)
     canvas.addEventListener('dblclick', onDbl)
 
-    raf = requestAnimationFrame(draw)
+    timer = window.setTimeout(draw, 0)
     return () => {
-      cancelAnimationFrame(raf)
+      window.clearTimeout(timer)
       canvas.removeEventListener('click', onClick)
       canvas.removeEventListener('dblclick', onDbl)
     }

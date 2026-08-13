@@ -162,7 +162,7 @@ export function formatFeatureValue(
     case 'uV':
       return `${value.toFixed(2)} μV`
     case 'score':
-      return `${softScore(value).toFixed(0)}`
+      return `${softScore(value).toFixed(1)}`
     case 'ratio':
       return value.toFixed(2)
     default:

@@ -83,6 +83,7 @@ export class LiveIirFilter {
   private notchSos: Sos
   private useNotch: boolean
   private nChannels: number
+  private scratch: Float32Array
 
   constructor(
     nChannels = 8,
@@ -95,12 +96,14 @@ export class LiveIirFilter {
     this.notchSos = notchSos
     this.useNotch = useNotch
     this.zi = allocZi(nChannels, bandSos.length, notchSos.length)
+    this.scratch = new Float32Array(nChannels)
   }
 
   setChannelCount(n: number): void {
     if (n === this.nChannels) return
     this.nChannels = n
     this.zi = allocZi(n, this.bandSos.length, this.notchSos.length)
+    this.scratch = new Float32Array(n)
     this.generation += 1
   }
 
@@ -123,7 +126,8 @@ export class LiveIirFilter {
 
   processSample(uv: Float32Array, valid: boolean): Float32Array {
     const n = Math.min(this.nChannels, uv.length)
-    const out = new Float32Array(this.nChannels)
+    if (this.scratch.length !== this.nChannels) this.scratch = new Float32Array(this.nChannels)
+    const out = this.scratch
     for (let ch = 0; ch < n; ch++) {
       let x = uv[ch]!
       if (!valid || !Number.isFinite(x)) {

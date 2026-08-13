@@ -408,10 +408,12 @@ function lzivComplexity(x: Float32Array): number {
   return complexity / b
 }
 
-function medianOf(x: Float32Array): number {
+function medianOf(x: ArrayLike<number>): number {
+  const n = x.length
+  if (!n) return Number.NaN
   const a = Array.from(x).sort((u, v) => u - v)
-  const m = Math.floor(a.length / 2)
-  return a.length % 2 ? a[m]! : (a[m - 1]! + a[m]!) / 2
+  const m = n >> 1
+  return n % 2 ? a[m]! : 0.5 * (a[m - 1]! + a[m]!)
 }
 
 /** Approximate entropy (Pincus), m=2. */
@@ -627,6 +629,17 @@ export function computeLiveFeatures(opts: {
 
   const heavyIdx = needHeavy(enabled) ? subsampleChannels(usedIdx, HEAVY_CH_CAP) : []
   const wantSpec = needSpectral(enabled)
+  const specIdx = wantSpec ? subsampleChannels(usedIdx, HEAVY_CH_CAP) : []
+  const specSet = new Set(specIdx)
+  const needScores =
+    enabled.has('focus_score') ||
+    enabled.has('engagement_score') ||
+    enabled.has('relaxation_score') ||
+    enabled.has('cognitive_load') ||
+    enabled.has('drowsiness') ||
+    enabled.has('tbr_theta_beta') ||
+    enabled.has('tar_theta_alpha') ||
+    enabled.has('bar_beta_alpha')
 
   const acc: Record<string, number> = {}
   const bump = (key: string, v: number) => {
@@ -636,6 +649,13 @@ export function computeLiveFeatures(opts: {
   let nOk = 0
   let nSpec = 0
   let nHeavy = 0
+  const engCh: number[] = []
+  const relaxCh: number[] = []
+  const cogCh: number[] = []
+  const drowCh: number[] = []
+  const tbrCh: number[] = []
+  const tarCh: number[] = []
+  const barCh: number[] = []
 
   for (const c of usedIdx) {
     const buf = buffers[c]!
@@ -697,7 +717,7 @@ export function computeLiveFeatures(opts: {
     if (enabled.has('petrosian_fd')) bump('petrosian_fd', petrosianFd(slice))
     if (enabled.has('perm_entropy')) bump('perm_entropy', permEntropy(slice))
 
-    if (wantSpec) {
+    if (wantSpec && specSet.has(c)) {
       const spec = channelPsd(slice, sampleRate)
       if (spec) {
         const { psd, freq } = spec
@@ -722,8 +742,22 @@ export function computeLiveFeatures(opts: {
           absBands.gamma_plus +
           EPS
 
+        const delta = absBands.delta / bandTotal
+        const theta = absBands.theta / bandTotal
+        const alpha = absBands.alpha / bandTotal
+        const beta = absBands.beta / bandTotal
+
         if (enabled.has('pow_freq_bands') || needSpectral(enabled)) {
           for (const b of BAND_NAMES) bump(`rel_power_${b}`, absBands[b] / bandTotal)
+        }
+        if (needScores) {
+          engCh.push(beta / (alpha + theta + EPS))
+          relaxCh.push(alpha / (beta + theta + EPS))
+          cogCh.push(theta / (alpha + EPS))
+          drowCh.push((theta + delta) / (alpha + beta + EPS))
+          tbrCh.push(theta / (beta + EPS))
+          tarCh.push(theta / (alpha + EPS))
+          barCh.push(beta / (alpha + EPS))
         }
         if (enabled.has('energy_freq_bands')) {
           for (const b of BAND_NAMES) bump(`energy_${b}`, absBands[b])
@@ -818,47 +852,17 @@ export function computeLiveFeatures(opts: {
     values[k] = v / denom
   }
 
-  // Derived scores from relative band powers (neuroskill-like).
-  const needScores =
-    enabled.has('focus_score') ||
-    enabled.has('engagement_score') ||
-    enabled.has('relaxation_score') ||
-    enabled.has('cognitive_load') ||
-    enabled.has('drowsiness') ||
-    enabled.has('tbr_theta_beta') ||
-    enabled.has('tar_theta_alpha') ||
-    enabled.has('bar_beta_alpha')
-
-  if (needScores) {
-    // Ensure band powers exist even if only scores were selected.
-    let delta = values.rel_power_delta
-    let theta = values.rel_power_theta
-    let alpha = values.rel_power_alpha
-    let beta = values.rel_power_beta
-    if (
-      delta === undefined ||
-      theta === undefined ||
-      alpha === undefined ||
-      beta === undefined
-    ) {
-      // Recompute quickly from first channels if bands weren't stored
-      delta = 0
-      theta = 0
-      alpha = 0
-      beta = 0
-    }
-    const engagement = beta / (alpha + theta + EPS)
-    const relaxation = alpha / (beta + theta + EPS)
-    const cognitiveLoad = theta / (alpha + EPS)
-    const drowsiness = (theta + delta) / (alpha + beta + EPS)
-    if (enabled.has('focus_score')) values.focus_score = engagement
-    if (enabled.has('engagement_score')) values.engagement_score = engagement
-    if (enabled.has('relaxation_score')) values.relaxation_score = relaxation
-    if (enabled.has('cognitive_load')) values.cognitive_load = cognitiveLoad
-    if (enabled.has('drowsiness')) values.drowsiness = drowsiness
-    if (enabled.has('tbr_theta_beta')) values.tbr_theta_beta = theta / (beta + EPS)
-    if (enabled.has('tar_theta_alpha')) values.tar_theta_alpha = theta / (alpha + EPS)
-    if (enabled.has('bar_beta_alpha')) values.bar_beta_alpha = beta / (alpha + EPS)
+  // Derived scores: median of per-channel ratios. Averaging 32–64 relative
+  // band powers first made β/(α+θ) a near-constant.
+  if (needScores && engCh.length) {
+    if (enabled.has('focus_score')) values.focus_score = medianOf(engCh)
+    if (enabled.has('engagement_score')) values.engagement_score = medianOf(engCh)
+    if (enabled.has('relaxation_score')) values.relaxation_score = medianOf(relaxCh)
+    if (enabled.has('cognitive_load')) values.cognitive_load = medianOf(cogCh)
+    if (enabled.has('drowsiness')) values.drowsiness = medianOf(drowCh)
+    if (enabled.has('tbr_theta_beta')) values.tbr_theta_beta = medianOf(tbrCh)
+    if (enabled.has('tar_theta_alpha')) values.tar_theta_alpha = medianOf(tarCh)
+    if (enabled.has('bar_beta_alpha')) values.bar_beta_alpha = medianOf(barCh)
   }
 
   // Drop band keys if pow_freq_bands not enabled (kept temporarily for scores).

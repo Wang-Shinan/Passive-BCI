@@ -2,13 +2,19 @@
 
 import { liveEegHub } from '../lib/eeg/liveHub'
 import { LiveIirFilter } from './filter/iir'
-import { CHANNELS, channelLsbUv, defaultChannelConfig } from './protocol/constants'
+import { CHANNELS, FRAME_BYTES, FS, channelLsbUv, defaultChannelConfig } from './protocol/constants'
 import { ConfigAckScanner, type ConfigAck } from './protocol/configAck'
 import { AdsFrameParser } from './protocol/frameParser'
 import { BinRecorder } from './session/recorder'
 import { WebSerialTransport, type SerialStatus } from './transport/webSerial'
 import type { BcigoWsClient } from './bcigo/client'
 import type { NeuracleWsClient } from './neuracle/client'
+import {
+  INGEST_DRAIN_BUDGET_MS,
+  addPendingSamples,
+  addQueuedBytes,
+  setCatchupClock,
+} from './liveCatchup'
 
 export type DeviceKind = 'omni' | 'neuracle' | 'bcigo'
 export type ConnUi = 'idle' | 'connecting' | 'open' | 'streaming' | 'error' | 'unsupported' | 'demo'
@@ -93,12 +99,72 @@ export function cancelConfigAckWait(): void {
 function hubPushFiltered(raw: Float32Array): void {
   if (acqRuntime.impedanceActive) return
   if (raw.length) acqRuntime.filter.setChannelCount(raw.length)
-  const filtered = acqRuntime.filter.processSample(raw, true)
-  liveEegHub.pushFrame(filtered)
+  acqRuntime.filter.processSample(raw, true)
+  liveEegHub.pushFrame(raw)
 }
 
-/** Bridge batches while the acquisition page is unmounted. */
-export function ingestBridgeToHub(batch: BridgeBatch): void {
+function copyBytes(chunk: Uint8Array): Uint8Array {
+  const out = new Uint8Array(chunk.byteLength)
+  out.set(chunk)
+  return out
+}
+
+const serialQ: Uint8Array[] = []
+const bridgeQ: BridgeBatch[] = []
+let draining = false
+
+function scheduleDrain(): void {
+  if (draining) return
+  draining = true
+  queueMicrotask(drainIngest)
+}
+
+function drainIngest(): void {
+  const deadline = performance.now() + INGEST_DRAIN_BUDGET_MS
+  while (performance.now() < deadline) {
+    if (serialQ.length) {
+      const chunk = serialQ.shift()!
+      addQueuedBytes(-chunk.byteLength)
+      deliverSerial(chunk)
+      continue
+    }
+    if (bridgeQ.length) {
+      const batch = bridgeQ.shift()!
+      addPendingSamples(-batch.samples)
+      deliverBridge(batch)
+      continue
+    }
+    break
+  }
+  if (serialQ.length || bridgeQ.length) {
+    setTimeout(() => {
+      draining = false
+      scheduleDrain()
+    }, 0)
+    return
+  }
+  draining = false
+}
+
+function deliverSerial(chunk: Uint8Array): void {
+  const rest = takeSerialChunk(chunk)
+  if (!rest.byteLength) return
+  if (acqRuntime.ui) {
+    acqRuntime.ui.onSerialData(rest)
+    return
+  }
+  if (!acqRuntime.streaming) return
+  const frames = acqRuntime.parser?.feed(rest) ?? []
+  for (const f of frames) {
+    const filtered = acqRuntime.filter.processSample(f.uv, f.valid)
+    if (!acqRuntime.impedanceActive) liveEegHub.pushFrame(f.uv)
+    if (acqRuntime.recorder.recording && !acqRuntime.impedanceActive) {
+      acqRuntime.recorder.append(f.raw)
+    }
+  }
+}
+
+function deliverBridge(batch: BridgeBatch): void {
   if (acqRuntime.ui) {
     acqRuntime.ui.onBridgeBatch(batch)
     return
@@ -118,22 +184,18 @@ export function ingestBridgeToHub(batch: BridgeBatch): void {
   }
 }
 
+/** Bridge batches while the acquisition page is unmounted. */
+export function ingestBridgeToHub(batch: BridgeBatch): void {
+  bridgeQ.push(batch)
+  addPendingSamples(batch.samples)
+  scheduleDrain()
+}
+
 function ingestSerialToHub(chunk: Uint8Array): void {
-  const rest = takeSerialChunk(chunk)
-  if (!rest.byteLength) return
-  if (acqRuntime.ui) {
-    acqRuntime.ui.onSerialData(rest)
-    return
-  }
-  if (!acqRuntime.streaming) return
-  const frames = acqRuntime.parser?.feed(rest) ?? []
-  for (const f of frames) {
-    const filtered = acqRuntime.filter.processSample(f.uv, f.valid)
-    if (!acqRuntime.impedanceActive) liveEegHub.pushFrame(filtered)
-    if (acqRuntime.recorder.recording && !acqRuntime.impedanceActive) {
-      acqRuntime.recorder.append(f.raw)
-    }
-  }
+  const copy = copyBytes(chunk)
+  serialQ.push(copy)
+  addQueuedBytes(copy.byteLength)
+  scheduleDrain()
 }
 
 function onSerialStatus(s: SerialStatus, detail?: string): void {
@@ -156,6 +218,7 @@ export function bindPersistentTransport(): void {
   if (!acqRuntime.parser) {
     acqRuntime.parser = new AdsFrameParser(() => acqRuntime.lsb)
   }
+  setCatchupClock(FS, FRAME_BYTES)
   acqRuntime.transport.setHandlers({
     onData: ingestSerialToHub,
     onStatus: onSerialStatus,

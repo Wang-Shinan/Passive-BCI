@@ -3,6 +3,7 @@ import type { WaveformSnapshot } from './WaveformCanvas'
 import { CHANNEL_COLORS } from './WaveformCanvas'
 import { copyLatestChannel } from './analysis/impedance'
 import { smoothPsdDb, welchPsd } from './analysis/welch'
+import { LIVE_CATCHUP_THRESHOLD_S, PLOT_INTERVAL_MS, liveLagSec } from './liveCatchup'
 
 export interface FftCanvasProps {
   getSnapshot: () => WaveformSnapshot
@@ -60,12 +61,18 @@ export function FftCanvas({
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    let raf = 0
+    let timer = 0
+    let painted = false
     const draw = () => {
       const ctx = canvas.getContext('2d')
       const p = propsRef.current
       if (!ctx) {
-        raf = requestAnimationFrame(draw)
+        timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
+        return
+      }
+      const lag = liveLagSec()
+      if (lag > LIVE_CATCHUP_THRESHOLD_S && painted) {
+        timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
         return
       }
       const { buffers, writeHead, filled } = snapRef.current()
@@ -146,7 +153,7 @@ export function FftCanvas({
       if (!spectra.length) {
         ctx.fillStyle = omni ? '#5d6870' : '#9aa8c7'
         ctx.fillText('等待 ≥1 s 数据…', padL + 12, padT + plotH / 2)
-        raf = requestAnimationFrame(draw)
+        timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
         return
       }
 
@@ -175,10 +182,11 @@ export function FftCanvas({
         ctx.globalAlpha = 1
       }
 
-      raf = requestAnimationFrame(draw)
+      painted = true
+      timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
     }
-    raf = requestAnimationFrame(draw)
-    return () => cancelAnimationFrame(raf)
+    timer = window.setTimeout(draw, 0)
+    return () => window.clearTimeout(timer)
   }, [])
 
   return (

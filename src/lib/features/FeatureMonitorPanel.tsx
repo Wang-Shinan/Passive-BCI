@@ -79,7 +79,7 @@ function Sparkline({
 
 function displayValue(key: string, raw: number): string {
   if (key.endsWith('_score') || key === 'cognitive_load' || key === 'drowsiness') {
-    return softScore(raw).toFixed(0)
+    return softScore(raw).toFixed(1)
   }
   return formatFeatureValue(key, raw)
 }
@@ -257,8 +257,15 @@ export function FeatureMonitorPanel({
           {displayKeys.map((key, i) => {
             const raw = latest.values[key]
             const series = history
-              .map((h) => h.values[key])
-              .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+              .map((h) => {
+                const v = h.values[key]
+                if (typeof v !== 'number' || !Number.isFinite(v)) return undefined
+                if (key.endsWith('_score') || key === 'cognitive_load' || key === 'drowsiness') {
+                  return softScore(v)
+                }
+                return v
+              })
+              .filter((v): v is number => typeof v === 'number')
             const color = SPARK_COLORS[i % SPARK_COLORS.length]!
             const def: FeatureDef | undefined = FEATURE_CATALOG.find(
               (f) => f.id === key || f.expandsTo?.includes(key),

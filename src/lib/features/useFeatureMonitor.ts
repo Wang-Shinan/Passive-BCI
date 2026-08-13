@@ -44,7 +44,7 @@ export function useFeatureMonitor(opts: {
     modulators,
     autonomous = false,
     preferLive = false,
-    ensureFeatures = [],
+    ensureFeatures,
   } = opts
   const [enabledIds, setEnabledIds] = useState<string[]>(() => loadEnabledFeatures())
   const [latest, setLatest] = useState<LiveFeatureSnapshot | null>(null)
@@ -59,21 +59,25 @@ export function useFeatureMonitor(opts: {
   autonomousRef.current = autonomous
   const preferLiveRef = useRef(preferLive)
   preferLiveRef.current = preferLive
-
-  const effectiveEnabled = useCallback(() => {
-    const set = new Set(enabledIds)
-    for (const id of ensureFeatures) {
-      if (id.startsWith('rel_power_')) set.add('pow_freq_bands')
-      else if (id.startsWith('energy_')) set.add('energy_freq_bands')
-      else set.add(id)
-    }
-    return [...set]
-  }, [enabledIds, ensureFeatures])
+  const enabledIdsRef = useRef(enabledIds)
+  enabledIdsRef.current = enabledIds
+  const ensureRef = useRef(ensureFeatures)
+  ensureRef.current = ensureFeatures
 
   const onEnabledChange = useCallback((ids: string[]) => {
     setEnabledIds(ids)
     saveEnabledFeatures(ids)
   }, [])
+
+  const enabledNow = (): string[] => {
+    const set = new Set(enabledIdsRef.current)
+    for (const id of ensureRef.current ?? []) {
+      if (id.startsWith('rel_power_')) set.add('pow_freq_bands')
+      else if (id.startsWith('energy_')) set.add('energy_freq_bands')
+      else set.add(id)
+    }
+    return [...set]
+  }
 
   useEffect(() => {
     if (!preferLive) return
@@ -107,12 +111,9 @@ export function useFeatureMonitor(opts: {
       setLatest(null)
       return
     }
-    const enabled = effectiveEnabled()
-    if (!enabled.length) {
-      setLatest(null)
-      return
-    }
     const id = window.setInterval(() => {
+      const enabled = enabledNow()
+      if (!enabled.length) return
       const wantLive = preferLiveRef.current || (!autonomousRef.current && liveEegHub.isFresh())
       if (wantLive) {
         if (!liveEegHub.isFresh()) {
@@ -158,7 +159,7 @@ export function useFeatureMonitor(opts: {
       })
     }, 200)
     return () => clearInterval(id)
-  }, [active, effectiveEnabled])
+  }, [active])
 
   return {
     enabledIds,

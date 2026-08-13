@@ -24,7 +24,7 @@ export function FeaturePanel({
       onEnabledChange={onEnabledChange}
       compact={false}
       defaultPickerOpen
-      note="基于滤波环缓冲滑窗 FFT。勾选与实验页共用。"
+      note="滑窗 FFT 走原始环（未做 5–50 Hz 显示滤波），否则 θ/δ 被滤掉、focus_score 几乎不变。勾选与实验页共用。"
     />
   )
 }

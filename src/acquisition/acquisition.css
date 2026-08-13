@@ -347,6 +347,11 @@
   font-weight: 650;
 }
 
+.acq-catchup {
+  color: #b83c00;
+  font-weight: 650;
+}
+
 .acq-modal-backdrop {
   position: fixed;
   inset: 0;
