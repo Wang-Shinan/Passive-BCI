@@ -2,7 +2,11 @@
 
 import { softScore } from './featureCatalog'
 
-export type SignalControlMode = 'manual' | 'features'
+export type SignalControlMode = 'manual' | 'features' | 'live'
+
+export function isFeatureDriven(mode: SignalControlMode): boolean {
+  return mode === 'features' || mode === 'live'
+}
 
 export const SIGNAL_MODE_STORAGE_KEY = 'passive-bci.signal-control-mode'
 export const STRESS_DRIVER_STORAGE_KEY = 'passive-bci.stress-driver-feature'
@@ -228,10 +232,11 @@ export function adaptiveScale100(
 export function loadSignalMode(): SignalControlMode {
   try {
     const v = localStorage.getItem(SIGNAL_MODE_STORAGE_KEY)
-    return v === 'features' ? 'features' : 'manual'
+    if (v === 'features' || v === 'live' || v === 'manual') return v
   } catch {
-    return 'manual'
+    /* ignore */
   }
+  return 'manual'
 }
 
 export function saveSignalMode(mode: SignalControlMode): void {

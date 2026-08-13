@@ -13,7 +13,7 @@ npm run neuracle-bridge
 OI_MI_ROOT=/path/to/oi-mi npm run neuracle-bridge
 ```
 
-3. `npm run dev`，打开「采集调试」→「博睿康 Neuracle」→ 连接并开始采集
+3. `npm run dev`，打开「采集调试」→「博睿康 Neuracle」→ 连接并开始采集（开发服务会自动拉起桥接；也可手动 `npm run neuracle-bridge`）
 
 WebSocket：`ws://127.0.0.1:8766/v1/stream`（Vite 开发时也可走 `/ws/neuracle` 代理）
 

@@ -27,7 +27,7 @@ export function StressPanel({
   mode?: SignalControlMode
   modeControls?: ReactNode
 }) {
-  const featureDriven = mode === 'features'
+  const featureDriven = mode !== 'manual'
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -56,13 +56,19 @@ export function StressPanel({
       title="压力输入"
       actions={
         <span className="chip" style={{ color: featureDriven ? 'var(--accent-2)' : 'var(--muted)' }}>
-          {featureDriven ? '演示/特征' : '手动'}
+          {mode === 'live' ? '实时 EEG' : featureDriven ? '演示/特征' : '手动'}
         </span>
       }
     >
       {modeControls ? <div className="mb-3">{modeControls}</div> : null}
       <Slider
-        label={featureDriven ? '压力 0–100（演示数据输出，只读）' : '压力 0–100'}
+        label={
+          mode === 'live'
+            ? '压力 0–100（实时 EEG 输出，只读）'
+            : featureDriven
+              ? '压力 0–100（演示数据输出，只读）'
+              : '压力 0–100'
+        }
         value={Math.round(stress)}
         min={0}
         max={100}
@@ -99,9 +105,11 @@ export function StressPanel({
         />
       </div>
       <p className="muted mt-2 text-xs">
-        {featureDriven
-          ? '演示数据正在调控；点「手动输入」可接管。快捷键与滑块在此模式下禁用。'
-          : '按键 1–5 切档（0/25/50/75/100）；↑/↓ 微调，Shift+方向键 ±5。'}
+        {mode === 'live'
+          ? '实时 EEG 正在调控；点「手动输入」可接管。快捷键与滑块在此模式下禁用。'
+          : featureDriven
+            ? '演示数据正在调控；点「手动输入」可接管。快捷键与滑块在此模式下禁用。'
+            : '按键 1–5 切档（0/25/50/75/100）；↑/↓ 微调，Shift+方向键 ±5。'}
       </p>
       {!compact && (
         <button

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { liveEegHub } from '../eeg/liveHub'
 import {
   computeLiveFeatures,
   type LiveFeatureSnapshot,
@@ -19,25 +20,36 @@ import {
 const HISTORY = 60
 const WINDOW_SEC = 1.0
 
+export type FeatureOrigin = 'live' | 'synth'
+
 /**
- * Shared feature monitor for experiment pages:
- * synthesizes EEG and runs the same sliding-window feature pipeline as acquisition.
+ * Shared feature monitor for experiment pages.
  *
- * - `autonomous: true` → drifting modulators independent of control outputs (for feature→control)
- * - otherwise uses `modulators` (typically manual slider values)
+ * - Live hub fresh → real EEG (unless `autonomous` demo mode, which stays synth)
+ * - `preferLive` → never synth; wait for hub
+ * - otherwise synthesize EEG with optional modulators
  */
 export function useFeatureMonitor(opts: {
   active?: boolean
   modulators?: FeatureModulators
   /** When true, ignore modulators and use autonomous drifts (no control feedback). */
   autonomous?: boolean
+  /** Use acquisition hub only; do not fall back to synthetic EEG. */
+  preferLive?: boolean
   /** Extra feature ids that must stay enabled (e.g. control drivers). */
   ensureFeatures?: string[]
 }) {
-  const { active = true, modulators, autonomous = false, ensureFeatures = [] } = opts
+  const {
+    active = true,
+    modulators,
+    autonomous = false,
+    preferLive = false,
+    ensureFeatures = [],
+  } = opts
   const [enabledIds, setEnabledIds] = useState<string[]>(() => loadEnabledFeatures())
   const [latest, setLatest] = useState<LiveFeatureSnapshot | null>(null)
   const [history, setHistory] = useState<LiveFeatureSnapshot[]>([])
+  const [origin, setOrigin] = useState<FeatureOrigin>('synth')
 
   const ringRef = useRef(makeSynthRing(5))
   const phaseRef = useRef(0)
@@ -45,11 +57,12 @@ export function useFeatureMonitor(opts: {
   modulatorsRef.current = modulators
   const autonomousRef = useRef(autonomous)
   autonomousRef.current = autonomous
+  const preferLiveRef = useRef(preferLive)
+  preferLiveRef.current = preferLive
 
   const effectiveEnabled = useCallback(() => {
     const set = new Set(enabledIds)
     for (const id of ensureFeatures) {
-      // Map display keys like rel_power_beta → enable parent pow_freq_bands
       if (id.startsWith('rel_power_')) set.add('pow_freq_bands')
       else if (id.startsWith('energy_')) set.add('energy_freq_bands')
       else set.add(id)
@@ -63,8 +76,19 @@ export function useFeatureMonitor(opts: {
   }, [])
 
   useEffect(() => {
+    if (!preferLive) return
+    if (!liveEegHub.isFresh()) {
+      setLatest(null)
+      setHistory([])
+      setOrigin('live')
+    }
+  }, [preferLive])
+
+  useEffect(() => {
     if (!active) return
     const id = window.setInterval(() => {
+      if (preferLiveRef.current) return
+      if (!autonomousRef.current && liveEegHub.isFresh()) return
       const batch = 25
       for (let s = 0; s < batch; s++) {
         const t = (phaseRef.current + s) / SYNTH_FS
@@ -89,6 +113,33 @@ export function useFeatureMonitor(opts: {
       return
     }
     const id = window.setInterval(() => {
+      const wantLive = preferLiveRef.current || (!autonomousRef.current && liveEegHub.isFresh())
+      if (wantLive) {
+        if (!liveEegHub.isFresh()) {
+          setOrigin('live')
+          return
+        }
+        const ring = liveEegHub.ring
+        const snap = computeLiveFeatures({
+          buffers: ring.buffers,
+          writeHead: ring.writeHead,
+          filled: ring.filled,
+          sampleRate: ring.sampleRate,
+          windowSec: WINDOW_SEC,
+          enabledFeatures: enabled,
+        })
+        if (!snap) return
+        setOrigin('live')
+        setLatest(snap)
+        setHistory((prev) => {
+          const next = [...prev, snap]
+          return next.length > HISTORY ? next.slice(-HISTORY) : next
+        })
+        return
+      }
+
+      if (preferLiveRef.current) return
+
       const ring = ringRef.current
       const snap = computeLiveFeatures({
         buffers: ring.buffers,
@@ -99,6 +150,7 @@ export function useFeatureMonitor(opts: {
         enabledFeatures: enabled,
       })
       if (!snap) return
+      setOrigin('synth')
       setLatest(snap)
       setHistory((prev) => {
         const next = [...prev, snap]
@@ -114,5 +166,6 @@ export function useFeatureMonitor(opts: {
     latest,
     history,
     analyzing: active,
+    origin,
   }
 }

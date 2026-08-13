@@ -8,6 +8,14 @@ export const SYNC1 = 0xa5
 export const SYNC2 = 0x5a
 export const VREF = 4.5
 export const ADC_SATURATION_FRACTION = 0.95
+/** ADS1299 AC lead-off (Omni firmware LOFF_AC_6NA_31HZ). */
+export const LEAD_OFF_FREQUENCY_HZ = FS / 8
+export const LEAD_OFF_CURRENT_NA = 6
+export const LEAD_OFF_SERIES_SRB1_KOHM = 9.98
+export const LEAD_OFF_SERIES_SRB2_KOHM = 4.4
+export const IMPEDANCE_GOOD_KOHM = 10
+export const IMPEDANCE_OK_KOHM = 50
+export const LOFF_CONFIG_AC_6NA = 0x02
 
 export const CHANNEL_NAMES = [
   'CH1',

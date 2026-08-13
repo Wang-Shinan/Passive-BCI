@@ -253,12 +253,12 @@ export function DrawGuessExperiment() {
   const updateSignal = (key: keyof AffectiveSignals, value: number) => {
     setAffectChannel(key, value)
     signalRefs.current[key].push(value)
-    loggerRef.current.log('signal', { channel: key, value, mode: 'manual' })
+    loggerRef.current.log('signal', { channel: key, value, origin: mode })
   }
 
   // When feature-driven, mirror derived values into SignalSource + log sparsely via effect.
   useEffect(() => {
-    if (mode !== 'features') return
+    if (mode !== 'features' && mode !== 'live') return
     ;(Object.keys(signals) as (keyof AffectiveSignals)[]).forEach((key) => {
       signalRefs.current[key].push(signals[key])
     })
@@ -635,8 +635,8 @@ export function DrawGuessExperiment() {
           <Panel
             title="情感 / 认知信号"
             actions={
-              <span className="chip" style={{ color: mode === 'features' ? 'var(--accent-2)' : 'var(--muted)' }}>
-                {mode === 'features' ? '演示数据' : '手动'}
+              <span className="chip" style={{ color: mode !== 'manual' ? 'var(--accent-2)' : 'var(--muted)' }}>
+                {mode === 'live' ? '实时 EEG' : mode === 'features' ? '演示数据' : '手动'}
               </span>
             }
           >
@@ -647,42 +647,44 @@ export function DrawGuessExperiment() {
             />
             <div className="draw-signals">
               <Slider
-                label={mode === 'features' ? '满意度（演示，只读）' : '满意度'}
+                label={mode !== 'manual' ? '满意度（特征输出，只读）' : '满意度'}
                 value={Math.round(signals.satisfaction)}
                 min={0}
                 max={100}
                 onChange={(v) => updateSignal('satisfaction', v)}
-                disabled={mode === 'features'}
+                disabled={mode !== 'manual'}
               />
               <Slider
-                label={mode === 'features' ? '惊讶度（演示，只读）' : '惊讶度'}
+                label={mode !== 'manual' ? '惊讶度（特征输出，只读）' : '惊讶度'}
                 value={Math.round(signals.surprise)}
                 min={0}
                 max={100}
                 onChange={(v) => updateSignal('surprise', v)}
-                disabled={mode === 'features'}
+                disabled={mode !== 'manual'}
               />
               <Slider
-                label={mode === 'features' ? '专注度（演示，只读）' : '专注度'}
+                label={mode !== 'manual' ? '专注度（特征输出，只读）' : '专注度'}
                 value={Math.round(signals.focus)}
                 min={0}
                 max={100}
                 onChange={(v) => updateSignal('focus', v)}
-                disabled={mode === 'features'}
+                disabled={mode !== 'manual'}
               />
               <Slider
-                label={mode === 'features' ? '活跃度（演示，只读）' : '活跃度'}
+                label={mode !== 'manual' ? '活跃度（特征输出，只读）' : '活跃度'}
                 value={Math.round(signals.arousal)}
                 min={0}
                 max={100}
                 onChange={(v) => updateSignal('arousal', v)}
-                disabled={mode === 'features'}
+                disabled={mode !== 'manual'}
               />
             </div>
             <p className="muted mb-0 mt-3 text-xs leading-relaxed">
-              {mode === 'features'
-                ? '演示数据正在调控四维信号；点「手动输入」接管。'
-                : '提交反馈时会一并送给 AI。可切「演示数据」让特征自动调控。'}
+              {mode === 'live'
+                ? '实时 EEG 正在调控四维信号；点「手动输入」接管。'
+                : mode === 'features'
+                  ? '演示数据正在调控四维信号；点「手动输入」接管。'
+                  : '提交反馈时会一并送给 AI。可切「演示数据」或「实时 EEG」。'}
             </p>
           </Panel>
 
@@ -694,9 +696,13 @@ export function DrawGuessExperiment() {
             enabledIds={features.enabledIds}
             onEnabledChange={features.onEnabledChange}
             note={
-              mode === 'features'
-                ? '演示数据调控情感通道。点「手动输入」接管。'
-                : '手动模式；可切「演示数据」。'
+              mode === 'live'
+                ? features.origin === 'live'
+                  ? '实时 EEG 调控情感通道。'
+                  : '已选实时 EEG，等待采集页样本。'
+                : mode === 'features'
+                  ? '演示数据调控情感通道。点「手动输入」接管。'
+                  : '手动模式；可切「演示数据」或「实时 EEG」。'
             }
           />
 

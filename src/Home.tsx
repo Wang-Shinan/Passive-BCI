@@ -5,7 +5,7 @@ const TOOLS = [
     path: '/acquisition',
     title: '采集调试',
     blurb:
-      'OmniBCI（Web Serial）或博睿康 Neuracle（JellyFish + oi-mi 桥接）：实时波形、通道配置与录制。',
+      'OmniBCI / 博睿康 / 强脑：实时波形、通道配置与录制。开流后实验页可切「实时 EEG」。',
     tag: 'OmniBCI · 博睿康',
     accent: '#22d3ee',
   },
@@ -54,6 +54,13 @@ const EXPERIMENTS = [
     tag: 'Dino Runner / Stress',
     accent: '#535353',
   },
+  {
+    path: '/schulte',
+    title: '实验七 · 舒尔特方格',
+    blurb: '按序点击 1…N²，记录每步反应时与滚动专注指数，观察注意力动态。',
+    tag: 'Schulte / Attention RT',
+    accent: '#a78bfa',
+  },
 ]
 
 function CardGrid({
@@ -93,10 +100,8 @@ export function Home() {
           被动脑机接口实验网页
         </h1>
         <p className="muted mt-3 max-w-2xl text-base">
-          六个范式先用人工评分 / 调节或「特征驱动」替代真实 EEG，统一
-          <code className="mx-1 rounded bg-[#10182b] px-1.5 py-0.5 text-sm">SignalSource</code>
-          接口；压力 / 情感类实验可切换手动 ↔ 特征映射。采集调试支持 OmniBCI（Web Serial）与博睿康
-          Neuracle（oi-mi 桥接）。
+          先在采集调试连接设备并点「开始采集」，再进实验选「实时 EEG」。
+          未开流时仍可用手动滑块或「演示数据」。采集支持 OmniBCI、博睿康与强脑 BCIGo。
         </p>
       </header>
 
@@ -111,7 +116,7 @@ export function Home() {
       <section>
         <div className="mb-4 flex items-baseline justify-between gap-3">
           <h2 className="m-0 text-xl font-semibold tracking-tight">实验</h2>
-          <span className="muted text-sm">范式演示 · 人工反馈</span>
+          <span className="muted text-sm">范式演示 · 手动 / 演示 / 实时 EEG</span>
         </div>
         <CardGrid items={EXPERIMENTS} />
       </section>

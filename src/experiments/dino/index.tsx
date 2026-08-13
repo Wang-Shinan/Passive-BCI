@@ -218,8 +218,8 @@ export function DinoExperiment() {
   useEffect(() => {
     stressRef.current = stress
     const sample = signalRef.current.push(stress)
-    loggerRef.current.log('stress', { value: sample.value })
-  }, [stress])
+    loggerRef.current.log('stress', { value: sample.value, origin: mode })
+  }, [stress, mode])
 
   const commitGame = useCallback((next: DinoGameState) => {
     gameRef.current = next
@@ -346,7 +346,7 @@ export function DinoExperiment() {
         return
       }
       if (event.key in STRESS_KEY_LEVELS) {
-        if (mode === 'features') return
+        if (mode !== 'manual') return
         event.preventDefault()
         const value = STRESS_KEY_LEVELS[event.key]!
         setStress(value)
@@ -475,8 +475,8 @@ export function DinoExperiment() {
           <Panel
             title="压力信号"
             actions={
-              <span className="chip" style={{ color: mode === 'features' ? 'var(--accent-2)' : 'var(--muted)' }}>
-                {mode === 'features' ? '演示数据' : '手动'}
+              <span className="chip" style={{ color: mode !== 'manual' ? 'var(--accent-2)' : 'var(--muted)' }}>
+                {mode === 'live' ? '实时 EEG' : mode === 'features' ? '演示数据' : '手动'}
               </span>
             }
           >
@@ -487,12 +487,12 @@ export function DinoExperiment() {
               onDriverChange={setDriverFeature}
             />
             <Slider
-              label={mode === 'features' ? '压力（演示输出，只读）' : '压力'}
+              label={mode === 'live' ? '压力（实时 EEG，只读）' : mode === 'features' ? '压力（演示输出，只读）' : '压力'}
               value={Math.round(stress)}
               min={0}
               max={100}
               onChange={setStress}
-              disabled={mode === 'features'}
+              disabled={mode !== 'manual'}
             />
             <div className="mt-3 flex gap-1.5">
               {([0, 25, 50, 75, 100] as const).map((value, i) => {
@@ -503,7 +503,7 @@ export function DinoExperiment() {
                     key={key}
                     type="button"
                     className={`btn flex-1 px-1 py-2 text-xs ${active ? 'btn-primary' : ''}`}
-                    disabled={mode === 'features'}
+                    disabled={mode !== 'manual'}
                     onClick={() => {
                       setStress(value)
                       setNotice(`压力档位 ${key} → ${value}`)
@@ -516,9 +516,11 @@ export function DinoExperiment() {
               })}
             </div>
             <p className="muted mb-0 mt-3 text-xs leading-relaxed">
-              {mode === 'features'
-                ? '演示数据调控中；点「手动输入」接管。'
-                : `压力越高：速度 ×${stressSpeedMult(stress).toFixed(2)}，刷新间隔 ×${stressSpawnMult(stress).toFixed(2)}。`}
+              {mode === 'live'
+                ? '实时 EEG 调控中；点「手动输入」接管。'
+                : mode === 'features'
+                  ? '演示数据调控中；点「手动输入」接管。'
+                  : `压力越高：速度 ×${stressSpeedMult(stress).toFixed(2)}，刷新间隔 ×${stressSpawnMult(stress).toFixed(2)}。`}
             </p>
           </Panel>
 
@@ -530,9 +532,13 @@ export function DinoExperiment() {
             enabledIds={features.enabledIds}
             onEnabledChange={features.onEnabledChange}
             note={
-              mode === 'features'
-                ? `演示数据：${driverFeature} → 压力。点「手动输入」接管。`
-                : '手动模式；可切「演示数据」让特征调控。'
+              mode === 'live'
+                ? features.origin === 'live'
+                  ? `实时 EEG：${driverFeature} → 压力。`
+                  : '已选实时 EEG，等待采集页样本。'
+                : mode === 'features'
+                  ? `演示数据：${driverFeature} → 压力。点「手动输入」接管。`
+                  : '手动模式；可切「演示数据」或「实时 EEG」。'
             }
           />
 

@@ -64,3 +64,8 @@ export function cmdChannelConfig(
 export function cmdBiasMask(mask: number): Uint8Array {
   return new Uint8Array([0xa6, 0x0d, mask & 0xff])
 }
+
+/** AC lead-off enable mask: A9 XX (must be sent while streaming is stopped). */
+export function cmdLeadOff(mask: number): Uint8Array {
+  return new Uint8Array([0xa9, mask & 0xff])
+}

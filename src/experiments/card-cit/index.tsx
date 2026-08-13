@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { LiveEegBadge } from '../../lib/eeg/LiveEegBadge'
 import { FeatureMonitorPanel, useFeatureMonitor } from '../../lib/features'
 import { SessionLogger } from '../../lib/logger'
 import { calibratedNow, keyTimestamp, sleep } from '../../lib/timing'
@@ -382,6 +383,7 @@ export function CardCitExperiment() {
             )}
           </Panel>
 
+          <LiveEegBadge />
           <FeatureMonitorPanel
             compact
             latest={features.latest}
@@ -389,7 +391,11 @@ export function CardCitExperiment() {
             analyzing={features.analyzing}
             enabledIds={features.enabledIds}
             onEnabledChange={features.onEnabledChange}
-            note="演示用合成 EEG 特征流（与 RT 检测独立）。勾选与采集调试共用。"
+            note={
+              features.origin === 'live'
+                ? '正在分析采集页的实时 EEG（与 RT 检测独立）。'
+                : '合成 EEG；采集页开流后会自动切到实时。与 RT 检测独立。'
+            }
           />
         </div>
       </div>

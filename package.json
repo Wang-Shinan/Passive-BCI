@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "neuracle-bridge": "bash -c 'ROOT=\"${OI_MI_ROOT:-$HOME/Documents/oi-mi}\"; PY=\"$ROOT/.venv/bin/python\"; if [ ! -x \"$PY\" ]; then PY=python3; fi; OI_MI_ROOT=\"$ROOT\" \"$PY\" bridges/neuracle/ws_bridge.py'"
+    "neuracle-bridge": "bash -c 'ROOT=\"${OI_MI_ROOT:-$HOME/Documents/oi-mi}\"; PY=\"$ROOT/.venv/bin/python\"; if [ ! -x \"$PY\" ]; then PY=python3; fi; OI_MI_ROOT=\"$ROOT\" \"$PY\" bridges/neuracle/ws_bridge.py'",
+    "bcigo-bridge": "python3 bridges/bcigo/ws_bridge.py"
   },
   "dependencies": {
     "react": "^19.2.7",

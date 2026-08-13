@@ -24,7 +24,7 @@ export function FeaturePanel({
       onEnabledChange={onEnabledChange}
       compact={false}
       defaultPickerOpen
-      note="基于滤波环缓冲滑窗 FFT；勾选与实验页共用，对齐离线 epoch_feature_extraction。"
+      note="基于滤波环缓冲滑窗 FFT。勾选与实验页共用。"
     />
   )
 }

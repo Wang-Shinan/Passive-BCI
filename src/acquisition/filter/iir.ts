@@ -1,4 +1,6 @@
-export type Sos = number[][] // each section: [b0,b1,b2,a0,a1,a2]
+import { sosfiltZi, type Sos } from './design'
+
+export type { Sos }
 
 /** Default OmniBCI display band: Butterworth order-2, 5–50 Hz @ 250 SPS. */
 export const DEFAULT_BAND_SOS: Sos = [
@@ -41,6 +43,12 @@ function allocZi(nChannels: number, bandSections: number, notchSections: number)
     notchSections,
     nChannels,
   }
+}
+
+function primeBandZi(zi: Zi, ch: number, first: number, bandSos: Sos): void {
+  const unit = sosfiltZi(bandSos)
+  const base = ch * zi.bandSections * 2
+  for (let i = 0; i < unit.length; i++) zi.band[base + i] = unit[i]! * first
 }
 
 function sosfiltOne(
@@ -121,6 +129,7 @@ export class LiveIirFilter {
       if (!valid || !Number.isFinite(x)) {
         x = this.zi.have[ch] ? this.zi.last[ch]! : 0
       } else {
+        if (!this.zi.have[ch]) primeBandZi(this.zi, ch, x, this.bandSos)
         this.zi.last[ch] = x
         this.zi.have[ch] = true
       }

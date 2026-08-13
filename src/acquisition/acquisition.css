@@ -1,0 +1,478 @@
+/* Scoped OmniBCI workstation look (ads1299_eeg_gui_native.py). */
+
+.acq-omni {
+  --omni-orange: #ff5a01;
+  --omni-paper: #f4f5f7;
+  --omni-panel: #ffffff;
+  --omni-line: #d8dde3;
+  --omni-text: #2d2521;
+  --omni-muted: #5d6870;
+  --omni-hot: #b83c00;
+  --omni-wash: #fff0e6;
+  --bg: var(--omni-paper);
+  --panel: var(--omni-panel);
+  --panel-2: #ffffff;
+  --border: var(--omni-line);
+  --text: var(--omni-text);
+  --muted: var(--omni-muted);
+  --accent: var(--omni-orange);
+  --accent-2: #56bd31;
+  --warn: #e0a800;
+  --danger: #e84545;
+  position: relative;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  background: var(--omni-paper);
+  color: var(--omni-text);
+  display: flex;
+  flex-direction: column;
+}
+
+.acq-omni .panel {
+  background: var(--omni-panel);
+  border: 1px solid var(--omni-line);
+  border-radius: 3px;
+  box-shadow: none;
+}
+
+.acq-omni .btn {
+  border-radius: 2px;
+  border: 1px solid var(--omni-line);
+  background: #ffffff;
+  color: var(--omni-text);
+  padding: 0.28rem 0.7rem;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.acq-omni .btn:hover {
+  background: #fff4ed;
+  border-color: #ff8b50;
+}
+
+.acq-omni .btn-primary {
+  background: var(--omni-wash);
+  color: var(--omni-hot);
+  border-color: #ff8b50;
+}
+
+.acq-omni .btn-danger {
+  background: #fff;
+  color: #e84545;
+  border-color: #e8b4b4;
+}
+
+.acq-omni .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.acq-omni .input,
+.acq-omni .select,
+.acq-omni input[type='number'],
+.acq-omni input[type='text'] {
+  color: var(--omni-text);
+  background: #ffffff;
+  border: 1px solid var(--omni-line);
+  border-radius: 2px;
+  min-height: 26px;
+  padding: 0.15rem 0.4rem;
+  font-size: 13px;
+}
+
+.acq-omni .chip {
+  border-radius: 2px;
+  border-color: var(--omni-line);
+  background: #fff;
+}
+
+.acq-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 0.75rem;
+  padding: 0.4rem 0.7rem;
+  background: #ffffff;
+  border-bottom: 3px solid var(--omni-orange);
+  min-height: 48px;
+}
+
+.acq-brand {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 9.5rem;
+  padding-right: 0.5rem;
+  border-right: 1px solid var(--omni-line);
+}
+
+.acq-brand strong {
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.acq-brand span {
+  color: var(--omni-orange);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.acq-toolbar .acq-home {
+  color: var(--omni-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.acq-toolbar .acq-home:hover {
+  color: var(--omni-hot);
+}
+
+.acq-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.acq-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.acq-field-block {
+  display: flex;
+  width: 100%;
+  margin: 0.4rem 0;
+}
+
+.acq-field .input,
+.acq-field .select {
+  min-width: 4.5rem;
+  width: auto;
+}
+
+.acq-group {
+  background: #ffffff;
+  border: 1px solid var(--omni-line);
+  border-radius: 3px;
+  margin: 7px 8px 0;
+  padding: 2px 8px 6px;
+}
+
+.acq-group-title {
+  display: inline-block;
+  color: var(--omni-orange);
+  font-weight: 700;
+  font-size: 13px;
+  background: #ffffff;
+  padding: 0 4px;
+  margin-top: -10px;
+  margin-bottom: 2px;
+}
+
+.acq-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+  padding: 0.25rem 0 0.15rem;
+}
+
+.acq-status {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  color: var(--omni-hot);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.acq-tabs {
+  display: flex;
+  gap: 0;
+  margin: 8px 8px 0;
+}
+
+.acq-tab {
+  border: 1px solid var(--omni-line);
+  border-bottom: 0;
+  background: #ffffff;
+  color: var(--omni-text);
+  padding: 5px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.acq-tab.is-active {
+  background: var(--omni-wash);
+  color: var(--omni-hot);
+  border-color: #ff8b50;
+}
+
+.acq-stage {
+  flex: 1;
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+  margin: 0 8px 8px;
+  border: 1px solid var(--omni-line);
+  background: #ffffff;
+}
+
+.acq-banner {
+  height: 21px;
+  line-height: 21px;
+  padding: 0 8px;
+  background: var(--omni-wash);
+  color: var(--omni-hot);
+  border-bottom: 1px solid #f3c2a5;
+  font-size: 12px;
+}
+
+.acq-wave-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.acq-rail {
+  width: 285px;
+  flex: 0 0 285px;
+  border-right: 1px solid var(--omni-line);
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  min-height: 0;
+}
+
+.acq-rail-head {
+  height: 27px;
+  line-height: 27px;
+  text-align: center;
+  color: var(--omni-orange);
+  border-bottom: 3px solid var(--omni-orange);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.acq-rail-list {
+  flex: 1;
+  overflow: auto;
+}
+
+.acq-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-bottom: 1px solid #e2e6eb;
+  background: #ffffff;
+  text-align: left;
+  border-radius: 0;
+  font-size: 13px;
+}
+
+.acq-rail-row:hover {
+  background: #fff4ed;
+  border-color: #e2e6eb;
+}
+
+.acq-rail-row.is-off {
+  opacity: 0.45;
+}
+
+.acq-rail-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 1px;
+  flex: 0 0 11px;
+}
+
+.acq-rail-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 650;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.acq-rail-meta {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--omni-muted);
+}
+
+.acq-rail-scale {
+  font-size: 11px;
+  color: var(--omni-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.acq-plot {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.acq-plot canvas {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+}
+
+.acq-statusbar {
+  display: flex;
+  gap: 1rem;
+  padding: 0.2rem 0.75rem;
+  background: #ffffff;
+  border-top: 1px solid var(--omni-line);
+  font-size: 12px;
+  color: var(--omni-muted);
+}
+
+.acq-statusbar strong {
+  color: var(--omni-text);
+  font-weight: 650;
+}
+
+.acq-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 16, 12, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+.acq-modal {
+  width: min(420px, calc(100vw - 24px));
+  background: #f4f5f7;
+  border: 1px solid var(--omni-line);
+  padding: 14px 16px;
+}
+
+.acq-modal-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.acq-modal-summary {
+  background: var(--omni-wash);
+  color: var(--omni-hot);
+  border: 1px solid #ffb589;
+  padding: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.acq-hint {
+  color: var(--omni-muted);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+.acq-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.acq-extra {
+  margin: 0 8px 8px;
+}
+
+.acq-extra summary {
+  cursor: pointer;
+  color: var(--omni-orange);
+  font-weight: 700;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.acq-extra .rounded-lg {
+  background: #ffffff !important;
+  border-color: #d8dde3 !important;
+}
+
+.acq-z-modal {
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+
+.acq-z-panel {
+  padding: 8px 4px 16px;
+  max-width: 640px;
+}
+
+.acq-z-note {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--omni-text);
+}
+
+.acq-z-series {
+  margin-bottom: 10px;
+}
+
+.acq-z-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  font-size: 13px;
+}
+
+.acq-z-table th,
+.acq-z-table td {
+  border: 1px solid var(--omni-line);
+  padding: 6px 8px;
+  text-align: center;
+}
+
+.acq-z-table th {
+  background: #f7f8fa;
+  font-weight: 650;
+}
+
+.acq-z-ch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+.acq-z-val {
+  font-variant-numeric: tabular-nums;
+}
+
+.acq-z-detail {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--omni-muted);
+}
+
+@media (max-width: 900px) {
+  .acq-rail {
+    width: 168px;
+    flex-basis: 168px;
+  }
+  .acq-rail-scale {
+    display: none;
+  }
+}

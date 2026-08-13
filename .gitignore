@@ -1,5 +1,5 @@
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,27 +7,62 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Dependencies / build
+node_modules/
+dist/
+dist-ssr/
 *.local
+.vite/
+*.tsbuildinfo
 
-# Editor directories and files
+# Env and secrets
+.env
+.env.*
+!.env.example
+
+# Tests / coverage
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# Editor
 .vscode/*
 .cursor/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
 
-# Python (oracle-eval)
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Python (bridges, offline-svm, oracle-eval)
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
 venv/
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.Python
+pip-log.txt
+
+# EEG / experiment dumps (browser downloads, EDF, arrays)
+*.bin
+*.edf
+*.bdf
+*.fif
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.zip
+!package-lock.json

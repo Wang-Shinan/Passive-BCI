@@ -21,8 +21,7 @@ function clamp100(v: number): number {
 }
 
 /**
- * Stress (0–100) for games: manual slider OR demo/feature-driven.
- * Drivers = C-tier and above control signals (default rms).
+ * Stress (0–100) for games: manual slider OR demo/live feature-driven.
  */
 export function useStressControl(opts?: {
   initial?: number
@@ -32,7 +31,6 @@ export function useStressControl(opts?: {
   const [mode, setModeState] = useState<SignalControlMode>(() => loadSignalMode())
   const [driverFeature, setDriverFeatureState] = useState(() => {
     const d = loadStressDriver()
-    // Migrate old weak defaults toward S-tier rms.
     if (d === 'cognitive_load') {
       saveStressDriver(DEFAULT_STRESS_DRIVER)
       return DEFAULT_STRESS_DRIVER
@@ -52,7 +50,7 @@ export function useStressControl(opts?: {
   const setMode = useCallback((m: SignalControlMode) => {
     setModeState(m)
     saveSignalMode(m)
-    if (m === 'features') adaptRef.current = { min: 40, max: 60 }
+    if (m === 'features' || m === 'live') adaptRef.current = { min: 40, max: 60 }
   }, [])
 
   const setDriverFeature = useCallback((id: string) => {
@@ -72,6 +70,7 @@ export function useStressControl(opts?: {
   const features = useFeatureMonitor({
     active: true,
     autonomous: mode === 'features',
+    preferLive: mode === 'live',
     modulators: mode === 'manual' ? manualMods : undefined,
     ensureFeatures: [
       ...ensureIdsForDriver(driverFeature),
@@ -83,12 +82,12 @@ export function useStressControl(opts?: {
   latestRef.current = features.latest
 
   useEffect(() => {
-    if (mode !== 'features') return
+    if (mode !== 'features' && mode !== 'live') return
     const id = window.setInterval(() => {
       const t = performance.now() / 1000
       const envelope = autonomousModulators(t).stress ?? 50
       const driver = driverRef.current
-      let target = envelope
+      let target: number | null = null
 
       if (driver !== DEMO_ENVELOPE_DRIVER) {
         const snap = latestRef.current
@@ -97,10 +96,18 @@ export function useStressControl(opts?: {
           const mapped = mapFeatureToControl100(driver, raw)
           target = adaptiveScale100(mapped, adaptRef.current)
           const span = adaptRef.current.max - adaptRef.current.min
-          if (span < 5) target = 0.55 * envelope + 0.45 * target
-        } else {
-          target = envelope
+          if (modeRef.current === 'features' && span < 5) {
+            target = 0.55 * envelope + 0.45 * target
+          }
         }
+      } else if (modeRef.current === 'features') {
+        target = envelope
+      }
+
+      if (target == null) {
+        // Live mode with no samples: hold last value (no synth envelope).
+        if (modeRef.current === 'live') return
+        target = envelope
       }
 
       smoothRef.current = ema(smoothRef.current, target, 0.45)
@@ -115,7 +122,7 @@ export function useStressControl(opts?: {
   const takeManualControl = useCallback(
     (v: number) => {
       setManualStress(clamp100(v))
-      if (modeRef.current === 'features') setMode('manual')
+      if (modeRef.current !== 'manual') setMode('manual')
     },
     [setMode],
   )

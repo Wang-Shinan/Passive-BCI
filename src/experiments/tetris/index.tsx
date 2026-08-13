@@ -93,7 +93,8 @@ export function TetrisExperiment() {
   useEffect(() => {
     stressRef.current = stress
     signalRef.current.push(stress)
-  }, [stress])
+    loggerRef.current.log('stress', { value: stress, origin: mode })
+  }, [stress, mode])
 
   useEffect(() => {
     cfgRef.current = cfg
@@ -416,9 +417,13 @@ export function TetrisExperiment() {
           enabledIds={features.enabledIds}
           onEnabledChange={features.onEnabledChange}
             note={
-              mode === 'features'
-                ? `演示数据调控中（${driverFeature}）→ 压力应持续波动。点「手动输入」接管。`
-                : '手动模式：合成 EEG 随压力调制。可切「演示数据」让压力自动波动。'
+              mode === 'live'
+                ? features.origin === 'live'
+                  ? `实时 EEG 调控中（${driverFeature}）。点「手动输入」接管。`
+                  : '已选实时 EEG，但尚未收到样本。请到采集页连接并开始采集。'
+                : mode === 'features'
+                  ? `演示数据调控中（${driverFeature}）→ 压力应持续波动。点「手动输入」接管。`
+                  : '手动模式：滑块控制难度。有实时流时特征面板显示真实 EEG。'
             }
         />
       </div>

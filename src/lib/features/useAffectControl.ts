@@ -60,12 +60,13 @@ export function useAffectControl(initial?: Partial<AffectSignals>) {
   const features = useFeatureMonitor({
     active: true,
     autonomous: mode === 'features',
+    preferLive: mode === 'live',
     modulators: mode === 'manual' ? manualMods : undefined,
     ensureFeatures: ensure,
   })
 
   useEffect(() => {
-    if (mode !== 'features') return
+    if (mode !== 'features' && mode !== 'live') return
     const snap = features.latest
     if (!snap) return
     const next = { ...smoothRef.current }
@@ -95,7 +96,7 @@ export function useAffectControl(initial?: Partial<AffectSignals>) {
       const clamped = Math.max(0, Math.min(100, value))
       setManual((prev) => ({ ...prev, [key]: clamped }))
       // Only leave demo mode on explicit user gesture (slider drag).
-      if (modeRef.current === 'features') setMode('manual')
+      if (modeRef.current !== 'manual') setMode('manual')
     },
     [setMode],
   )

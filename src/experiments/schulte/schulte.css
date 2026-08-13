@@ -1,0 +1,59 @@
+.schulte-grid {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 440px);
+  margin: 0 auto;
+  user-select: none;
+}
+
+.schulte-cell {
+  aspect-ratio: 1;
+  border-radius: 12px;
+  border: 1px solid #2a3550;
+  background: linear-gradient(160deg, #151d30, #0f1524);
+  color: var(--text);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: clamp(1.1rem, 4vw, 1.75rem);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 80ms ease,
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.schulte-cell:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, #2a3550);
+  transform: translateY(-1px);
+}
+
+.schulte-cell:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.schulte-cell:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.schulte-cell.is-next-hint {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.schulte-cell.is-flash-ok {
+  background: color-mix(in srgb, #38d39f 28%, #151d30);
+  border-color: #38d39f;
+}
+
+.schulte-cell.is-flash-bad {
+  background: color-mix(in srgb, #ff5d6c 28%, #151d30);
+  border-color: #ff5d6c;
+}
+
+.schulte-focus {
+  font-variant-numeric: tabular-nums;
+  font-size: 2rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}

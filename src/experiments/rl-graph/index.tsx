@@ -4,6 +4,7 @@ import { SessionLogger } from '../../lib/logger'
 import { mulberry32 } from '../../lib/rng'
 import { ManualSignalSource } from '../../lib/signal/manual'
 import { easeInOutCubic } from '../../lib/timing'
+import { LiveEegBadge } from '../../lib/eeg/LiveEegBadge'
 import { FeatureMonitorPanel, useFeatureMonitor } from '../../lib/features'
 import { ExportButtons } from '../../lib/ui/ExportButtons'
 import { LineChart } from '../../lib/ui/LineChart'
@@ -1174,13 +1175,20 @@ export function RlGraphExperiment() {
         )}
       </Panel>
 
+      <div className="mt-4">
+        <LiveEegBadge className="mb-3" />
+      </div>
       <FeatureMonitorPanel
         latest={features.latest}
         history={features.history}
         analyzing={features.analyzing}
         enabledIds={features.enabledIds}
         onEnabledChange={features.onEnabledChange}
-        note="演示用合成 EEG 特征流（与评分噪声独立）。勾选与采集调试 / 其它实验共用。"
+        note={
+          features.origin === 'live'
+            ? '正在分析采集页的实时 EEG（与评分独立）。勾选与其它页共用。'
+            : '合成 EEG 特征流；采集页开流后会自动切到实时。勾选与其它页共用。'
+        }
       />
     </div>
   )

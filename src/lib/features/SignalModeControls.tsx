@@ -1,3 +1,5 @@
+import { LiveEegBadge } from '../eeg/LiveEegBadge'
+import { useLiveEeg } from '../eeg/useLiveEeg'
 import {
   CONTROL_SIGNAL_OPTIONS,
   CONTROL_SIGNAL_TIER_LABEL,
@@ -25,8 +27,11 @@ export function SignalModeControls({
   affectDrivers?: Record<AffectChannel, string>
   className?: string
 }) {
+  const { live } = useLiveEeg()
+  const driven = mode === 'features' || mode === 'live'
   return (
     <div className={className}>
+      <LiveEegBadge className="mb-3" />
       <div className="mb-2 flex flex-wrap gap-1.5">
         <button
           type="button"
@@ -42,11 +47,22 @@ export function SignalModeControls({
         >
           演示数据
         </button>
+        <button
+          type="button"
+          className={`btn flex-1 text-xs ${mode === 'live' ? 'btn-primary' : ''}`}
+          onClick={() => onModeChange('live')}
+        >
+          实时 EEG
+        </button>
       </div>
       <p className="muted mb-2 text-xs leading-relaxed">
         {mode === 'manual'
-          ? '滑块 / 快捷键直接控制游戏；合成 EEG 仅作特征预览。'
-          : '演示 EEG → 可选 C 档及以上特征驱动难度（默认 rms）。点「手动输入」接管。'}
+          ? '滑块 / 快捷键直接控制游戏；有实时流时特征面板显示真实 EEG。'
+          : mode === 'live'
+            ? live
+              ? '真实 EEG 特征驱动难度。无数据时保持上次输出；点「手动输入」接管。'
+              : '未收到实时样本。请先在采集页连接并点「开始采集」。'
+            : '演示 EEG → 可选 C 档及以上特征驱动难度（默认 rms）。点「手动输入」接管。'}
       </p>
       {driverFeature !== undefined && onDriverChange ? (
         <label className="mb-0 block text-xs">
@@ -55,7 +71,7 @@ export function SignalModeControls({
             className="mt-1 w-full rounded-lg border border-[#2a3550] bg-[#0d1425] px-2 py-1.5 text-sm"
             value={driverFeature}
             onChange={(e) => onDriverChange(e.target.value)}
-            disabled={mode !== 'features'}
+            disabled={!driven}
           >
             {CONTROL_SIGNAL_TIER_ORDER.map((tier) => {
               const opts = CONTROL_SIGNAL_OPTIONS.filter((o) => o.tier === tier)

@@ -8,6 +8,7 @@ import { StressRemotePage } from './experiments/tetris/StressRemotePage'
 import { JumpExperiment } from './experiments/jump'
 import { DrawGuessExperiment } from './experiments/draw-guess'
 import { DinoExperiment } from './experiments/dino'
+import { SchulteExperiment } from './experiments/schulte'
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/jump" element={<JumpExperiment />} />
         <Route path="/draw-guess" element={<DrawGuessExperiment />} />
         <Route path="/dino" element={<DinoExperiment />} />
+        <Route path="/schulte" element={<SchulteExperiment />} />
         <Route path="/stress-remote" element={<StressRemotePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

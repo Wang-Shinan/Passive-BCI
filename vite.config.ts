@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect } from 'vite'
+import { bridgeManagerPlugin } from './vite.bridge-manager'
 
 const MAX_LOG_CHARS = 2400
 
@@ -300,7 +301,7 @@ async function proxyLlm(req: IncomingMessage, res: ServerResponse) {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), llmProxyPlugin()],
+  plugins: [react(), tailwindcss(), llmProxyPlugin(), bridgeManagerPlugin()],
   server: {
     proxy: {
       // Neuracle bridge (bridges/neuracle/ws_bridge.py) — JellyFish TCP → WS
@@ -308,6 +309,12 @@ export default defineConfig({
         target: 'ws://127.0.0.1:8766',
         ws: true,
         rewrite: (path) => path.replace(/^\/ws\/neuracle/, '/v1/stream'),
+      },
+      // BrainCo BCIGo bridge (bridges/bcigo/ws_bridge.py) — Wi‑Fi TCP → WS
+      '/ws/bcigo': {
+        target: 'ws://127.0.0.1:8767',
+        ws: true,
+        rewrite: (path) => path.replace(/^\/ws\/bcigo/, '/v1/stream'),
       },
     },
   },
