@@ -57,8 +57,19 @@ export function ChannelRail({
                 e.preventDefault()
                 onToggle(i)
               }}
-              title="单击设置；双击开关显示"
+              title="单击设置；勾选/双击：显示并参与特征计算"
             >
+              <input
+                type="checkbox"
+                className="acq-rail-check"
+                checked={on}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  e.stopPropagation()
+                  onToggle(i)
+                }}
+                title="显示并参与特征计算"
+              />
               <span
                 className="acq-rail-dot"
                 style={{ background: enabled && on ? '#56bd31' : '#c5c9ce' }}

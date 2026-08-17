@@ -51,7 +51,7 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
     port: 8767,
     script: 'bridges/bcigo/ws_bridge.py',
     readyPattern: /\[bcigo-bridge\].*waiting/i,
-    buildEnv: (root) => ({ ...process.env, PYTHONUNBUFFERED: '1' }),
+    buildEnv: (_root) => ({ ...process.env, PYTHONUNBUFFERED: '1' }),
     resolvePython: () => process.env.BCIGO_PYTHON || 'python3',
   },
   neuracle: {
@@ -59,13 +59,13 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
     port: 8766,
     script: 'bridges/neuracle/ws_bridge.py',
     readyPattern: /\[neuracle-bridge\].*waiting/i,
-    buildEnv: (root) => {
+    buildEnv: (_root) => {
       const oi =
         process.env.OI_MI_ROOT ||
         path.join(os.homedir(), 'Documents', 'oi-mi')
       return { ...process.env, PYTHONUNBUFFERED: '1', OI_MI_ROOT: oi }
     },
-    resolvePython: (root) => {
+    resolvePython: (_root) => {
       const oi =
         process.env.OI_MI_ROOT ||
         path.join(os.homedir(), 'Documents', 'oi-mi')

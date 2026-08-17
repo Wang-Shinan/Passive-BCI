@@ -139,6 +139,222 @@ export function resolveDriverRaw(
   return v !== undefined && Number.isFinite(v) ? v : undefined
 }
 
+/** Panel already shows these as softScore 0–100. */
+export function isPanelScoreDriver(featureId: string): boolean {
+  return (
+    featureId.endsWith('_score') ||
+    featureId === 'cognitive_load' ||
+    featureId === 'drowsiness'
+  )
+}
+
+export const FEATURE_RANGE_STORAGE_KEY = 'passive-bci.feature-range-maps'
+
+/** Linear map: feature display value in [inMin, inMax] → difficulty [outMin, outMax]. */
+export type FeatureRangeMap = {
+  inMin: number
+  inMax: number
+  outMin: number
+  outMax: number
+}
+
+export function defaultRangeForDriver(featureId: string): FeatureRangeMap {
+  if (featureId === DEMO_ENVELOPE_DRIVER || isPanelScoreDriver(featureId)) {
+    return { inMin: 0, inMax: 100, outMin: 0, outMax: 100 }
+  }
+  if (featureId === 'rel_power_alpha') return { inMin: 35, inMax: 10, outMin: 0, outMax: 100 }
+  if (featureId.startsWith('rel_power_')) return { inMin: 10, inMax: 40, outMin: 0, outMax: 100 }
+  if (featureId === 'pow_freq_bands') return { inMin: 0.3, inMax: 2, outMin: 0, outMax: 100 }
+  if (featureId === 'rms' || featureId === 'std') return { inMin: 5, inMax: 40, outMin: 0, outMax: 100 }
+  if (featureId === 'ptp_amp') return { inMin: 10, inMax: 80, outMin: 0, outMax: 100 }
+  if (featureId === 'line_length') return { inMin: 20, inMax: 250, outMin: 0, outMax: 100 }
+  if (featureId === 'teager_kaiser_energy') return { inMin: 0, inMax: 200, outMin: 0, outMax: 100 }
+  if (featureId === 'energy_freq_bands' || featureId.startsWith('energy_')) {
+    return { inMin: 50, inMax: 5000, outMin: 0, outMax: 100 }
+  }
+  if (featureId === 'petrosian_fd') return { inMin: 1.45, inMax: 1.65, outMin: 0, outMax: 100 }
+  if (featureId === 'higuchi_fd') return { inMin: 1.2, inMax: 1.8, outMin: 0, outMax: 100 }
+  if (featureId === 'perm_entropy' || featureId === 'spect_entropy' || featureId === 'lziv_complexity') {
+    return { inMin: 40, inMax: 90, outMin: 0, outMax: 100 }
+  }
+  if (featureId === 'spect_slope') return { inMin: -2.5, inMax: 0, outMin: 0, outMax: 100 }
+  if (featureId === 'hjorth_complexity') return { inMin: 1.15, inMax: 2, outMin: 0, outMax: 100 }
+  if (featureId === 'hjorth_mobility_spect' || featureId === 'hjorth_complexity_spect') {
+    return { inMin: 0.5, inMax: 2, outMin: 0, outMax: 100 }
+  }
+  return { inMin: 0, inMax: 100, outMin: 0, outMax: 100 }
+}
+
+function isRangeMap(x: unknown): x is FeatureRangeMap {
+  if (!x || typeof x !== 'object') return false
+  const r = x as FeatureRangeMap
+  return [r.inMin, r.inMax, r.outMin, r.outMax].every((v) => typeof v === 'number' && Number.isFinite(v))
+}
+
+export function loadRangeMap(featureId: string): FeatureRangeMap {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FEATURE_RANGE_STORAGE_KEY) ?? '{}') as unknown
+    if (parsed && typeof parsed === 'object') {
+      const hit = (parsed as Record<string, unknown>)[featureId]
+      if (isRangeMap(hit)) return hit
+    }
+  } catch {
+    /* ignore */
+  }
+  return defaultRangeForDriver(featureId)
+}
+
+export function saveRangeMap(featureId: string, range: FeatureRangeMap): void {
+  let all: Record<string, FeatureRangeMap> = {}
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FEATURE_RANGE_STORAGE_KEY) ?? '{}') as unknown
+    if (parsed && typeof parsed === 'object') all = parsed as Record<string, FeatureRangeMap>
+  } catch {
+    /* ignore */
+  }
+  all[featureId] = range
+  localStorage.setItem(FEATURE_RANGE_STORAGE_KEY, JSON.stringify(all))
+}
+
+/** Same scalar the feature panel shows (softScore / percent×100 / raw). */
+export function displayValueForDriver(featureId: string, raw: number): number {
+  if (!Number.isFinite(raw)) return NaN
+  if (isPanelScoreDriver(featureId)) return softScore(raw)
+  if (
+    featureId.startsWith('rel_power_') ||
+    featureId === 'spect_entropy' ||
+    featureId === 'perm_entropy' ||
+    featureId === 'lziv_complexity'
+  ) {
+    return raw * 100
+  }
+  return raw
+}
+
+export function applyRangeMap(x: number, r: FeatureRangeMap): number {
+  if (!Number.isFinite(x)) return (r.outMin + r.outMax) / 2
+  const span = r.inMax - r.inMin
+  if (Math.abs(span) < 1e-12) return (r.outMin + r.outMax) / 2
+  const y = r.outMin + ((x - r.inMin) / span) * (r.outMax - r.outMin)
+  const lo = Math.min(r.outMin, r.outMax)
+  const hi = Math.max(r.outMin, r.outMax)
+  return Math.max(lo, Math.min(hi, y))
+}
+
+export function roundRangeEdge(v: number): number {
+  const a = Math.abs(v)
+  if (a >= 100) return Math.round(v)
+  if (a >= 10) return Math.round(v * 10) / 10
+  return Math.round(v * 100) / 100
+}
+
+export type DriverAdaptKind = 'identity' | 'minmax' | 'percentile'
+
+/** Per-driver live adaptation. Control loop ticks at 100 ms. */
+export type DriverAdaptProfile = {
+  kind: DriverAdaptKind
+  windowTicks: number
+  floor: number
+  ceil: number
+  /** 1 = snap to mapped value. */
+  ema: number
+  minSpan: number
+  /** Demo mode: mix synth envelope while observed span is below this. */
+  demoFillBelowSpan: number
+  percentile?: [number, number]
+}
+
+const ADAPT_IDENTITY: DriverAdaptProfile = {
+  kind: 'identity',
+  windowTicks: 1,
+  floor: 0,
+  ceil: 100,
+  ema: 1,
+  minSpan: 100,
+  demoFillBelowSpan: 0,
+}
+
+/** Amplitude: session-relative, percentile so blinks don't pin the range. */
+const ADAPT_AMPLITUDE: DriverAdaptProfile = {
+  kind: 'percentile',
+  windowTicks: 160,
+  floor: 6,
+  ceil: 94,
+  ema: 0.28,
+  minSpan: 8,
+  demoFillBelowSpan: 6,
+  percentile: [0.1, 0.9],
+}
+
+/** Entropy / slope / FD: slower, min–max window. */
+const ADAPT_STRUCTURE: DriverAdaptProfile = {
+  kind: 'minmax',
+  windowTicks: 120,
+  floor: 8,
+  ceil: 92,
+  ema: 0.32,
+  minSpan: 5,
+  demoFillBelowSpan: 5,
+}
+
+/** Hjorth / Higuchi: longer window, heavier smooth. */
+const ADAPT_COMPLEXITY: DriverAdaptProfile = {
+  kind: 'minmax',
+  windowTicks: 200,
+  floor: 10,
+  ceil: 90,
+  ema: 0.2,
+  minSpan: 4,
+  demoFillBelowSpan: 4,
+}
+
+/** Relative bands / ratios: already ~normalized, light stretch. */
+const ADAPT_BAND: DriverAdaptProfile = {
+  kind: 'minmax',
+  windowTicks: 100,
+  floor: 12,
+  ceil: 88,
+  ema: 0.4,
+  minSpan: 6,
+  demoFillBelowSpan: 5,
+}
+
+export function adaptProfileForDriver(featureId: string): DriverAdaptProfile {
+  if (featureId === DEMO_ENVELOPE_DRIVER || isPanelScoreDriver(featureId)) {
+    return ADAPT_IDENTITY
+  }
+  if (
+    featureId === 'rms' ||
+    featureId === 'std' ||
+    featureId === 'ptp_amp' ||
+    featureId === 'line_length' ||
+    featureId === 'teager_kaiser_energy' ||
+    featureId === 'energy_freq_bands' ||
+    featureId.startsWith('energy_')
+  ) {
+    return ADAPT_AMPLITUDE
+  }
+  if (
+    featureId.startsWith('rel_power_') ||
+    featureId === 'pow_freq_bands' ||
+    featureId.startsWith('tbr_') ||
+    featureId.startsWith('tar_') ||
+    featureId.startsWith('bar_')
+  ) {
+    return ADAPT_BAND
+  }
+  if (
+    featureId === 'hjorth_complexity' ||
+    featureId === 'hjorth_mobility' ||
+    featureId === 'hjorth_mobility_spect' ||
+    featureId === 'hjorth_complexity_spect' ||
+    featureId === 'higuchi_fd'
+  ) {
+    return ADAPT_COMPLEXITY
+  }
+  return ADAPT_STRUCTURE
+}
+
 /** Soft-map a feature value into 0–100 for game control (before adaptive rescale). */
 export function mapFeatureToControl100(featureId: string, raw: number): number {
   if (!Number.isFinite(raw)) return 50
@@ -196,37 +412,66 @@ export function mapFeatureToControl100(featureId: string, raw: number): number {
     return Math.max(0, Math.min(100, raw * 100))
   }
 
-  if (
-    featureId.endsWith('_score') ||
-    featureId === 'cognitive_load' ||
-    featureId === 'drowsiness' ||
-    featureId.startsWith('tbr_') ||
-    featureId.startsWith('tar_') ||
-    featureId.startsWith('bar_')
-  ) {
-    const soft = softScore(raw, featureId === 'cognitive_load' || featureId === 'drowsiness' ? 1.2 : 1)
-    return Math.max(0, Math.min(100, (soft - 50) * 2.2 + 50))
+  if (isPanelScoreDriver(featureId) || featureId.startsWith('tbr_') || featureId.startsWith('tar_') || featureId.startsWith('bar_')) {
+    return softScore(raw, 1)
   }
 
   return softScore(Math.abs(raw), Math.max(1, Math.abs(raw) * 0.5 + 0.5))
 }
 
-/** Rolling min/max rescale so modest feature drift still spans ~10–90. */
+export type AdaptiveScaleState = {
+  min: number
+  max: number
+  hist?: number[]
+}
+
+function quantileSorted(sorted: number[], q: number): number {
+  if (!sorted.length) return 0
+  const i = (sorted.length - 1) * q
+  const lo = Math.floor(i)
+  const hi = Math.ceil(i)
+  const a = sorted[lo]!
+  const b = sorted[hi]!
+  return lo === hi ? a : a * (hi - i) + b * (i - lo)
+}
+
+/** Session-relative rescale. Window / extrema policy comes from the driver profile. */
 export function adaptiveScale100(
   mapped: number,
-  state: { min: number; max: number },
-  floor = 8,
-  ceil = 92,
+  state: AdaptiveScaleState,
+  profile: DriverAdaptProfile,
 ): number {
   if (!Number.isFinite(mapped)) return 50
-  state.min = Math.min(state.min, mapped)
-  state.max = Math.max(state.max, mapped)
-  const span = state.max - state.min
-  if (span < 4) {
-    return Math.max(floor, Math.min(ceil, mapped))
+  if (profile.kind === 'identity') {
+    return Math.max(profile.floor, Math.min(profile.ceil, mapped))
   }
-  const t = (mapped - state.min) / span
-  return floor + t * (ceil - floor)
+  const hist = state.hist ?? (state.hist = [])
+  hist.push(mapped)
+  if (hist.length > profile.windowTicks) hist.shift()
+
+  let lo: number
+  let hi: number
+  if (profile.kind === 'percentile' && hist.length >= 12 && profile.percentile) {
+    const sorted = [...hist].sort((a, b) => a - b)
+    lo = quantileSorted(sorted, profile.percentile[0])
+    hi = quantileSorted(sorted, profile.percentile[1])
+  } else {
+    lo = hist[0]!
+    hi = hist[0]!
+    for (let i = 1; i < hist.length; i++) {
+      const v = hist[i]!
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
+  }
+  state.min = lo
+  state.max = hi
+  const span = hi - lo
+  if (span < profile.minSpan) {
+    return Math.max(profile.floor, Math.min(profile.ceil, mapped))
+  }
+  const t = Math.max(0, Math.min(1, (mapped - lo) / span))
+  return profile.floor + t * (profile.ceil - profile.floor)
 }
 
 export function loadSignalMode(): SignalControlMode {

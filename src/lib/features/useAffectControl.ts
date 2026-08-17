@@ -54,6 +54,9 @@ export function useAffectControl(initial?: Partial<AffectSignals>) {
     'hjorth_complexity',
     'pow_freq_bands',
     'relaxation_score',
+    'focus_score',
+    'drowsiness',
+    'cognitive_load',
     'energy_freq_bands',
   ]
 

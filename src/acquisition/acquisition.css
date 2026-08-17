@@ -280,6 +280,12 @@
   font-size: 13px;
 }
 
+.acq-rail-check {
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: #2478ff;
+}
+
 .acq-rail-row:hover {
   background: #fff4ed;
   border-color: #e2e6eb;

@@ -2,15 +2,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   DEMO_ENVELOPE_DRIVER,
   DEFAULT_STRESS_DRIVER,
-  adaptiveScale100,
+  adaptProfileForDriver,
+  applyRangeMap,
+  defaultRangeForDriver,
+  displayValueForDriver,
   ema,
   ensureIdsForDriver,
+  loadRangeMap,
   loadSignalMode,
   loadStressDriver,
-  mapFeatureToControl100,
   resolveDriverRaw,
+  roundRangeEdge,
+  saveRangeMap,
   saveSignalMode,
   saveStressDriver,
+  type FeatureRangeMap,
   type SignalControlMode,
 } from './controlMapping'
 import { useFeatureMonitor } from './useFeatureMonitor'
@@ -19,6 +25,8 @@ import { autonomousModulators, type FeatureModulators } from './synthEeg'
 function clamp100(v: number): number {
   return Math.max(0, Math.min(100, v))
 }
+
+const DISPLAY_HIST = 80
 
 /**
  * Stress (0–100) for games: manual slider OR demo/live feature-driven.
@@ -37,27 +45,63 @@ export function useStressControl(opts?: {
     }
     return d
   })
+  const [rangeMap, setRangeMapState] = useState<FeatureRangeMap>(() => loadRangeMap(driverFeature))
   const [manualStress, setManualStress] = useState(initial)
   const [featureStress, setFeatureStress] = useState(initial)
+  const [rangePreview, setRangePreview] = useState<{ src: number; dst: number } | null>(null)
   const smoothRef = useRef(initial)
-  const adaptRef = useRef({ min: 40, max: 60 })
   const modeRef = useRef(mode)
   modeRef.current = mode
   const driverRef = useRef(driverFeature)
   driverRef.current = driverFeature
+  const rangeRef = useRef(rangeMap)
+  rangeRef.current = rangeMap
   const latestRef = useRef<ReturnType<typeof useFeatureMonitor>['latest']>(null)
+  const displayHistRef = useRef<number[]>([])
 
   const setMode = useCallback((m: SignalControlMode) => {
     setModeState(m)
     saveSignalMode(m)
-    if (m === 'features' || m === 'live') adaptRef.current = { min: 40, max: 60 }
   }, [])
 
   const setDriverFeature = useCallback((id: string) => {
     setDriverFeatureState(id)
     saveStressDriver(id)
-    adaptRef.current = { min: 40, max: 60 }
+    const next = loadRangeMap(id)
+    setRangeMapState(next)
+    rangeRef.current = next
+    displayHistRef.current = []
   }, [])
+
+  const setRangeMap = useCallback((next: FeatureRangeMap) => {
+    setRangeMapState(next)
+    rangeRef.current = next
+    saveRangeMap(driverRef.current, next)
+  }, [])
+
+  const resetRangeMap = useCallback(() => {
+    setRangeMap(defaultRangeForDriver(driverRef.current))
+  }, [setRangeMap])
+
+  const captureRangeFromWindow = useCallback(() => {
+    const hist = displayHistRef.current
+    if (hist.length < 5) return
+    let lo = hist[0]!
+    let hi = hist[0]!
+    for (const v of hist) {
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
+    if (hi - lo < 1e-6) {
+      lo -= 1
+      hi += 1
+    }
+    setRangeMap({
+      ...rangeRef.current,
+      inMin: roundRangeEdge(lo),
+      inMax: roundRangeEdge(hi),
+    })
+  }, [setRangeMap])
 
   const manualMods =
     opts?.manualModulators?.(manualStress) ??
@@ -87,30 +131,38 @@ export function useStressControl(opts?: {
       const t = performance.now() / 1000
       const envelope = autonomousModulators(t).stress ?? 50
       const driver = driverRef.current
+      const profile = adaptProfileForDriver(driver)
       let target: number | null = null
 
       if (driver !== DEMO_ENVELOPE_DRIVER) {
         const snap = latestRef.current
         const raw = snap ? resolveDriverRaw(snap.values, driver) : undefined
         if (raw !== undefined) {
-          const mapped = mapFeatureToControl100(driver, raw)
-          target = adaptiveScale100(mapped, adaptRef.current)
-          const span = adaptRef.current.max - adaptRef.current.min
-          if (modeRef.current === 'features' && span < 5) {
-            target = 0.55 * envelope + 0.45 * target
+          const src = displayValueForDriver(driver, raw)
+          const dst = applyRangeMap(src, rangeRef.current)
+          const hist = displayHistRef.current
+          if (Number.isFinite(src)) {
+            hist.push(src)
+            if (hist.length > DISPLAY_HIST) hist.shift()
           }
+          setRangePreview({
+            src: Math.round(src * 10) / 10,
+            dst: Math.round(dst * 10) / 10,
+          })
+          target = dst
         }
       } else if (modeRef.current === 'features') {
         target = envelope
+        setRangePreview(null)
       }
 
       if (target == null) {
-        // Live mode with no samples: hold last value (no synth envelope).
         if (modeRef.current === 'live') return
         target = envelope
       }
 
-      smoothRef.current = ema(smoothRef.current, target, 0.45)
+      const alpha = profile.kind === 'identity' ? 1 : profile.ema
+      smoothRef.current = alpha >= 1 ? target : ema(smoothRef.current, target, alpha)
       const next = Math.round(smoothRef.current * 10) / 10
       setFeatureStress((prev) => (Math.abs(prev - next) < 0.05 ? prev : next))
     }, 100)
@@ -136,6 +188,11 @@ export function useStressControl(opts?: {
     setMode,
     driverFeature,
     setDriverFeature,
+    rangeMap,
+    setRangeMap,
+    resetRangeMap,
+    captureRangeFromWindow,
+    rangePreview,
     stress,
     setStress: takeManualControl,
     takeManualControl,

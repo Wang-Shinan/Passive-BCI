@@ -5,10 +5,12 @@ import { mulberry32 } from '../../lib/rng'
 import { ManualSignalSource } from '../../lib/signal/manual'
 import { ExportButtons } from '../../lib/ui/ExportButtons'
 import { LineChart } from '../../lib/ui/LineChart'
+import { ColumnResizer } from '../../lib/ui/ColumnResizer'
 import { Panel } from '../../lib/ui/Panel'
 import { Slider } from '../../lib/ui/Slider'
-import { Board, NextPreview } from './Board'
+import { BOARD_DEFAULT_CELL, Board, NextPreview, useBoardCell } from './Board'
 import {
+  COLS,
   advanceBoardAnim,
   advanceFall,
   createGame,
@@ -28,8 +30,37 @@ import {
   type GravityState,
 } from './gravity'
 import { FeatureMonitorPanel, SignalModeControls, useStressControl } from '../../lib/features'
+import { ModelServicePanel } from '../../lib/model-runtime/ModelServicePanel'
+import { useModelRuntime } from '../../lib/model-runtime/useModelRuntime'
 import { StressPanel } from './StressPanel'
+import {
+  applyMiControlAction,
+  describeMiControlAction,
+  miControlActionForPrediction,
+} from './miControl'
 import { useStressBroadcast } from './useStressBroadcast'
+
+const MI_CONTROL_KEY = 'passive-bci.tetris-mi-control'
+const RIGHT_COL_KEY = 'passive-bci.tetris-right-col'
+const RIGHT_COL_DEFAULT = 320
+const RIGHT_COL_MIN = 260
+const RIGHT_COL_MAX = 620
+const MID_COL_MIN = 340
+
+function loadMiControlEnabled(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  return localStorage.getItem(MI_CONTROL_KEY) === 'true'
+}
+
+function clampRightCol(value: number): number {
+  return Math.min(RIGHT_COL_MAX, Math.max(RIGHT_COL_MIN, Math.round(value)))
+}
+
+function loadRightCol(): number {
+  if (typeof localStorage === 'undefined') return RIGHT_COL_DEFAULT
+  const raw = Number(localStorage.getItem(RIGHT_COL_KEY))
+  return Number.isFinite(raw) && raw > 0 ? clampRightCol(raw) : RIGHT_COL_DEFAULT
+}
 
 interface TracePoint {
   t: number
@@ -47,6 +78,11 @@ export function TetrisExperiment() {
     setMode,
     driverFeature,
     setDriverFeature,
+    rangeMap,
+    setRangeMap,
+    resetRangeMap,
+    captureRangeFromWindow,
+    rangePreview,
     stress,
     setStress,
     takeManualControl,
@@ -61,6 +97,10 @@ export function TetrisExperiment() {
     }),
   })
   useStressBroadcast(stress, { mode, takeManualControl, setManualStressQuiet })
+  const modelRuntime = useModelRuntime()
+  const [miControlEnabled, setMiControlEnabled] = useState(loadMiControlEnabled)
+  const lastMiObservationRef = useRef<string | null>(null)
+  const [lastMiAction, setLastMiAction] = useState<string>('—')
   const [cfg, setCfg] = useState<GravityConfig>(() => defaultGravityConfig())
   const gravityRef = useRef<GravityState>(initGravityState(defaultGravityConfig()))
   const [gravityDisplay, setGravityDisplay] = useState(gravityRef.current.smoothed)
@@ -75,6 +115,50 @@ export function TetrisExperiment() {
   const cfgRef = useRef(cfg)
   const softDropHeldRef = useRef(false)
   const traceAccRef = useRef(0)
+
+  const [boardCell, setBoardCell] = useBoardCell()
+  const [rightCol, setRightCol] = useState(loadRightCol)
+  const midColRef = useRef<HTMLDivElement | null>(null)
+  const dragBase = useRef({ cell: 0, right: 0, midWidth: 0 })
+
+  useEffect(() => {
+    localStorage.setItem(RIGHT_COL_KEY, String(rightCol))
+  }, [rightCol])
+
+  // Give up right-column width first when the viewport can no longer fit the middle column.
+  useEffect(() => {
+    const mid = midColRef.current
+    if (!mid || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      const deficit = MID_COL_MIN - mid.offsetWidth
+      if (deficit > 0) setRightCol((current) => Math.max(RIGHT_COL_MIN, current - deficit))
+    })
+    observer.observe(mid)
+    return () => observer.disconnect()
+  }, [])
+
+  const beginColumnDrag = useCallback(() => {
+    dragBase.current = {
+      cell: boardCell,
+      right: rightCol,
+      midWidth: midColRef.current?.offsetWidth ?? MID_COL_MIN,
+    }
+  }, [boardCell, rightCol])
+
+  const dragBoardColumn = useCallback(
+    (dx: number) => {
+      const { cell, midWidth } = dragBase.current
+      const slack = Math.max(0, midWidth - MID_COL_MIN)
+      setBoardCell(Math.min(cell + dx / COLS, cell + slack / COLS))
+    },
+    [setBoardCell],
+  )
+
+  const dragRightColumn = useCallback((dx: number) => {
+    const { right, midWidth } = dragBase.current
+    const slack = Math.max(0, midWidth - MID_COL_MIN)
+    setRightCol(clampRightCol(Math.min(right - dx, right + slack)))
+  }, [])
 
   useEffect(() => {
     if (!cascadeFlash) return
@@ -100,6 +184,14 @@ export function TetrisExperiment() {
     cfgRef.current = cfg
   }, [cfg])
 
+  useEffect(() => {
+    localStorage.setItem(MI_CONTROL_KEY, String(miControlEnabled))
+    if (!miControlEnabled) {
+      lastMiObservationRef.current = null
+      setLastMiAction('—')
+    }
+  }, [miControlEnabled])
+
   const applyResult = useCallback((next: GameState, events: GameEvent[]) => {
     stateRef.current = next
     setState(next)
@@ -120,6 +212,34 @@ export function TetrisExperiment() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (!miControlEnabled) return
+    const prediction = modelRuntime.latestPrediction
+    if (!prediction || prediction.observation_id === lastMiObservationRef.current) return
+
+    const action = miControlActionForPrediction(prediction)
+    setLastMiAction(
+      `${describeMiControlAction(action)} · ${prediction.class_name} ${(prediction.confidence * 100).toFixed(0)}%`,
+    )
+    lastMiObservationRef.current = prediction.observation_id
+
+    loggerRef.current.log('mi_control', {
+      action: action ?? 'unknown',
+      class_name: prediction.class_name,
+      observation_id: prediction.observation_id,
+      confidence: prediction.confidence,
+    })
+
+    if (!action || action === 'none') return
+
+    const s = stateRef.current
+    if (s.gameOver || s.paused || s.anim) return
+
+    const result = applyMiControlAction(s, action, rngRef.current)
+    if (!result) return
+    applyResult(result.state, result.events)
+  }, [miControlEnabled, modelRuntime.latestPrediction, applyResult])
 
   // Smooth game loop — update every frame
   useEffect(() => {
@@ -240,7 +360,7 @@ export function TetrisExperiment() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6">
+    <div className="mx-auto max-w-7xl px-4 py-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <Link to="/" className="muted text-sm hover:text-white">
@@ -249,6 +369,7 @@ export function TetrisExperiment() {
           <h1 className="m-0 mt-1 text-2xl font-semibold">实验二 · 压力自适应俄罗斯方块</h1>
           <p className="muted m-0 mt-1 text-sm">
             ←→ 移动 · ↑/X 顺时针 · Z 逆时针 · ↓ 软降 · 空格硬降 · P 暂停 · R 重开
+            {miControlEnabled ? ' · MI：左手← 右手→ 脚↻ 舌静止' : ''}
           </p>
         </div>
         <ExportButtons
@@ -258,9 +379,9 @@ export function TetrisExperiment() {
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[auto_1fr_300px]">
-        <div className="relative flex justify-center">
-          <Board state={state} />
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch xl:gap-2">
+        <div className="relative w-fit self-center xl:shrink-0 xl:self-start">
+          <Board state={state} cell={boardCell} onCellChange={setBoardCell} />
           {cascadeFlash && (
             <div className="pointer-events-none absolute inset-x-0 top-6 text-center">
               <span className="inline-block rounded-full border border-[#f5a52466] bg-[#1a1520ee] px-3 py-1 text-sm font-semibold text-[#f5a524] shadow-lg">
@@ -270,7 +391,15 @@ export function TetrisExperiment() {
           )}
         </div>
 
-        <div className="space-y-4">
+        <ColumnResizer
+          label="棋盘宽度"
+          className="hidden xl:flex"
+          onDragStart={beginColumnDrag}
+          onDrag={dragBoardColumn}
+          onReset={() => setBoardCell(BOARD_DEFAULT_CELL)}
+        />
+
+        <div ref={midColRef} className="min-w-0 flex-1 space-y-4">
           <Panel title="状态">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Stat label="分数" value={state.score} />
@@ -383,6 +512,27 @@ export function TetrisExperiment() {
             </div>
           </Panel>
 
+          <Panel title="MI 分类控制">
+            <label className="acq-check mb-3 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={miControlEnabled}
+                onChange={(event) => setMiControlEnabled(event.target.checked)}
+              />
+              启用模型分类控制（与键盘并行）
+            </label>
+            <p className="muted m-0 mb-3 text-sm">
+              左手 → 左移 · 右手 → 右移 · 脚 → 顺时针旋转 · 舌 → 静止。
+            </p>
+            <div className="rounded-xl border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-sm">
+              <div className="muted text-xs">最近 MI 动作</div>
+              <div className="font-mono text-xs">{lastMiAction}</div>
+            </div>
+            <div className="mt-4">
+              <ModelServicePanel embedded />
+            </div>
+          </Panel>
+
           <Panel title="实时曲线">
             <LineChart
               data={trace}
@@ -396,26 +546,43 @@ export function TetrisExperiment() {
           </Panel>
         </div>
 
-        <StressPanel
-          stress={stress}
-          onChange={setStress}
-          mode={mode}
-          modeControls={
-            <SignalModeControls
-              mode={mode}
-              onModeChange={setMode}
-              driverFeature={driverFeature}
-              onDriverChange={setDriverFeature}
-            />
-          }
+        <ColumnResizer
+          label="侧栏宽度"
+          className="hidden xl:flex"
+          onDragStart={beginColumnDrag}
+          onDrag={dragRightColumn}
+          onReset={() => setRightCol(RIGHT_COL_DEFAULT)}
         />
-        <FeatureMonitorPanel
-          compact
-          latest={features.latest}
-          history={features.history}
-          analyzing={features.analyzing}
-          enabledIds={features.enabledIds}
-          onEnabledChange={features.onEnabledChange}
+
+        <div
+          className="min-w-0 space-y-4 xl:w-[var(--right-col)] xl:shrink-0"
+          style={{ '--right-col': `${rightCol}px` } as React.CSSProperties}
+        >
+          <StressPanel
+            stress={stress}
+            onChange={setStress}
+            mode={mode}
+            modeControls={
+              <SignalModeControls
+                mode={mode}
+                onModeChange={setMode}
+                driverFeature={driverFeature}
+                onDriverChange={setDriverFeature}
+                rangeMap={rangeMap}
+                onRangeMapChange={setRangeMap}
+                onRangeReset={resetRangeMap}
+                onRangeCapture={captureRangeFromWindow}
+                rangePreview={rangePreview}
+              />
+            }
+          />
+          <FeatureMonitorPanel
+            compact
+            latest={features.latest}
+            history={features.history}
+            analyzing={features.analyzing}
+            enabledIds={features.enabledIds}
+            onEnabledChange={features.onEnabledChange}
             note={
               mode === 'live'
                 ? features.origin === 'live'
@@ -425,7 +592,8 @@ export function TetrisExperiment() {
                   ? `演示数据调控中（${driverFeature}）→ 压力应持续波动。点「手动输入」接管。`
                   : '手动模式：滑块控制难度。有实时流时特征面板显示真实 EEG。'
             }
-        />
+          />
+        </div>
       </div>
     </div>
   )

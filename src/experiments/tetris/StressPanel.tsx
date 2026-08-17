@@ -69,10 +69,11 @@ export function StressPanel({
               ? '压力 0–100（演示数据输出，只读）'
               : '压力 0–100'
         }
-        value={Math.round(stress)}
+        value={featureDriven ? Math.round(stress * 10) / 10 : Math.round(stress)}
         min={0}
         max={100}
-        step={1}
+        step={featureDriven ? 0.1 : 1}
+        format={featureDriven ? (v) => v.toFixed(1) : undefined}
         onChange={onChange}
         disabled={featureDriven}
       />

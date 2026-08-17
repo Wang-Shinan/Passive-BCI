@@ -132,6 +132,13 @@ src/
     dino/         实验六
 ```
 
+## EEG 采集与基座模型服务
+
+- Neuracle / BCIGo 桥接：见 [`bridges/neuracle/README.md`](./bridges/neuracle/README.md)、[`bridges/bcigo/README.md`](./bridges/bcigo/README.md)
+- NCC Runtime Package 模型服务接入：见 [`bridges/model/README.md`](./bridges/model/README.md)
+
+浏览器切 4 秒原始 `uV` 窗口，经 WebSocket（默认 `ws://127.0.0.1:8768/v1/model`）发给 NCC；不要把浏览器频域特征当作 50M 输入。
+
 ## 技术栈
 
 Vite · React 19 · TypeScript · Tailwind CSS v4 · React Router · Recharts

@@ -32,6 +32,7 @@ export interface NeuracleBatch {
   channels: number
   sampleRate: number
   channelNames: string[]
+  unit: string
   packetLoss: number
   packetCount: number
 }
@@ -186,6 +187,7 @@ export class NeuracleWsClient {
       channelNames: Array.isArray(header.channels)
         ? (header.channels as string[])
         : [],
+      unit: String(header.unit ?? 'uV'),
       packetLoss: Number(header.packet_loss_count) || 0,
       packetCount: Number(header.packet_count) || 0,
     })

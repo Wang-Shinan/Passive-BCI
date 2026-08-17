@@ -20,13 +20,14 @@ import {
 const HISTORY = 60
 const WINDOW_SEC = 1.0
 
-export type FeatureOrigin = 'live' | 'synth'
+export type FeatureOrigin = 'live' | 'synth' | 'stale'
 
 /**
  * Shared feature monitor for experiment pages.
  *
  * - Live hub fresh → real EEG (unless `autonomous` demo mode, which stays synth)
  * - `preferLive` → never synth; wait for hub
+ * - After a live session goes stale → freeze last snapshot (do not synth)
  * - otherwise synthesize EEG with optional modulators
  */
 export function useFeatureMonitor(opts: {
@@ -53,6 +54,7 @@ export function useFeatureMonitor(opts: {
 
   const ringRef = useRef(makeSynthRing(5))
   const phaseRef = useRef(0)
+  const sawLiveRef = useRef(false)
   const modulatorsRef = useRef(modulators)
   modulatorsRef.current = modulators
   const autonomousRef = useRef(autonomous)
@@ -93,6 +95,7 @@ export function useFeatureMonitor(opts: {
     const id = window.setInterval(() => {
       if (preferLiveRef.current) return
       if (!autonomousRef.current && liveEegHub.isFresh()) return
+      if (sawLiveRef.current) return
       const batch = 25
       for (let s = 0; s < batch; s++) {
         const t = (phaseRef.current + s) / SYNTH_FS
@@ -117,7 +120,7 @@ export function useFeatureMonitor(opts: {
       const wantLive = preferLiveRef.current || (!autonomousRef.current && liveEegHub.isFresh())
       if (wantLive) {
         if (!liveEegHub.isFresh()) {
-          setOrigin('live')
+          setOrigin(sawLiveRef.current ? 'stale' : 'live')
           return
         }
         const ring = liveEegHub.ring
@@ -128,8 +131,10 @@ export function useFeatureMonitor(opts: {
           sampleRate: ring.sampleRate,
           windowSec: WINDOW_SEC,
           enabledFeatures: enabled,
+          channelMask: liveEegHub.featureChannelMask(),
         })
         if (!snap) return
+        sawLiveRef.current = true
         setOrigin('live')
         setLatest(snap)
         setHistory((prev) => {
@@ -139,7 +144,10 @@ export function useFeatureMonitor(opts: {
         return
       }
 
-      if (preferLiveRef.current) return
+      if (preferLiveRef.current || sawLiveRef.current) {
+        setOrigin(sawLiveRef.current ? 'stale' : 'live')
+        return
+      }
 
       const ring = ringRef.current
       const snap = computeLiveFeatures({

@@ -42,7 +42,13 @@ import { ImpedancePanel } from './ImpedancePanel'
 import { FeaturePanel } from './FeaturePanel'
 import { ChannelRail, ChannelSettingsDialog } from './ChannelRail'
 import { ensureBridge } from './bridgeApi'
-import { acqRuntime, ingestBridgeToHub, setAcquisitionUi, waitConfigAck } from './runtime'
+import {
+  acqRuntime,
+  beginRawBridgeStream,
+  ingestBridgeToHub,
+  setAcquisitionUi,
+  waitConfigAck,
+} from './runtime'
 import {
   LIVE_CATCHUP_THRESHOLD_S,
   liveLagSec,
@@ -50,7 +56,7 @@ import {
   setCatchupClock,
   setFirmwareQueueDepth,
 } from './liveCatchup'
-import { liveEegHub } from '../lib/eeg/liveHub'
+import { liveEegHub, persistHiddenFromMask, visibleMaskForNames } from '../lib/eeg/liveHub'
 import {
   copyLatestChannel,
   copyLatestValid,
@@ -68,6 +74,7 @@ import {
   saveEnabledFeatures,
   type LiveFeatureSnapshot,
 } from '../lib/features'
+import { ModelServicePanel } from '../lib/model-runtime'
 
 const RING_SECONDS = 12
 const FEATURE_HISTORY = 60
@@ -227,7 +234,9 @@ export function AcquisitionDebugPage() {
   )
   const [streamTypes, setStreamTypes] = useState<string[]>([])
   const [visible, setVisible] = useState(() => {
-    const n = liveEegHub.meta.channelNames.length || CHANNELS
+    const names = liveEegHub.meta.channelNames
+    if (names.length) return visibleMaskForNames(names)
+    const n = CHANNELS
     return Array.from({ length: n }, () => true)
   })
   const [sampleRate, setSampleRate] = useState(() => liveEegHub.meta.sampleRate || FS)
@@ -500,6 +509,10 @@ export function AcquisitionDebugPage() {
   }, [status, sampleRate, visible, enabledFeatures, featureWindowSec])
 
   useEffect(() => {
+    liveEegHub.setChannelMask(visible)
+  }, [visible])
+
+  useEffect(() => {
     const lo = Math.min(bandLoHz, bandHiHz - 0.5)
     const hi = Math.max(bandHiHz, lo + 0.5)
     const band = designBandpassSos(lo, hi, sampleRate)
@@ -719,7 +732,7 @@ export function AcquisitionDebugPage() {
           setStreamTypes(hello.channel_types ?? [])
           setSampleRate(hello.sample_rate)
           setCatchupClock(hello.sample_rate)
-          setVisible(names.map(() => true))
+          setVisible(visibleMaskForNames(names))
           streamingRef.current = false
           acqRuntime.streaming = false
           setFeatureLatest(null)
@@ -857,7 +870,7 @@ export function AcquisitionDebugPage() {
           setStreamTypes(hello.channel_types ?? [])
           setSampleRate(hello.sample_rate)
           setCatchupClock(hello.sample_rate)
-          setVisible(names.map(() => true))
+          setVisible(visibleMaskForNames(names))
           streamingRef.current = false
           acqRuntime.streaming = false
           setFeatureLatest(null)
@@ -915,6 +928,7 @@ export function AcquisitionDebugPage() {
       filledRef.current = 0
       filterRef.current.reset()
       rateWinRef.current = { t0: performance.now(), n: 0, samplesBase: 0 }
+      beginRawBridgeStream()
       streamingRef.current = true
       acqRuntime.streaming = true
       acqRuntime.status = 'streaming'
@@ -1110,6 +1124,10 @@ export function AcquisitionDebugPage() {
     isBridgeDevice(device) || status === 'demo'
       ? streamLabels
       : cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!)
+
+  useEffect(() => {
+    if (channelLabels.length === visible.length) persistHiddenFromMask(channelLabels, visible)
+  }, [visible, channelLabels])
 
   const impedanceHardware = device === 'omni' && status !== 'demo' ? 'omni' : device === 'bcigo' ? 'bcigo' : 'none'
 
@@ -1693,6 +1711,21 @@ export function AcquisitionDebugPage() {
               >
                 仅 EEG
               </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() =>
+                  setVisible((v) => {
+                    const n = v.length === channelLabels.length ? [...v] : channelLabels.map(() => true)
+                    channelLabels.forEach((name, i) => {
+                      if (name.replace(/\s+/g, '').toUpperCase() === 'FT10') n[i] = false
+                    })
+                    return n
+                  })
+                }
+              >
+                关闭 FT10
+              </button>
             </>
           ) : null}
         </div>
@@ -1929,6 +1962,8 @@ export function AcquisitionDebugPage() {
           onEnabledChange={onEnabledFeaturesChange}
         />
       </details>
+
+      <ModelServicePanel />
 
       <div className="acq-statusbar">
         <span>

@@ -38,6 +38,13 @@ body {
   margin: 0;
 }
 
+/* Tailwind preflight sets canvas { max-width: 100%; height: auto }, which
+   stretches bitmap canvases away from their width/height attributes. */
+canvas {
+  max-width: none;
+  height: unset;
+}
+
 button,
 input,
 select {

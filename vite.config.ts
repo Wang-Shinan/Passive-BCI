@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect } from 'vite'
-import { bridgeManagerPlugin } from './vite.bridge-manager'
+import { bridgeManagerPlugin } from './vite.bridge-manager.ts'
 
 const MAX_LOG_CHARS = 2400
 
@@ -315,6 +315,12 @@ export default defineConfig({
         target: 'ws://127.0.0.1:8767',
         ws: true,
         rewrite: (path) => path.replace(/^\/ws\/bcigo/, '/v1/stream'),
+      },
+      // NCC Runtime Package model service — raw EEG windows → predictions/feedback.
+      '/ws/model': {
+        target: process.env.MODEL_SERVICE_WS_TARGET || 'ws://127.0.0.1:8768',
+        ws: true,
+        rewrite: (path) => path.replace(/^\/ws\/model/, ''),
       },
     },
   },

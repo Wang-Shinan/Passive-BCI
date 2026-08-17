@@ -23,8 +23,16 @@ export type BridgeBatch = {
   values: Float32Array
   samples: number
   channels: number
+  sampleRate: number
+  channelNames: string[]
+  unit: string
   packetLoss: number
   packetCount: number
+}
+
+export type RawBridgeBatch = BridgeBatch & {
+  device: DeviceKind
+  streamId: number
 }
 
 export type AcquisitionUiSink = {
@@ -50,6 +58,8 @@ export const acqRuntime = {
 }
 
 const ackScanner = new ConfigAckScanner()
+const rawBridgeListeners = new Set<(batch: RawBridgeBatch) => void>()
+let rawBridgeStreamId = 0
 let ackWaiter: {
   resolve: (ack: ConfigAck | null) => void
   timer: ReturnType<typeof setTimeout>
@@ -156,7 +166,7 @@ function deliverSerial(chunk: Uint8Array): void {
   if (!acqRuntime.streaming) return
   const frames = acqRuntime.parser?.feed(rest) ?? []
   for (const f of frames) {
-    const filtered = acqRuntime.filter.processSample(f.uv, f.valid)
+    acqRuntime.filter.processSample(f.uv, f.valid)
     if (!acqRuntime.impedanceActive) liveEegHub.pushFrame(f.uv)
     if (acqRuntime.recorder.recording && !acqRuntime.impedanceActive) {
       acqRuntime.recorder.append(f.raw)
@@ -165,6 +175,24 @@ function deliverSerial(chunk: Uint8Array): void {
 }
 
 function deliverBridge(batch: BridgeBatch): void {
+  if (
+    acqRuntime.streaming &&
+    !acqRuntime.impedanceActive &&
+    batch.values.length === batch.samples * batch.channels
+  ) {
+    const rawBatch: RawBridgeBatch = {
+      ...batch,
+      device: acqRuntime.device,
+      streamId: rawBridgeStreamId,
+    }
+    for (const listener of rawBridgeListeners) {
+      try {
+        listener(rawBatch)
+      } catch (error) {
+        console.error('[model-runtime] raw batch listener failed', error)
+      }
+    }
+  }
   if (acqRuntime.ui) {
     acqRuntime.ui.onBridgeBatch(batch)
     return
@@ -189,6 +217,19 @@ export function ingestBridgeToHub(batch: BridgeBatch): void {
   bridgeQ.push(batch)
   addPendingSamples(batch.samples)
   scheduleDrain()
+}
+
+/** Observe raw bridge batches without coupling model work to the display ring. */
+export function subscribeRawBridgeBatches(
+  listener: (batch: RawBridgeBatch) => void,
+): () => void {
+  rawBridgeListeners.add(listener)
+  return () => rawBridgeListeners.delete(listener)
+}
+
+/** Start a new continuity segment before accepting bridge samples. */
+export function beginRawBridgeStream(): void {
+  rawBridgeStreamId += 1
 }
 
 function ingestSerialToHub(chunk: Uint8Array): void {

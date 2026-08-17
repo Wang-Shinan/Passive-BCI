@@ -11,6 +11,12 @@ import { LineChart } from '../../lib/ui/LineChart'
 import { Panel } from '../../lib/ui/Panel'
 import { Slider } from '../../lib/ui/Slider'
 import {
+  modelRuntimeHub,
+  predictionToOrdinalRating,
+  useModelRuntime,
+  type ModelPrediction,
+} from '../../lib/model-runtime'
+import {
   bfsDistance,
   countLeaves,
   generateGraph,
@@ -27,6 +33,18 @@ import {
   type QTable,
 } from './qlearning'
 import { RatingPrompt } from './RatingPrompt'
+import { HeadFeaturePicker } from './HeadFeaturePicker'
+import { LinearHeadDebug } from './LinearHeadDebug'
+import {
+  extractLinearFeatures,
+  LinearHead,
+  LINEAR_HEAD_CLASSES,
+  LINEAR_HEAD_MIN_TRAIN,
+  ensureIdsForHeadFeatures,
+  ratingToClass,
+  type LinearHeadPred,
+  type LinearHeadStats,
+} from './linearHead'
 import {
   algoLabel,
   defaultTamerParams,
@@ -54,10 +72,46 @@ const H = 480
 const AUTO_GOAL_RATING = 1
 
 type Phase = 'idle' | 'moving' | 'rating' | 'ai_updating' | 'converged'
+type RewardMode = 'human' | 'eeg' | 'foundation' | 'random' | 'randomKeepGoal'
 
 export function RlGraphExperiment() {
   const [subjectId, setSubjectId] = useState('S01')
-  const features = useFeatureMonitor({ active: true })
+  const linearHeadRef = useRef<LinearHead | null>(null)
+  if (!linearHeadRef.current) linearHeadRef.current = LinearHead.load()
+  const [headKeys, setHeadKeys] = useState(() => linearHeadRef.current!.keys)
+  const headKeysRef = useRef(headKeys)
+  headKeysRef.current = headKeys
+  const headEnsure = useMemo(() => ensureIdsForHeadFeatures(headKeys), [headKeys])
+  const features = useFeatureMonitor({
+    active: true,
+    ensureFeatures: headEnsure,
+  })
+  const modelRuntime = useModelRuntime()
+  const latestValuesRef = useRef(features.latest?.values)
+  latestValuesRef.current = features.latest?.values
+  const pendingFeatRef = useRef<number[] | null>(null)
+  const [headStats, setHeadStats] = useState<LinearHeadStats>(() => linearHeadRef.current!.stats())
+  const [stepHeadPred, setStepHeadPred] = useState<LinearHeadPred | null>(null)
+  const liveHeadX = useMemo(
+    () => extractLinearFeatures(features.latest?.values, headKeys),
+    [features.latest, headKeys],
+  )
+  const liveHeadPred = useMemo(
+    () => (liveHeadX ? linearHeadRef.current!.predict(liveHeadX) : null),
+    [liveHeadX, headStats, headKeys],
+  )
+  const foundationRating = modelRuntime.latestPrediction
+    ? predictionToOrdinalRating(modelRuntime.latestPrediction)
+    : null
+  const foundationHeadPred: LinearHeadPred | null =
+    modelRuntime.latestPrediction && foundationRating !== null
+      ? {
+          classIndex: modelRuntime.latestPrediction.class_id,
+          label: LINEAR_HEAD_CLASSES[modelRuntime.latestPrediction.class_id]!,
+          rating: foundationRating,
+          probs: modelRuntime.latestPrediction.probabilities,
+        }
+      : null
   const [mode, setMode] = useState<GraphMode>('graph')
   const [nodeCount, setNodeCount] = useState(24)
   const [gridCols, setGridCols] = useState(6)
@@ -96,6 +150,7 @@ export function RlGraphExperiment() {
   const [shortestStreak, setShortestStreak] = useState(0)
   const [running, setRunning] = useState(false)
   const [infiniteWait, setInfiniteWait] = useState(false)
+  const [skipWaitAfterRate, setSkipWaitAfterRate] = useState(true)
   const [ratingTimeout, setRatingTimeout] = useState(1500)
   const [noiseEnabled, setNoiseEnabled] = useState(false)
   const [noiseSigma, setNoiseSigma] = useState(0.25)
@@ -103,10 +158,11 @@ export function RlGraphExperiment() {
   /**
    * Reward source for auto-run baselines:
    * - human: wait for key/click ratings
+   * - eeg: linear 3-class head; keys train, timeout predicts
    * - random: uniform {-1..1} every step (incl. goal)
    * - randomKeepGoal: random on non-goal steps; goal still gets +AUTO_GOAL_RATING
    */
-  const [rewardMode, setRewardMode] = useState<'human' | 'random' | 'randomKeepGoal'>('human')
+  const [rewardMode, setRewardMode] = useState<RewardMode>('human')
   const [maxSteps, setMaxSteps] = useState(60)
   const [convergeN, setConvergeN] = useState(3)
   const [params, setParams] = useState<QParams>({
@@ -140,7 +196,10 @@ export function RlGraphExperiment() {
   const tamerParamsRef = useRef(tamerParams)
   const paramsRef = useRef(params)
   const noiseRef = useRef({ enabled: false, sigma: 0.25, flipProb: 0.05 })
-  const rewardModeRef = useRef<'human' | 'random' | 'randomKeepGoal'>('human')
+  const rewardModeRef = useRef<RewardMode>('human')
+  const pendingModelObservationRef = useRef<ModelPrediction | null>(null)
+  const loggedModelObservationRef = useRef('')
+  const loggedFeedbackAckRef = useRef('')
   const traceRef = useRef<TamerTraceStep[]>([])
   const llmConfigRef = useRef(llmConfig)
   const applyLockRef = useRef(false)
@@ -217,6 +276,42 @@ export function RlGraphExperiment() {
     rewardModeRef.current = rewardMode
   }, [rewardMode])
 
+  useEffect(() => {
+    const prediction = modelRuntime.latestPrediction
+    if (!prediction || loggedModelObservationRef.current === prediction.observation_id) return
+    loggedModelObservationRef.current = prediction.observation_id
+    loggerRef.current.log('foundation_prediction', {
+      observationId: prediction.observation_id,
+      windowId: prediction.window_id,
+      segmentId: prediction.segment_id,
+      classId: prediction.class_id,
+      className: prediction.class_name,
+      confidence: prediction.confidence,
+      probabilities: prediction.probabilities,
+      modelRevision: prediction.model_revision,
+      onlineUpdateStep: prediction.online_update_step,
+      onlineUpdateApplied: prediction.online_update_applied,
+      outputSemantics: prediction.output_semantics,
+      task: prediction.task,
+    })
+  }, [modelRuntime.latestPrediction])
+
+  useEffect(() => {
+    const ack = modelRuntime.lastFeedbackAck
+    if (!ack || loggedFeedbackAckRef.current === ack.feedback_id) return
+    loggedFeedbackAckRef.current = ack.feedback_id
+    loggerRef.current.log('foundation_feedback_ack', {
+      feedbackId: ack.feedback_id,
+      observationId: ack.observation_id,
+      accepted: ack.accepted,
+      duplicate: ack.duplicate,
+      reason: ack.reason,
+      modelRevision: ack.model_revision,
+      onlineUpdateStep: ack.online_update_step,
+      onlineUpdateApplied: ack.online_update_applied,
+    })
+  }, [modelRuntime.lastFeedbackAck])
+
   const shortest = useMemo(
     () => bfsDistance(graph, episodeStart, graph.goal),
     [graph, episodeStart],
@@ -238,6 +333,7 @@ export function RlGraphExperiment() {
       setSteps(0)
       setPhase('idle')
       pendingRef.current = null
+      pendingModelObservationRef.current = null
       setAnimFrom(null)
       setAnimTo(null)
       traceRef.current = []
@@ -408,11 +504,40 @@ export function RlGraphExperiment() {
       const epShortest = bfsDistance(g, episodeStartRef.current, g.goal)
       const timedOut = humanReward === null
 
+      if (!auto && humanReward !== null && rewardModeRef.current === 'eeg') {
+        const x = pendingFeatRef.current
+        const head = linearHeadRef.current!
+        if (x && x.length === head.nFeat) {
+          head.train(x, ratingToClass(humanReward))
+          head.save()
+          setHeadStats(head.stats())
+        }
+      }
+
       let observed: number | null = timedOut ? null : humanReward
       let clean: number | null = observed
       if (observed !== null && noiseRef.current.enabled) {
         const flipped = maybeFlipRating(observed, noiseRef.current.flipProb, rngRef.current)
         observed = corruptRating(flipped, noiseRef.current.sigma, rngRef.current)
+      }
+
+      const modelObservation = pendingModelObservationRef.current
+      let modelFeedbackId: string | null = null
+      if (!auto && humanReward !== null && modelObservation) {
+        const ordinal = predictionToOrdinalRating(modelObservation)
+        modelFeedbackId = modelRuntimeHub.submitFeedback({
+          observationId: modelObservation.observation_id,
+          reward: humanReward,
+          ...(ordinal === null ? {} : { label: ratingToClass(humanReward) }),
+          metadata: {
+            experiment: 'rl-graph',
+            subjectId,
+            episode: ep,
+            step: nextSteps,
+            from: pending.from,
+            to: pending.to,
+          },
+        })
       }
 
       try {
@@ -505,6 +630,10 @@ export function RlGraphExperiment() {
           timedOut,
           noise: noiseRef.current.enabled,
           rewardMode: rewardModeRef.current,
+          linearHeadN: linearHeadRef.current!.nTrain,
+          modelObservationId: modelObservation?.observation_id,
+          modelRevision: modelObservation?.model_revision,
+          modelFeedbackId: modelFeedbackId ?? undefined,
           done,
           episode: ep,
           steps: nextSteps,
@@ -514,6 +643,8 @@ export function RlGraphExperiment() {
         })
 
         pendingRef.current = null
+        pendingFeatRef.current = null
+        pendingModelObservationRef.current = null
         finishAfterReward(done, nextSteps, ep, epShortest, g)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -525,7 +656,7 @@ export function RlGraphExperiment() {
         applyLockRef.current = false
       }
     },
-    [finishAfterReward],
+    [finishAfterReward, subjectId],
   )
 
   const takeStep = useCallback(async () => {
@@ -550,6 +681,7 @@ export function RlGraphExperiment() {
     await animateMove(from, action)
     stepsRef.current += 1
     setSteps(stepsRef.current)
+    pendingModelObservationRef.current = modelRuntimeHub.latestObservation()
 
     // Reaching the goal
     if (action === g.goal) {
@@ -567,8 +699,12 @@ export function RlGraphExperiment() {
       return
     }
 
-    // Non-goal: random modes auto-rate; human waits for prompt
-    if (rewardModeRef.current !== 'human') {
+    // Non-goal: random modes auto-rate; human / eeg wait for prompt
+    if (
+      rewardModeRef.current !== 'human' &&
+      rewardModeRef.current !== 'eeg' &&
+      rewardModeRef.current !== 'foundation'
+    ) {
       setPhase('rating')
       queueMicrotask(() => {
         phaseRef.current = 'rating'
@@ -577,6 +713,9 @@ export function RlGraphExperiment() {
       return
     }
 
+    const x = extractLinearFeatures(latestValuesRef.current, headKeysRef.current)
+    pendingFeatRef.current = x
+    setStepHeadPred(x ? linearHeadRef.current!.predict(x) : null)
     setPhase('rating')
   }, [animateMove, applyReward])
 
@@ -644,15 +783,65 @@ export function RlGraphExperiment() {
           <RatingPrompt
             open={
               phase === 'ai_updating' ||
-              (phase === 'rating' && agentPos !== graph.goal && rewardMode === 'human')
+              (phase === 'rating' &&
+                agentPos !== graph.goal &&
+                (rewardMode === 'human' || rewardMode === 'eeg' || rewardMode === 'foundation'))
             }
             timeoutMs={ratingTimeout}
             infinite={infiniteWait || algo === 'ai'}
+            skipWaitAfterRate={skipWaitAfterRate}
             enableText={algo === 'ai'}
             busy={phase === 'ai_updating'}
             busyLabel={aiNotice || 'AI 正在分配 Q…'}
+            eegMode={rewardMode === 'eeg' || rewardMode === 'foundation'}
+            eegTitle={rewardMode === 'foundation' ? '基座模型任务头' : undefined}
+            eegHint={
+              rewardMode === 'foundation'
+                ? foundationHeadPred
+                  ? '倒计时结束使用当前 ordinal_rating_3 输出；按 1–5 会将反馈关联回该 observation。'
+                  : '服务尚未返回 ordinal_rating_3；不会把运动想象或未知分类静默当成评分。'
+                : undefined
+            }
+            headReady={
+              rewardMode === 'foundation'
+                ? foundationHeadPred !== null
+                : headStats.nTrain >= LINEAR_HEAD_MIN_TRAIN
+            }
+            headNTrain={
+              rewardMode === 'foundation'
+                ? (modelRuntime.latestPrediction?.online_update_step ?? 0)
+                : headStats.nTrain
+            }
+            headMinTrain={rewardMode === 'foundation' ? 0 : LINEAR_HEAD_MIN_TRAIN}
+            headPred={
+              rewardMode === 'foundation' ? foundationHeadPred : (stepHeadPred ?? liveHeadPred)
+            }
             onRate={(v, text) => void applyReward(v, false, text ?? '')}
-            onTimeout={() => void applyReward(null, false)}
+            onTimeout={() => {
+              if (rewardModeRef.current === 'foundation') {
+                const prediction =
+                  pendingModelObservationRef.current ?? modelRuntimeHub.latestObservation()
+                const rating = prediction ? predictionToOrdinalRating(prediction) : null
+                if (rating !== null) {
+                  void applyReward(rating, true, 'foundation-model')
+                  return
+                }
+                void applyReward(null, false)
+                return
+              }
+              if (rewardModeRef.current === 'eeg') {
+                const head = linearHeadRef.current!
+                const x =
+                  pendingFeatRef.current ??
+                  extractLinearFeatures(latestValuesRef.current, headKeysRef.current)
+                if (head.nTrain >= LINEAR_HEAD_MIN_TRAIN && x && x.length === head.nFeat) {
+                  const pred = head.predict(x)
+                  void applyReward(pred.rating, true, 'linear-head')
+                  return
+                }
+              }
+              void applyReward(null, false)
+            }}
           />
           {phase === 'converged' && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1056,8 +1245,8 @@ export function RlGraphExperiment() {
 
           <Panel title="评分窗口">
             <p className="muted mb-3 text-xs">
-              默认：到达终点自动满分（+{AUTO_GOAL_RATING}）；超时不更新价值表。随机模式可作
-              chance-level 基线；「保留终点」对照只打乱途中评分、终点仍给结构化奖励。
+              默认：到达终点自动满分（+{AUTO_GOAL_RATING}）；人工超时不更新价值表。人脑评分是线性 3
+              类头：按键 1–5 训练差/中/好，超时用预测写入。随机模式可作 chance-level 基线。
               {algo === 'ai' ? ' AI 模式下评分窗口默认不超时，并支持文字反馈。' : ''}
             </p>
 
@@ -1069,6 +1258,19 @@ export function RlGraphExperiment() {
                     id: 'human' as const,
                     label: '人工评分',
                     hint: '按键 / 点击；终点自动 +1',
+                  },
+                  {
+                    id: 'eeg' as const,
+                    label: '人脑评分（线性 3 类）',
+                    hint: '1–2 差 / 3 中 / 4–5 好；按键训练，超时预测；终点仍 +1',
+                  },
+                  {
+                    id: 'foundation' as const,
+                    label: '基座模型服务（任务头）',
+                    hint:
+                      foundationHeadPred
+                        ? `ordinal_rating_3 已就绪 · ${modelRuntime.latestPrediction?.model_revision ?? 'base'}`
+                        : '仅接受显式 ordinal_rating_3；MI/未知分类不会转换成奖励',
                   },
                   {
                     id: 'randomKeepGoal' as const,
@@ -1104,9 +1306,34 @@ export function RlGraphExperiment() {
                 type="checkbox"
                 checked={infiniteWait}
                 onChange={(e) => setInfiniteWait(e.target.checked)}
-                disabled={rewardMode !== 'human'}
+                disabled={
+                  rewardMode !== 'human' &&
+                  rewardMode !== 'eeg' &&
+                  rewardMode !== 'foundation'
+                }
               />
               无限等待（关闭超时）
+            </label>
+            <label className="mb-3 flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={skipWaitAfterRate}
+                onChange={(e) => setSkipWaitAfterRate(e.target.checked)}
+                disabled={
+                  infiniteWait ||
+                  algo === 'ai' ||
+                  (rewardMode !== 'human' &&
+                    rewardMode !== 'eeg' &&
+                    rewardMode !== 'foundation')
+                }
+              />
+              <span>
+                评分后跳过等待
+                <span className="muted mt-0.5 block text-xs">
+                  关掉后按 1–5 只记下，倒计时结束才提交，每步窗口长度固定。
+                </span>
+              </span>
             </label>
             <Slider
               label="评分超时 (ms)"
@@ -1114,9 +1341,118 @@ export function RlGraphExperiment() {
               min={500}
               max={5000}
               step={100}
-              disabled={infiniteWait || rewardMode !== 'human'}
+              disabled={
+                infiniteWait ||
+                (rewardMode !== 'human' &&
+                  rewardMode !== 'eeg' &&
+                  rewardMode !== 'foundation')
+              }
               onChange={setRatingTimeout}
             />
+
+            <div className="mt-4 border-t border-[var(--border)] pt-3">
+              <p className="mb-2 text-sm font-medium">线性头状态</p>
+              <p className="muted mb-2 text-xs">
+                勾选进入模型的特征（改勾选会重置权重）。开局后「人脑评分」用按键训练；未开局可用下方调试。
+              </p>
+              <HeadFeaturePicker
+                keys={headKeys}
+                disabled={phase === 'rating' || phase === 'moving' || phase === 'ai_updating'}
+                onChange={(next) => {
+                  linearHeadRef.current!.setKeys(next)
+                  linearHeadRef.current!.save()
+                  setHeadKeys(linearHeadRef.current!.keys)
+                  setHeadStats(linearHeadRef.current!.stats())
+                  pendingFeatRef.current = null
+                  setStepHeadPred(null)
+                }}
+              />
+              <div className="mb-3 rounded-md border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-xs">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="muted">样本 / 全量 CE</span>
+                  <span className="font-mono">
+                    n={headStats.nTrain}
+                    {headStats.lastLoss != null ? ` · CE=${headStats.lastLoss.toFixed(3)}` : ''}
+                    {headStats.acc != null ? ` · acc=${(headStats.acc * 100).toFixed(0)}%` : ''}
+                    {` · ${headStats.arch}`}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-baseline justify-between gap-2">
+                  <span className="muted">当前预测</span>
+                  <span className="font-mono">
+                    {liveHeadPred
+                      ? `${liveHeadPred.label} → ${liveHeadPred.rating >= 0 ? '+' : ''}${liveHeadPred.rating}`
+                      : '等待特征'}
+                  </span>
+                </div>
+                {liveHeadPred ? (
+                  <div className="mt-2 grid grid-cols-3 gap-1 text-center font-mono">
+                    {LINEAR_HEAD_CLASSES.map((label, i) => (
+                      <span key={label} className={i === liveHeadPred.classIndex ? 'text-white' : 'muted'}>
+                        {label} {(liveHeadPred.probs[i]! * 100).toFixed(0)}%
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn mt-2 w-full text-xs"
+                  onClick={() => {
+                    linearHeadRef.current!.reset()
+                    linearHeadRef.current!.save()
+                    setHeadStats(linearHeadRef.current!.stats())
+                  }}
+                >
+                  重置权重与样本
+                </button>
+              </div>
+              <LinearHeadDebug
+                keys={headKeys}
+                values={features.latest?.values}
+                pred={liveHeadPred}
+                canTrain={!running && (phase === 'idle' || phase === 'converged')}
+                hiddenSize={headStats.hiddenSize}
+                useRelu={headStats.useRelu}
+                lr={headStats.lr}
+                archLocked={phase === 'rating' || phase === 'moving' || phase === 'ai_updating'}
+                onArch={(h, relu) => {
+                  linearHeadRef.current!.setArch(h, relu)
+                  linearHeadRef.current!.save()
+                  setHeadStats(linearHeadRef.current!.stats())
+                  pendingFeatRef.current = null
+                  setStepHeadPred(null)
+                }}
+                onLr={(nextLr) => {
+                  linearHeadRef.current!.setLr(nextLr)
+                  linearHeadRef.current!.save()
+                  setHeadStats(linearHeadRef.current!.stats())
+                }}
+                onRefit={() => {
+                  linearHeadRef.current!.refit()
+                  linearHeadRef.current!.save()
+                  setHeadStats(linearHeadRef.current!.stats())
+                }}
+                onLabel={(classIndex) => {
+                  const head = linearHeadRef.current!
+                  const x = extractLinearFeatures(latestValuesRef.current, headKeysRef.current)
+                  if (!x || x.length !== head.nFeat) return null
+                  const before = head.predict(x)
+                  const loss = head.train(x, classIndex)
+                  head.save()
+                  setHeadStats(head.stats())
+                  loggerRef.current.log('linear_head_debug', {
+                    classIndex,
+                    label: LINEAR_HEAD_CLASSES[classIndex],
+                    pred: before.label,
+                    probs: before.probs,
+                    loss,
+                    nTrain: head.nTrain,
+                    arch: head.stats().arch,
+                  })
+                  return loss
+                }}
+              />
+            </div>
 
             <div className="mt-4 border-t border-[var(--border)] pt-3">
               <label className="mb-2 flex items-start gap-2 text-sm">
@@ -1184,10 +1520,13 @@ export function RlGraphExperiment() {
         analyzing={features.analyzing}
         enabledIds={features.enabledIds}
         onEnabledChange={features.onEnabledChange}
+        origin={features.origin}
         note={
           features.origin === 'live'
-            ? '正在分析采集页的实时 EEG（与评分独立）。勾选与其它页共用。'
-            : '合成 EEG 特征流；采集页开流后会自动切到实时。勾选与其它页共用。'
+            ? '实时 EEG：人脑评分用线性 3 类头，按键训练、超时预测。勾选与其它页共用。'
+            : features.origin === 'stale'
+              ? '实时流已断开，特征停在最后一帧（不会改用合成数据）。请回采集页重新开流。'
+              : '合成 EEG 特征流；采集页开流后会自动切到实时。勾选与其它页共用。'
         }
       />
     </div>

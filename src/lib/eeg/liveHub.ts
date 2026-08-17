@@ -5,6 +5,48 @@ export type LiveEegLink = 'idle' | 'connecting' | 'open' | 'streaming' | 'demo' 
 
 export const LIVE_FRESH_MS = 1500
 const HUB_SECONDS = 6
+const HIDDEN_CH_KEY = 'passive-bci.hidden-channel-names'
+/** Off by default (noisy / unused on BCIGo 32-ch). */
+export const DEFAULT_HIDDEN_CHANNELS = ['FT10']
+
+export function normalizeChannelName(name: string): string {
+  return name.replace(/\s+/g, '').toUpperCase()
+}
+
+export function loadHiddenChannelNames(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HIDDEN_CH_KEY) ?? 'null') as unknown
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
+      return parsed.map(normalizeChannelName)
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_HIDDEN_CHANNELS.map(normalizeChannelName)
+}
+
+export function saveHiddenChannelNames(names: string[]): void {
+  localStorage.setItem(
+    HIDDEN_CH_KEY,
+    JSON.stringify([...new Set(names.map(normalizeChannelName))]),
+  )
+}
+
+export function visibleMaskForNames(names: string[]): boolean[] {
+  const hidden = new Set(loadHiddenChannelNames())
+  return names.map((n) => !hidden.has(normalizeChannelName(n)))
+}
+
+/** Merge current montage into the persisted hidden-name set (absent names stay as-is). */
+export function persistHiddenFromMask(names: string[], visible: boolean[]): void {
+  const hidden = new Set(loadHiddenChannelNames())
+  names.forEach((name, i) => {
+    const key = normalizeChannelName(name)
+    if (visible[i] === false) hidden.add(key)
+    else hidden.delete(key)
+  })
+  saveHiddenChannelNames([...hidden])
+}
 
 export type LiveEegMeta = {
   device: LiveEegDevice
@@ -34,6 +76,7 @@ class LiveEegHub {
   link: LiveEegLink = 'idle'
   lastAt = 0
   detail = ''
+  channelMask: boolean[] = []
   private listeners = new Set<() => void>()
 
   configure(opts: {
@@ -46,10 +89,25 @@ class LiveEegHub {
     if (opts.channelNames) {
       this.channelNames = [...opts.channelNames]
       this.ensureRing(opts.channelNames.length)
+      if (this.channelMask.length !== opts.channelNames.length) {
+        this.channelMask = visibleMaskForNames(opts.channelNames)
+      }
     }
     if (opts.device !== undefined) this.device = opts.device
     if (opts.detail !== undefined) this.detail = opts.detail
     this.emit()
+  }
+
+  setChannelMask(mask: boolean[]): void {
+    this.channelMask = [...mask]
+  }
+
+  /** Mask aligned to current ring length; omitted channels count as included. */
+  featureChannelMask(): boolean[] | undefined {
+    const n = this.buffers.length
+    if (!n || !this.channelMask.length) return undefined
+    if (this.channelMask.length === n) return this.channelMask
+    return Array.from({ length: n }, (_, i) => this.channelMask[i] !== false)
   }
 
   ensureRing(nChannels: number): void {

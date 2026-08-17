@@ -194,6 +194,11 @@ export function DinoExperiment() {
     setMode,
     driverFeature,
     setDriverFeature,
+    rangeMap,
+    setRangeMap,
+    resetRangeMap,
+    captureRangeFromWindow,
+    rangePreview,
     stress,
     setStress,
     features,
@@ -485,12 +490,19 @@ export function DinoExperiment() {
               onModeChange={setMode}
               driverFeature={driverFeature}
               onDriverChange={setDriverFeature}
+              rangeMap={rangeMap}
+              onRangeMapChange={setRangeMap}
+              onRangeReset={resetRangeMap}
+              onRangeCapture={captureRangeFromWindow}
+              rangePreview={rangePreview}
             />
             <Slider
               label={mode === 'live' ? '压力（实时 EEG，只读）' : mode === 'features' ? '压力（演示输出，只读）' : '压力'}
-              value={Math.round(stress)}
+              value={mode !== 'manual' ? Math.round(stress * 10) / 10 : Math.round(stress)}
               min={0}
               max={100}
+              step={mode !== 'manual' ? 0.1 : 1}
+              format={mode !== 'manual' ? (v) => v.toFixed(1) : undefined}
               onChange={setStress}
               disabled={mode !== 'manual'}
             />

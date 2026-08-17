@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Panel } from '../ui/Panel'
 import type { LiveFeatureSnapshot } from './bandFeatures'
+import type { FeatureOrigin } from './useFeatureMonitor'
 import {
   FEATURE_CATALOG,
   FEATURE_GROUPS,
@@ -93,6 +94,7 @@ export function FeatureMonitorPanel({
   compact = false,
   note,
   defaultPickerOpen,
+  origin,
 }: {
   latest: LiveFeatureSnapshot | null
   history: LiveFeatureSnapshot[]
@@ -103,6 +105,7 @@ export function FeatureMonitorPanel({
   compact?: boolean
   note?: string
   defaultPickerOpen?: boolean
+  origin?: FeatureOrigin
 }) {
   const [pickerOpen, setPickerOpen] = useState(
     defaultPickerOpen ?? !compact,
@@ -139,11 +142,15 @@ export function FeatureMonitorPanel({
       className="mb-4"
       actions={
         <span className="chip" style={{ color: analyzing ? 'var(--accent-2)' : 'var(--muted)' }}>
-          {analyzing
-            ? latest
-              ? `滑窗 ${latest.windowSec.toFixed(1)}s · ${displayKeys.length} 项`
-              : '分析中…'
-            : '未运行'}
+          {origin === 'stale'
+            ? '实时已断开 · 已冻结'
+            : origin === 'synth'
+              ? '合成 EEG'
+              : analyzing
+                ? latest
+                  ? `滑窗 ${latest.windowSec.toFixed(1)}s · ${displayKeys.length} 项`
+                  : '分析中…'
+                : '未运行'}
         </span>
       }
     >
