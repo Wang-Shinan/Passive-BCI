@@ -1,6 +1,7 @@
 /** Module-level acquisition session so device links survive SPA route changes. */
 
 import { liveEegHub } from '../lib/eeg/liveHub'
+import { sampleClock } from '../lib/eeg/sampleClock'
 import { LiveIirFilter } from './filter/iir'
 import { CHANNELS, FRAME_BYTES, FS, channelLsbUv, defaultChannelConfig } from './protocol/constants'
 import { ConfigAckScanner, type ConfigAck } from './protocol/configAck'
@@ -29,6 +30,10 @@ export type BridgeBatch = {
   unit: string
   packetLoss: number
   packetCount: number
+  arrivalNowMs?: number
+  deviceEndMs?: number
+  deviceStartMs?: number
+  deviceTotalSamples?: number
 }
 
 export type RawBridgeBatch = BridgeBatch & {
@@ -173,10 +178,26 @@ function deliverSerial(chunk: Uint8Array): void {
       acqRuntime.recorder.append(f.raw)
     }
   }
-  if (frames.length) noteLiveSamples(frames.length)
+  if (frames.length) {
+    noteLiveSamples(frames.length)
+    sampleClock.noteBatch({
+      samples: frames.length,
+      sampleRate: FS,
+      arrivalNowMs: performance.now(),
+    })
+  }
 }
 
 function deliverBridge(batch: BridgeBatch): void {
+  if (acqRuntime.streaming && !acqRuntime.impedanceActive && batch.samples > 0) {
+    noteLiveSamples(batch.samples)
+    sampleClock.noteBatch({
+      samples: batch.samples,
+      sampleRate: batch.sampleRate,
+      arrivalNowMs: batch.arrivalNowMs ?? performance.now(),
+      deviceEndMs: batch.deviceEndMs,
+    })
+  }
   if (
     acqRuntime.streaming &&
     !acqRuntime.impedanceActive &&
@@ -212,7 +233,6 @@ function deliverBridge(batch: BridgeBatch): void {
     )
     acqRuntime.recorder.append(bytes)
   }
-  if (acqRuntime.streaming) noteLiveSamples(batch.samples)
 }
 
 /** Bridge batches while the acquisition page is unmounted. */

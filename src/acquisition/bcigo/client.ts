@@ -42,6 +42,7 @@ export interface BcigoBatch {
   unit: string
   packetLoss: number
   packetCount: number
+  arrivalNowMs: number
 }
 
 export interface BcigoImpedance {
@@ -272,6 +273,7 @@ export class BcigoWsClient {
       unit: String(header.unit ?? 'uV'),
       packetLoss: Number(header.packet_loss_count) || 0,
       packetCount: Number(header.packet_count) || 0,
+      arrivalNowMs: performance.now(),
     })
   }
 }

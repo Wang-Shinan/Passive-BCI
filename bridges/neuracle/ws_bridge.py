@@ -187,7 +187,15 @@ class NeuracleSession:
             "packet_count": int(getattr(self.server, "packet_count", 0)),
         }
         if isinstance(timing, dict):
-            meta["device_end_ms"] = timing.get("device_end_ms")
+            for key, caster in (
+                ("device_start_ms", float),
+                ("device_end_ms", float),
+                ("arrival_monotonic", float),
+                ("total_samples", int),
+            ):
+                val = timing.get(key)
+                if isinstance(val, (int, float)) and val == val:
+                    meta[key] = caster(val)
         return wire, meta
 
     def stop(self) -> None:

@@ -35,6 +35,10 @@ export interface NeuracleBatch {
   unit: string
   packetLoss: number
   packetCount: number
+  arrivalNowMs: number
+  deviceEndMs?: number
+  deviceStartMs?: number
+  deviceTotalSamples?: number
 }
 
 export interface NeuracleClientOptions {
@@ -190,6 +194,15 @@ export class NeuracleWsClient {
       unit: String(header.unit ?? 'uV'),
       packetLoss: Number(header.packet_loss_count) || 0,
       packetCount: Number(header.packet_count) || 0,
+      arrivalNowMs: performance.now(),
+      deviceEndMs: optionalMs(header.device_end_ms),
+      deviceStartMs: optionalMs(header.device_start_ms),
+      deviceTotalSamples: optionalMs(header.total_samples),
     })
   }
+}
+
+function optionalMs(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : undefined
 }

@@ -63,6 +63,7 @@ import {
   setFirmwareQueueDepth,
 } from './liveCatchup'
 import { liveEegHub, persistHiddenFromMask, visibleMaskForNames } from '../lib/eeg/liveHub'
+import { sampleClock } from '../lib/eeg/sampleClock'
 import {
   copyLatestChannel,
   copyLatestValid,
@@ -126,7 +127,9 @@ function recordPrefix(d: DeviceKind): string {
 
 function streamingRecordDetail(d: DeviceKind, sink: RecordSinkKind): string {
   const dest =
-    sink === 'disk' ? '边采边写入项目 recordings/ 目录' : '暂存在浏览器内存，停止时下载 BIN'
+    sink === 'disk'
+      ? '边采边写入 recordings/<会话>/（原始 EEG + 游戏事件）'
+      : '暂存在浏览器内存，停止时下载 BIN'
   if (d === 'bcigo') return `采集中：强脑 EEG ${dest}。`
   if (d === 'neuracle') return `采集中：博睿康转发数据 ${dest}。`
   return `采集中：原始 48 字节帧 ${dest}。`
@@ -168,12 +171,15 @@ function neuracleWsUrl(): string {
 }
 
 function bcigoWsUrl(): string {
+  // Local dev: talk to the bridge directly. The Vite WS proxy back-pressures
+  // 1-sample frames down to ~100 Hz (and has thrown EPIPE).
   if (typeof window === 'undefined') return 'ws://127.0.0.1:8767/v1/stream'
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  if (window.location.port && window.location.port !== '8767') {
-    return `${proto}//${window.location.host}/ws/bcigo`
+  const host = window.location.hostname
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return 'ws://127.0.0.1:8767/v1/stream'
   }
-  return 'ws://127.0.0.1:8767/v1/stream'
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${window.location.host}/ws/bcigo`
 }
 
 function deviceDetail(d: DeviceKind, supported: boolean): string {
@@ -418,6 +424,11 @@ export function AcquisitionDebugPage() {
         }
       }
       noteLiveSamples(frames.length)
+      sampleClock.noteBatch({
+        samples: frames.length,
+        sampleRate: FS,
+        arrivalNowMs: performance.now(),
+      })
 
       const now = performance.now()
       rateWinRef.current.n += frames.length
@@ -518,16 +529,21 @@ export function AcquisitionDebugPage() {
   useEffect(() => {
     const paint = () => {
       const live = status === 'streaming' || status === 'demo'
-      const clockMs = live ? liveClockLagMs() : 0
+      const deviceDelay = sampleClock.hasDeviceTime ? sampleClock.pipelineDelayMs() : null
+      const clockMs = live ? (deviceDelay ?? liveClockLagMs()) : 0
       const backlogSec = live ? liveLagSec() : 0
       const warn = live ? lagWarnLevel(clockMs, backlogSec) : 0
       const valueEl = lagValueRef.current
       if (valueEl) {
-        valueEl.textContent = live ? formatLagMs(clockMs) : '—'
+        valueEl.textContent = live
+          ? `${formatLagMs(clockMs)}${deviceDelay != null ? ' · 设备钟' : ''}`
+          : '—'
         valueEl.parentElement?.setAttribute('data-warn', String(warn))
         const tip = live
-          ? `当前超期 ${formatLagMs(clockMs)} · 距上一包 ${formatLagMs(liveSinceBatchMs())} · 抖动 ${formatLagMs(liveJitterMs())} · 处理积压 ${backlogSec.toFixed(2)} s`
-          : '开始采集后显示相对应到节拍的瞬时延迟（不累加）'
+          ? deviceDelay != null
+            ? `设备钟映射后的队列延迟 ${formatLagMs(deviceDelay)}（不含固定传输时延） · 距上一包 ${formatLagMs(liveSinceBatchMs())} · 样本 #${sampleClock.snapshot()?.sampleIndex ?? 0}`
+            : `当前超期 ${formatLagMs(clockMs)} · 距上一包 ${formatLagMs(liveSinceBatchMs())} · 抖动 ${formatLagMs(liveJitterMs())} · 处理积压 ${backlogSec.toFixed(2)} s`
+          : '开始采集后显示瞬时延迟；博睿康会用设备钟映射'
         valueEl.parentElement?.setAttribute('title', tip)
       }
       const backlogEl = backlogValueRef.current
@@ -879,7 +895,6 @@ export function AcquisitionDebugPage() {
       const filtered = filterRef.current.processSample(uv, true)
       pushFrame(uv, filtered)
     }
-    noteLiveSamples(batch.samples)
     const now = performance.now()
     rateWinRef.current.n += batch.samples
     const elapsed = (now - rateWinRef.current.t0) / 1000
@@ -1217,6 +1232,11 @@ export function AcquisitionDebugPage() {
           pushFrame(uv, filterRef.current.processSample(uv, true))
         }
         noteLiveSamples(batch)
+        sampleClock.noteBatch({
+          samples: batch,
+          sampleRate: FS,
+          arrivalNowMs: performance.now(),
+        })
         phase += batch
         samples += batch
         lastSeqRef.current = samples - 1

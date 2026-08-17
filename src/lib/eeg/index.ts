@@ -3,3 +3,5 @@ export type { LiveEegDevice, LiveEegLink, LiveEegMeta, LiveEegRing } from './liv
 export { useLiveEeg } from './useLiveEeg'
 export type { LiveEegView } from './useLiveEeg'
 export { LiveEegBadge } from './LiveEegBadge'
+export { sampleClock, SampleClock } from './sampleClock'
+export type { SampleClockSnapshot, SampleClockDump } from './sampleClock'

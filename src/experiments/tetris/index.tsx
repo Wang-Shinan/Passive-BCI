@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { SessionLogger } from '../../lib/logger'
+import { sessionHub } from '../../lib/session/sessionHub'
 import { mulberry32 } from '../../lib/rng'
 import { ManualSignalSource } from '../../lib/signal/manual'
 import { ExportButtons } from '../../lib/ui/ExportButtons'
@@ -9,6 +10,7 @@ import { ColumnResizer } from '../../lib/ui/ColumnResizer'
 import { Panel } from '../../lib/ui/Panel'
 import { Slider } from '../../lib/ui/Slider'
 import { BOARD_DEFAULT_CELL, Board, NextPreview, useBoardCell } from './Board'
+import { tetrisContextSnapshot, type TetrisControlSource } from './boardFeatures'
 import {
   COLS,
   advanceBoardAnim,
@@ -81,6 +83,7 @@ interface TracePoint {
 export function TetrisExperiment() {
   const [subjectId, setSubjectId] = useState('S01')
   const [seed] = useState(() => (Math.random() * 0xffffffff) >>> 0)
+  const seedRef = useRef(seed)
   const rngRef = useRef(mulberry32(seed))
   const [state, setState] = useState<GameState>(() => createGame(seed))
   const {
@@ -135,6 +138,7 @@ export function TetrisExperiment() {
   const cfgRef = useRef(cfg)
   const softDropHeldRef = useRef(false)
   const traceAccRef = useRef(0)
+  const controlRef = useRef<TetrisControlSource>('human')
 
   const [boardCell, setBoardCell] = useBoardCell()
   const [rightCol, setRightCol] = useState(loadRightCol)
@@ -187,7 +191,23 @@ export function TetrisExperiment() {
   }, [cascadeFlash])
 
   useEffect(() => {
+    void sessionHub.refreshFromServer()
+    const id = window.setInterval(() => void sessionHub.refreshFromServer(), 2000)
+    loggerRef.current.log('session_bind', {
+      seed: seedRef.current,
+      subjectId: loggerRef.current.meta.subjectId,
+    })
+    return () => window.clearInterval(id)
+  }, [])
+
+  useEffect(() => {
     loggerRef.current.setSubjectId(subjectId)
+    sessionHub.bindMeta({
+      experiment: 'tetris',
+      subjectId,
+      game: 'tetris',
+      seed: seedRef.current,
+    })
   }, [subjectId])
 
   useEffect(() => {
@@ -197,7 +217,6 @@ export function TetrisExperiment() {
   useEffect(() => {
     stressRef.current = stress
     signalRef.current.push(stress)
-    loggerRef.current.log('stress', { value: stress, origin: mode })
   }, [stress, mode])
 
   useEffect(() => {
@@ -221,6 +240,11 @@ export function TetrisExperiment() {
       setRlLatencyMs(null)
     }
   }, [rlEnabled])
+
+  useEffect(() => {
+    controlRef.current =
+      rlEnabled && rlAgentRef.current.loaded ? 'rl' : miControlEnabled ? 'mi' : 'human'
+  }, [rlEnabled, miControlEnabled, rlMetadata])
 
   const loadRlModel = useCallback(async () => {
     setRlLoading(true)
@@ -280,8 +304,9 @@ export function TetrisExperiment() {
     )
     lastMiObservationRef.current = prediction.observation_id
 
-    loggerRef.current.log('mi_control', {
-      action: action ?? 'unknown',
+    loggerRef.current.log('action', {
+      source: 'mi',
+      action: action === 'rotate' ? 'rotateCW' : (action ?? 'unknown'),
       class_name: prediction.class_name,
       observation_id: prediction.observation_id,
       confidence: prediction.confidence,
@@ -316,7 +341,8 @@ export function TetrisExperiment() {
         instantAnim: false,
       })
       applyResult(stepped.state, stepped.events)
-      loggerRef.current.log('rl_control', {
+      loggerRef.current.log('action', {
+        source: 'rl',
         action: result.actionName,
         action_index: result.actionIndex,
         latency_ms: result.latencyMs,
@@ -358,6 +384,16 @@ export function TetrisExperiment() {
           ]
           return next.length > 300 ? next.slice(-300) : next
         })
+        loggerRef.current.logContext(
+          tetrisContextSnapshot({
+            state: stateRef.current,
+            gravity: gState.smoothed,
+            gravityMode: cfgRef.current.mode,
+            stress: stressRef.current,
+            softDrop: softDropHeldRef.current,
+            control: controlRef.current,
+          }),
+        )
       }
 
       const s = stateRef.current
@@ -413,6 +449,7 @@ export function TetrisExperiment() {
         setState((prev) => {
           const next = { ...prev, paused: !prev.paused }
           stateRef.current = next
+          loggerRef.current.log('pause', { paused: next.paused })
           return next
         })
         return
@@ -423,19 +460,34 @@ export function TetrisExperiment() {
       }
       if (rlEnabled) return
       if (e.key === 'ArrowDown') {
+        if (!softDropHeldRef.current) {
+          loggerRef.current.log('action', { source: 'keyboard', action: 'softDrop' })
+        }
         softDropHeldRef.current = true
         return
       }
       if (s.gameOver || s.paused || s.anim) return
 
       let result
-      if (e.key === 'ArrowLeft') result = move(s, -1, rngRef.current)
-      else if (e.key === 'ArrowRight') result = move(s, 1, rngRef.current)
-      else if (e.key === 'ArrowUp' || e.key === 'x' || e.key === 'X') result = rotate(s, 1, rngRef.current)
-      else if (e.key === 'z' || e.key === 'Z') result = rotate(s, -1, rngRef.current)
-      else if (e.key === ' ') result = hardDrop(s, rngRef.current)
-      else return
+      let action: string | null = null
+      if (e.key === 'ArrowLeft') {
+        action = 'left'
+        result = move(s, -1, rngRef.current)
+      } else if (e.key === 'ArrowRight') {
+        action = 'right'
+        result = move(s, 1, rngRef.current)
+      } else if (e.key === 'ArrowUp' || e.key === 'x' || e.key === 'X') {
+        action = 'rotateCW'
+        result = rotate(s, 1, rngRef.current)
+      } else if (e.key === 'z' || e.key === 'Z') {
+        action = 'rotateCCW'
+        result = rotate(s, -1, rngRef.current)
+      } else if (e.key === ' ') {
+        action = 'hardDrop'
+        result = hardDrop(s, rngRef.current)
+      } else return
 
+      loggerRef.current.log('action', { source: 'keyboard', action })
       applyResult(result.state, result.events)
     }
 
@@ -453,6 +505,7 @@ export function TetrisExperiment() {
 
   const restart = () => {
     const nextSeed = (Math.random() * 0xffffffff) >>> 0
+    seedRef.current = nextSeed
     rngRef.current = mulberry32(nextSeed)
     const g = createGame(nextSeed)
     stateRef.current = g
@@ -467,6 +520,12 @@ export function TetrisExperiment() {
       rlAutoRestartRef.current = null
     }
     setTrace([])
+    sessionHub.bindMeta({
+      experiment: 'tetris',
+      subjectId: loggerRef.current.meta.subjectId,
+      game: 'tetris',
+      seed: nextSeed,
+    })
     loggerRef.current.log('restart', { seed: nextSeed })
   }
 
@@ -532,6 +591,7 @@ export function TetrisExperiment() {
                     setState((s) => {
                       const next = { ...s, paused: !s.paused }
                       stateRef.current = next
+                      loggerRef.current.log('pause', { paused: next.paused })
                       return next
                     })
                   }

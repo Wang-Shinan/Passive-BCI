@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import queue
 import threading
 import time
 from collections import deque
@@ -35,6 +36,30 @@ DEFAULT_WS_HOST = "127.0.0.1"
 DEFAULT_WS_PORT = 8767
 DEFAULT_N_CHANNELS = 32
 DEFAULT_SAMPLE_RATE = 250
+# Idle wait only — never sit in websocket.recv() before draining EEG.
+# The old 20 ms recv timeout capped the loop at ~50 Hz when the SDK
+# yielded ~1 sample per poll (UI rate ~41 Hz, packets ≈ samples).
+IDLE_POLL_S = 0.002
+IMPEDANCE_POLL_S = 0.05
+# Keep get_eeg_buffer working: set_cfg(50) as "callback batch" starved the
+# poller (native never accumulated 50 rows, buffer stayed empty). 4096 was
+# the last value that still returned last_n=4.
+EEG_BUFFER_LEN = 4096
+IMU_CALLBACK_BATCH = 20
+IMP_WINDOW_LEN = 256
+EEG_BUFFER_TAKE = 16
+POLL_PERIOD_S = 0.04
+POLL_IDLE_S = 0.001
+_SAMPLE_ATTRS = (
+    "sample1",
+    "sample2",
+    "sample3",
+    "sample4",
+    "sample_1",
+    "sample_2",
+    "sample_3",
+    "sample_4",
+)
 
 # Official 10–20 layout from bcigo-sdk docs (32 ch, last is reference).
 BCIGO_CHANNEL_NAMES: tuple[str, ...] = (
@@ -128,10 +153,53 @@ def _strip_index_column(arr: np.ndarray, n_channels: int) -> np.ndarray:
     return arr
 
 
+def _packed_sample_rows(raw: Any) -> list[Any] | None:
+    """EegData proto carries sample1..sample4 in one Wi‑Fi packet."""
+    if raw is None or isinstance(raw, (list, tuple, np.ndarray, str, bytes)):
+        return None
+    rows: list[Any] = []
+    if isinstance(raw, dict):
+        for name in _SAMPLE_ATTRS:
+            if name in raw and raw[name] is not None:
+                rows.append(raw[name])
+        return rows or None
+    for name in _SAMPLE_ATTRS:
+        if hasattr(raw, name):
+            val = getattr(raw, name)
+            if val is not None:
+                rows.append(val)
+    return rows or None
+
+
+def _index_col(raw: Any, n_channels: int) -> np.ndarray | None:
+    try:
+        arr = np.asarray(raw, dtype=np.float32)
+    except (TypeError, ValueError):
+        return None
+    if arr.size == 0:
+        return None
+    width = n_channels + 1
+    if arr.ndim == 1 and width and arr.size % width == 0:
+        arr = arr.reshape(-1, width)
+    if arr.ndim == 2 and n_channels > 0 and arr.shape[1] == width:
+        return arr[:, 0].astype(np.int64, copy=False)
+    return None
+
+
+def _read_sdk_eeg_buffer(sdk: Any) -> Any:
+    try:
+        return sdk.get_eeg_buffer(EEG_BUFFER_TAKE, True)
+    except TypeError:
+        return sdk.get_eeg_buffer(True, True)
+
+
 def _coerce_eeg_raw(raw: Any) -> Any:
     """SDK callback may deliver dict / nested list; flatten to array-like."""
     if raw is None:
         return None
+    packed = _packed_sample_rows(raw)
+    if packed is not None:
+        raw = packed
     if isinstance(raw, dict):
         for key in ("data", "eeg", "values", "samples", "payload", "buffer"):
             if key in raw:
@@ -230,26 +298,129 @@ class BciGoSession:
         self._sdk: Any = None
         self._client: Any = None
         self._lock = threading.Lock()
-        self._queue: deque[np.ndarray] = deque(maxlen=256)
+        # ~32 s @ 250 Hz × 1-sample callbacks. maxlen=256 used to drop on lag.
+        self._queue: deque[Any] = deque(maxlen=8192)
         self._packet_count = 0
         self._started = False
         self._impedance_mode = False
         self._imp_latest: np.ndarray | None = None
         self._imp_packet = 0
+        self._tick = threading.Event()
+        self._poll_stop = threading.Event()
+        self._poll_thread: threading.Thread | None = None
+        self._out_q: queue.SimpleQueue[np.ndarray] = queue.SimpleQueue()
+        self._cb_q: queue.SimpleQueue[Any] = queue.SimpleQueue()
+        self._cb_n = 0
+        self._cb_total = 0
+        self._cb_samples = 0
+        self._buf_samples = 0
+        self._out_n = 0
+        self._out_batches = 0
+        self._out_t0 = time.monotonic()
+        self._idx_last: int | None = None
+        self._idx_gaps = 0
+        self._raw_n = 0
+        self._cb_keep: list[Any] = []
         self.resolved_host = ""
         self.resolved_port = 0
 
-    def _on_eeg(self, data: Any) -> None:
+    def _wake(self) -> None:
+        self._tick.set()
+
+    def _drain_out_q(self) -> None:
         try:
-            batch = normalize_eeg_batch(data, self.n_channels)
-            if batch is None:
-                return
-            with self._lock:
-                self._queue.append(batch)
-                self._packet_count += 1
+            while True:
+                self._out_q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            while True:
+                self._cb_q.get_nowait()
+        except queue.Empty:
+            pass
+
+    def _ingest_raw(self, raw: Any, *, from_callback: bool = False) -> bool:
+        idx = _index_col(raw, self.n_channels)
+        batch = normalize_eeg_batch(raw, self.n_channels)
+        if batch is None:
+            return False
+        with self._lock:
+            if idx is not None and idx.size:
+                first = int(idx[0])
+                if self._idx_last is not None and first <= self._idx_last:
+                    return False
+                for iv in idx.tolist():
+                    iv = int(iv)
+                    if self._idx_last is not None and iv - self._idx_last > 1:
+                        self._idx_gaps += iv - self._idx_last - 1
+                    self._idx_last = iv
+            self._packet_count += 1
+            if from_callback:
+                self._cb_samples += int(batch.shape[0])
+            else:
+                self._buf_samples += int(batch.shape[0])
+        self._out_q.put(batch)
+        self._wake()
+        return True
+
+    def _on_eeg(self, data: Any) -> None:
+        # Keep this tiny: official SDK drops samples if the Python callback lags.
+        try:
+            self._cb_n += 1
+            self._cb_total += 1
+            self._cb_q.put(data)
+            self._wake()
         except Exception:
-            # Never raise into the SDK thread — that can stall the stream.
             return
+
+    def _start_poller(self) -> None:
+        if self._poll_thread is not None and self._poll_thread.is_alive():
+            return
+        self._poll_stop.clear()
+        self._poll_thread = threading.Thread(
+            target=self._poll_loop,
+            name="bcigo-eeg-poll",
+            daemon=True,
+        )
+        self._poll_thread.start()
+
+    def _stop_poller(self) -> None:
+        self._poll_stop.set()
+        thread = self._poll_thread
+        self._poll_thread = None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+
+    def _poll_loop(self) -> None:
+        """Drain callbacks if they fire; always poll get_eeg_buffer as well."""
+        next_t = time.monotonic()
+        while not self._poll_stop.is_set():
+            if self._impedance_mode:
+                time.sleep(0.01)
+                next_t = time.monotonic()
+                continue
+            now = time.monotonic()
+            delay = next_t - now
+            if delay > 0:
+                if self._poll_stop.wait(timeout=delay):
+                    break
+            next_t += POLL_PERIOD_S
+            if next_t < time.monotonic() - POLL_PERIOD_S:
+                next_t = time.monotonic() + POLL_PERIOD_S
+            try:
+                while True:
+                    self._ingest_raw(self._cb_q.get_nowait(), from_callback=True)
+            except queue.Empty:
+                pass
+            sdk = self._sdk
+            if sdk is None:
+                continue
+            try:
+                buf = _read_sdk_eeg_buffer(sdk)
+            except Exception:
+                buf = None
+            if buf is not None:
+                self._ingest_raw(buf, from_callback=False)
 
     def _on_imp(self, data: Any) -> None:
         try:
@@ -259,17 +430,50 @@ class BciGoSession:
             with self._lock:
                 self._imp_latest = arr
                 self._imp_packet += 1
+            self._wake()
         except Exception:
             return
+
+    def _on_raw(self, *_args: Any, **_kwargs: Any) -> None:
+        self._raw_n += 1
 
     async def start(self) -> dict:
         import bcigo_sdk as sdk
 
         self._sdk = sdk
-        sdk.clear_eeg_buffer()
-        sdk.set_eeg_data_callback(self._on_eeg)
         try:
-            sdk.set_imp_data_callback(self._on_imp)
+            sdk.set_cfg(EEG_BUFFER_LEN, IMU_CALLBACK_BATCH, IMP_WINDOW_LEN)
+        except Exception:
+            pass
+        # Official example registers a free function before TCP connect.
+        # Bound methods have been silent (cb=0) on this 1.0.0 wheel.
+        session = self
+
+        def on_eeg(data: Any) -> None:
+            session._on_eeg(data)
+
+        def on_imp(data: Any) -> None:
+            session._on_imp(data)
+
+        def on_raw(*args: Any, **kwargs: Any) -> None:
+            session._on_raw(*args, **kwargs)
+
+        self._cb_keep = [on_eeg, on_imp, on_raw]
+        sdk.set_eeg_data_callback(on_eeg)
+        try:
+            sdk.set_imp_data_callback(on_imp)
+        except Exception:
+            pass
+        try:
+            sdk.set_received_data_callback(on_raw)
+        except Exception:
+            pass
+        print(
+            f"[bcigo-bridge] set_cfg(eeg={EEG_BUFFER_LEN}) callback-before-stream",
+            flush=True,
+        )
+        try:
+            sdk.clear_eeg_buffer()
         except Exception:
             pass
 
@@ -312,6 +516,7 @@ class BciGoSession:
                 "请关闭强脑官方 App，并确认没有其它桥接占用设备后重试。"
             ) from exc
         self._started = True
+        self._start_poller()
 
         # Peek once for data_ready — do NOT block hello on first samples.
         saw = False
@@ -353,6 +558,7 @@ class BciGoSession:
         with self._lock:
             self._queue.clear()
             self._imp_latest = None
+        self._drain_out_q()
         try:
             sdk.clear_imp_eeg_buffers()
         except Exception:
@@ -383,6 +589,7 @@ class BciGoSession:
         self._impedance_mode = False
         with self._lock:
             self._queue.clear()
+        self._drain_out_q()
         return {
             "type": "impedance_status",
             "active": False,
@@ -411,28 +618,57 @@ class BciGoSession:
     def poll_batch(self) -> tuple[np.ndarray, dict] | None:
         if self._impedance_mode:
             return None
-        sdk = self._sdk
         chunks: list[np.ndarray] = []
 
         with self._lock:
-            while self._queue:
-                chunks.append(self._queue.popleft())
-
-        if sdk is not None:
-            try:
-                buf = sdk.get_eeg_buffer(True, True)
-            except Exception:
-                buf = None
-            batch = normalize_eeg_batch(buf, self.n_channels)
+            pending = list(self._queue)
+            self._queue.clear()
+        for raw in pending:
+            batch = normalize_eeg_batch(raw, self.n_channels)
             if batch is not None:
                 chunks.append(batch)
-                with self._lock:
-                    self._packet_count += 1
+
+        try:
+            while True:
+                chunks.append(self._out_q.get_nowait())
+        except queue.Empty:
+            pass
 
         if not chunks:
             return None
 
         wire = np.ascontiguousarray(np.concatenate(chunks, axis=0), dtype=np.float32)
+        n = int(wire.shape[0])
+        self._out_n += n
+        self._out_batches += 1
+        now = time.monotonic()
+        elapsed = now - self._out_t0
+        if elapsed >= 1.0:
+            with self._lock:
+                gaps = self._idx_gaps
+                idx_last = self._idx_last
+                self._idx_gaps = 0
+            raw_n = self._raw_n
+            cb_n = self._cb_n
+            cb_samp = self._cb_samples
+            buf_samp = self._buf_samples
+            path = "cb" if cb_samp else "buf"
+            self._raw_n = 0
+            self._cb_n = 0
+            self._cb_samples = 0
+            self._buf_samples = 0
+            print(
+                f"[bcigo-bridge] out {self._out_n / elapsed:.1f} Hz  "
+                f"path={path}  batches={self._out_batches}  last_n={n}  "
+                f"idx_gaps={gaps}  idx_last={idx_last}  "
+                f"cb_calls={cb_n / elapsed:.1f}/s  cb_samp={cb_samp / elapsed:.1f} Hz  "
+                f"buf_samp={buf_samp / elapsed:.1f} Hz  raw={raw_n / elapsed:.1f} Hz",
+                flush=True,
+            )
+            self._out_n = 0
+            self._out_batches = 0
+            self._out_t0 = now
+
         # Hot-fix channel count if SDK reports a different width
         if wire.shape[1] != self.n_channels and wire.shape[1] > 0:
             self.n_channels = int(wire.shape[1])
@@ -458,6 +694,7 @@ class BciGoSession:
         return wire, meta
 
     async def stop(self) -> None:
+        self._stop_poller()
         sdk = self._sdk
         client = self._client
         try:
@@ -474,6 +711,10 @@ class BciGoSession:
                     pass
                 try:
                     sdk.set_imp_data_callback(None)
+                except Exception:
+                    pass
+                try:
+                    sdk.set_received_data_callback(None)
                 except Exception:
                     pass
                 try:
@@ -509,6 +750,43 @@ async def _release_active_session() -> None:
             await prev.stop()
         except Exception:
             pass
+
+
+async def _dispatch_command(session: BciGoSession, websocket: Any, cmd_raw: Any) -> None:
+    if not isinstance(cmd_raw, str):
+        return
+    try:
+        cmd = json.loads(cmd_raw)
+    except Exception:
+        return
+    if not isinstance(cmd, dict):
+        return
+    ctype = str(cmd.get("type") or "")
+    try:
+        if ctype == "impedance_start":
+            status = await session.start_impedance()
+            await websocket.send(json.dumps(status, separators=(",", ":")))
+        elif ctype == "impedance_stop":
+            status = await session.stop_impedance()
+            await websocket.send(json.dumps(status, separators=(",", ":")))
+        elif ctype == "ping":
+            await websocket.send(json.dumps({"type": "pong"}, separators=(",", ":")))
+    except Exception as exc:
+        await websocket.send(json.dumps({"type": "error", "message": str(exc)}, separators=(",", ":")))
+
+
+async def _wait_wakeup(
+    cmd_task: asyncio.Task[Any],
+    tick: threading.Event,
+    timeout: float,
+) -> None:
+    if tick.is_set():
+        tick.clear()
+        return
+    if cmd_task.done() or timeout <= 0:
+        return
+    await asyncio.wait({cmd_task}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    tick.clear()
 
 
 async def handle_client(websocket) -> None:  # type: ignore[no-untyped-def]
@@ -578,61 +856,52 @@ async def handle_client(websocket) -> None:  # type: ignore[no-untyped-def]
                 )
             )
 
+        cmd_task: asyncio.Task[Any] = asyncio.create_task(websocket.recv())
         idle_since = time.monotonic()
-        while True:
-            # Non-blocking command poll
-            try:
-                cmd_raw = await asyncio.wait_for(websocket.recv(), timeout=0.02)
-            except asyncio.TimeoutError:
-                cmd_raw = None
-            except Exception:
-                break
-
-            if isinstance(cmd_raw, str):
-                try:
-                    cmd = json.loads(cmd_raw)
-                except Exception:
-                    cmd = None
-                if isinstance(cmd, dict):
-                    ctype = str(cmd.get("type") or "")
+        last_wait_log = idle_since
+        try:
+            while True:
+                if cmd_task.done():
                     try:
-                        if ctype == "impedance_start":
-                            status = await session.start_impedance()
-                            await websocket.send(json.dumps(status, separators=(",", ":")))
-                        elif ctype == "impedance_stop":
-                            status = await session.stop_impedance()
-                            await websocket.send(json.dumps(status, separators=(",", ":")))
-                        elif ctype == "ping":
-                            await websocket.send(json.dumps({"type": "pong"}, separators=(",", ":")))
-                    except Exception as exc:
+                        cmd_raw = cmd_task.result()
+                    except Exception:
+                        break
+                    await _dispatch_command(session, websocket, cmd_raw)
+                    cmd_task = asyncio.create_task(websocket.recv())
+
+                if session._impedance_mode:  # noqa: SLF001 — bridge-local
+                    imp = session.poll_impedance()
+                    if imp is not None:
+                        await websocket.send(json.dumps(imp, separators=(",", ":")))
+                        idle_since = time.monotonic()
+                    elif time.monotonic() - idle_since > 8:
                         await websocket.send(
                             json.dumps(
-                                {"type": "error", "message": str(exc)},
+                                {
+                                    "type": "status",
+                                    "message": "阻抗模式中，等待 Lead-Off 回调…",
+                                },
                                 separators=(",", ":"),
                             )
                         )
+                        idle_since = time.monotonic()
+                    await _wait_wakeup(cmd_task, session._tick, IMPEDANCE_POLL_S)
+                    continue
 
-            if session._impedance_mode:  # noqa: SLF001 — bridge-local
-                imp = session.poll_impedance()
-                if imp is not None:
-                    await websocket.send(json.dumps(imp, separators=(",", ":")))
+                batch = session.poll_batch()
+                if batch is not None:
                     idle_since = time.monotonic()
-                elif time.monotonic() - idle_since > 8:
-                    await websocket.send(
-                        json.dumps(
-                            {
-                                "type": "status",
-                                "message": "阻抗模式中，等待 Lead-Off 回调…",
-                            },
-                            separators=(",", ":"),
-                        )
-                    )
-                    idle_since = time.monotonic()
-                continue
+                    last_wait_log = idle_since
+                    wire, header = batch
+                    await websocket.send(json.dumps(header, separators=(",", ":")))
+                    await websocket.send(wire.tobytes())
+                    continue
 
-            batch = session.poll_batch()
-            if batch is None:
-                if time.monotonic() - idle_since > 30:
+                now = time.monotonic()
+                if now - last_wait_log > 3:
+                    print("[bcigo-bridge] waiting for EEG samples…", flush=True)
+                    last_wait_log = now
+                if now - idle_since > 30:
                     await websocket.send(
                         json.dumps(
                             {
@@ -642,12 +911,16 @@ async def handle_client(websocket) -> None:  # type: ignore[no-untyped-def]
                             separators=(",", ":"),
                         )
                     )
-                    idle_since = time.monotonic()
-                continue
-            idle_since = time.monotonic()
-            wire, header = batch
-            await websocket.send(json.dumps(header, separators=(",", ":")))
-            await websocket.send(wire.tobytes())
+                    idle_since = now
+                    last_wait_log = now
+                await _wait_wakeup(cmd_task, session._tick, IDLE_POLL_S)
+        finally:
+            if not cmd_task.done():
+                cmd_task.cancel()
+                try:
+                    await cmd_task
+                except (asyncio.CancelledError, Exception):
+                    pass
     except Exception as exc:
         try:
             await websocket.send(
@@ -666,7 +939,13 @@ async def handle_client(websocket) -> None:  # type: ignore[no-untyped-def]
 async def main_async(ws_host: str, ws_port: int) -> None:
     from websockets.asyncio.server import serve
 
-    async with serve(handle_client, ws_host, ws_port, max_size=16 * 1024 * 1024):
+    async with serve(
+        handle_client,
+        ws_host,
+        ws_port,
+        max_size=16 * 1024 * 1024,
+        origins=None,
+    ):
         print(f"[bcigo-bridge] ws://{ws_host}:{ws_port}/v1/stream")
         print("[bcigo-bridge] waiting for browser subscribe…")
         print("[bcigo-bridge] tip: pip install 'bcigo-sdk' websockets numpy")

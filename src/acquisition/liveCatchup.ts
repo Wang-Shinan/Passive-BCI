@@ -7,6 +7,8 @@
  * clock difference (that would accumulate fs error).
  */
 
+import { sampleClock } from '../lib/eeg/sampleClock'
+
 export const LIVE_CATCHUP_THRESHOLD_S = 0.2
 export const LIVE_LAG_WARN_MS = 80
 export const LIVE_LAG_BAD_MS = LIVE_CATCHUP_THRESHOLD_S * 1000
@@ -86,7 +88,11 @@ export function liveJitterMs(): number {
 }
 
 export function isCatchingUp(): boolean {
-  return liveLagSec() > LIVE_CATCHUP_THRESHOLD_S || liveClockLagMs() > LIVE_LAG_BAD_MS
+  return (
+    liveLagSec() > LIVE_CATCHUP_THRESHOLD_S ||
+    liveClockLagMs() > LIVE_LAG_BAD_MS ||
+    sampleClock.pipelineDelayMs() > LIVE_LAG_BAD_MS
+  )
 }
 
 export function lagWarnLevel(clockMs: number, backlogSec: number): 0 | 1 | 2 {
@@ -109,4 +115,5 @@ export function resetCatchup(): void {
   lastExpectedMs = 0
   lastExtraMs = 0
   jitterEwma = 0
+  sampleClock.reset()
 }

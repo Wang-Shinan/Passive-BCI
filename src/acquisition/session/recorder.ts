@@ -1,3 +1,6 @@
+import { sampleClock, type SampleClockDump } from '../../lib/eeg/sampleClock'
+import { sessionHub } from '../../lib/session/sessionHub'
+
 /** Stream EEG to disk (Vite /api/record) or coalesced memory as fallback. */
 
 export const RECORD_FLUSH_BYTES = 256 * 1024
@@ -26,10 +29,14 @@ export interface RecordStopResult {
   rel?: string
 }
 
+export interface RecordFinishExtra {
+  clock?: SampleClockDump
+}
+
 export interface RecordSink {
   kind: RecordSinkKind
   write(chunk: Uint8Array): Promise<void>
-  finish(): Promise<{ name: string; path?: string; rel?: string }>
+  finish(extra?: RecordFinishExtra): Promise<{ name: string; path?: string; rel?: string }>
   abort(): Promise<void>
 }
 
@@ -79,9 +86,15 @@ class MemorySink implements RecordSink {
     this.chunks.push(chunk)
   }
 
-  async finish(): Promise<{ name: string }> {
+  async finish(extra?: RecordFinishExtra): Promise<{ name: string }> {
     if (this.chunks.length) {
       triggerDownload(new Blob(this.chunks as BlobPart[], { type: 'application/octet-stream' }), this.filename)
+    }
+    if (extra?.clock && extra.clock.sampleIndex > 0) {
+      triggerDownload(
+        new Blob([`${JSON.stringify(extra.clock)}\n`], { type: 'application/json' }),
+        this.filename.replace(/\.bin$/i, '.idx.json'),
+      )
     }
     this.chunks = []
     return { name: this.filename }
@@ -119,10 +132,14 @@ class DiskSink implements RecordSink {
         id?: string
         filename?: string
         path?: string
+        dir?: string
         rel?: string
       }
-      if (!body.ok || !body.id || !body.path || !body.rel) return null
-      return new DiskSink(body.id, body.filename || filename, body.path, body.rel)
+      if (!body.ok || !body.id || !body.rel) return null
+      const path = body.dir || body.path
+      if (!path) return null
+      sessionHub.attach({ id: body.id, rel: body.rel })
+      return new DiskSink(body.id, body.filename || filename, path, body.rel)
     } catch {
       return null
     }
@@ -139,18 +156,31 @@ class DiskSink implements RecordSink {
     if (!res.ok) throw new Error(`record chunk failed (${res.status})`)
   }
 
-  async finish(): Promise<{ name: string; path?: string; rel?: string }> {
-    const res = await fetch(`/api/record/${this.id}/finish`, { method: 'POST' })
+  async finish(extra?: RecordFinishExtra): Promise<{ name: string; path?: string; rel?: string }> {
+    if (sessionHub.info.id === this.id) {
+      await sessionHub.flush()
+      sessionHub.detach()
+    }
+    const res = await fetch(`/api/record/${this.id}/finish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(extra ?? {}),
+    })
     if (!res.ok) throw new Error(`record finish failed (${res.status})`)
-    const body = (await res.json()) as { path?: string | null; rel?: string | null }
+    const body = (await res.json()) as {
+      path?: string | null
+      dir?: string | null
+      rel?: string | null
+    }
     return {
       name: this.filename,
-      path: body.path || this.path,
+      path: body.dir || body.path || this.path,
       rel: body.rel || this.rel,
     }
   }
 
   async abort(): Promise<void> {
+    if (sessionHub.info.id === this.id) sessionHub.discardAndDetach()
     try {
       await fetch(`/api/record/${this.id}/abort`, { method: 'POST' })
     } catch {
@@ -253,7 +283,8 @@ export class BinRecorder {
       return null
     }
     try {
-      const done = await sink?.finish()
+      const clock = sampleClock.dump()
+      const done = await sink?.finish(clock.sampleIndex > 0 ? { clock } : undefined)
       return {
         bytes,
         name: done?.name ?? name,
