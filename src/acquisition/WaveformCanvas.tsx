@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react'
 import {
-  LIVE_CATCHUP_THRESHOLD_S,
   PLOT_INTERVAL_MS,
+  formatLagMs,
+  isCatchingUp,
+  liveClockLagMs,
   liveLagSec,
 } from './liveCatchup'
 
@@ -235,12 +237,16 @@ export function WaveformCanvas({
       ctx.fillText(`±${p.yScaleUv} μV · ${p.windowSec.toFixed(1)}s`, labelW + 8, 14)
 
       const lag = liveLagSec()
-      if (lag > LIVE_CATCHUP_THRESHOLD_S) {
+      if (isCatchingUp()) {
         ctx.fillStyle = omni ? '#fff4ed' : '#1a2438'
-        ctx.fillRect(8, 4, 280, 18)
+        ctx.fillRect(8, 4, 300, 18)
         ctx.fillStyle = omni ? '#b83c00' : '#f5a524'
         ctx.font = '12px IBM Plex Sans, sans-serif'
-        ctx.fillText(`追帧中：估计积压 ${lag.toFixed(2)} s`, 16, 17)
+        ctx.fillText(
+          `追帧中：延迟 ${formatLagMs(liveClockLagMs())} / 积压 ${lag.toFixed(2)} s`,
+          16,
+          17,
+        )
       }
 
       timer = window.setTimeout(draw, PLOT_INTERVAL_MS)

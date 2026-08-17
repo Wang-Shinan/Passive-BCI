@@ -129,11 +129,12 @@ class DiskSink implements RecordSink {
   }
 
   async write(chunk: Uint8Array): Promise<void> {
-    const copy = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
+    const payload = new Uint8Array(chunk.byteLength)
+    payload.set(chunk)
     const res = await fetch(`/api/record/${this.id}/chunk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
-      body: copy,
+      body: payload.buffer,
     })
     if (!res.ok) throw new Error(`record chunk failed (${res.status})`)
   }
@@ -167,6 +168,7 @@ export class BinRecorder {
   private filename = ''
   private sink: RecordSink | null = null
   private flushChain: Promise<void> = Promise.resolve()
+  private flushQueuedBytes = 0
   private readonly flushBytes: number
   private readonly createSink: CreateRecordSink | undefined
 
@@ -192,11 +194,21 @@ export class BinRecorder {
     return this.sink?.kind ?? null
   }
 
+  /** Bytes not yet acknowledged by the sink (fill buffer + in-flight flushes). */
+  get pendingBytes(): number {
+    return this.pendingLen + this.flushQueuedBytes
+  }
+
+  get inflightBytes(): number {
+    return this.flushQueuedBytes
+  }
+
   async start(opts: RecordStartOptions = { filenamePrefix: 'omni_ads1299' }): Promise<RecordSinkKind> {
     if (this.startedAt !== null) await this.discard()
     this.pending = new Uint8Array(this.flushBytes)
     this.pendingLen = 0
     this.bytes = 0
+    this.flushQueuedBytes = 0
     this.flushChain = Promise.resolve()
     this.startedAt = Date.now()
     this.sessionId = makeSessionId()
@@ -265,24 +277,34 @@ export class BinRecorder {
     const full = this.pending
     this.pending = new Uint8Array(this.flushBytes)
     this.pendingLen = 0
-    const sink = this.sink
-    if (!sink) return
-    this.flushChain = this.flushChain.then(() => sink.write(full))
+    this.queueWrite(full)
   }
 
   private enqueueTail(): void {
     if (this.pendingLen === 0) return
     const tail = this.pending.slice(0, this.pendingLen)
     this.pendingLen = 0
+    this.queueWrite(tail)
+  }
+
+  private queueWrite(chunk: Uint8Array): void {
     const sink = this.sink
     if (!sink) return
-    this.flushChain = this.flushChain.then(() => sink.write(tail))
+    this.flushQueuedBytes += chunk.byteLength
+    this.flushChain = this.flushChain.then(async () => {
+      try {
+        await sink.write(chunk)
+      } finally {
+        this.flushQueuedBytes = Math.max(0, this.flushQueuedBytes - chunk.byteLength)
+      }
+    })
   }
 
   private resetLocal(): void {
     this.startedAt = null
     this.bytes = 0
     this.pendingLen = 0
+    this.flushQueuedBytes = 0
     this.pending = new Uint8Array(this.flushBytes)
     this.sink = null
     this.flushChain = Promise.resolve()

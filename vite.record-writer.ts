@@ -8,12 +8,10 @@
  *   POST /api/record/:id/abort
  */
 
-import type { Plugin } from 'vite'
-import type { Connect } from 'vite'
+import type { Connect, Plugin } from 'vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createWriteStream, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
-import type { WriteStream } from 'node:fs'
+import { createWriteStream, mkdirSync, unlinkSync, writeFileSync, type WriteStream } from 'node:fs'
+import { join } from 'node:path'
 
 const RECORD_DIR = 'recordings'
 const ID_RE = /^[a-zA-Z0-9_-]{8,64}$/
@@ -132,12 +130,7 @@ export function recordWriterPlugin(): Plugin {
           }
           mkdirSync(recordingsDir(), { recursive: true })
           const id = `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-          const dir = resolve(recordingsDir())
-          const binPath = resolve(dir, filename)
-          if (binPath !== join(dir, filename) && !binPath.startsWith(dir + sep)) {
-            sendJson(res, 400, { ok: false, message: '非法文件名' })
-            return
-          }
+          const binPath = join(recordingsDir(), filename)
           const stream = createWriteStream(binPath, { flags: 'w' })
           const session: RecordSession = {
             id,

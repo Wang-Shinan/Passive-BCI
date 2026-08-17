@@ -50,8 +50,14 @@ import {
   waitConfigAck,
 } from './runtime'
 import {
-  LIVE_CATCHUP_THRESHOLD_S,
+  formatLagMs,
+  isCatchingUp,
+  lagWarnLevel,
+  liveClockLagMs,
+  liveJitterMs,
   liveLagSec,
+  liveSinceBatchMs,
+  noteLiveSamples,
   resetCatchup,
   setCatchupClock,
   setFirmwareQueueDepth,
@@ -79,6 +85,7 @@ import { formatRecordBytes, type RecordMeta, type RecordSinkKind } from './sessi
 
 const RING_SECONDS = 12
 const FEATURE_HISTORY = 60
+const LAG_SPARK_BARS = 32
 const CFG_STORAGE_KEY = 'passive-bci.acquisition.channel-config'
 const DEVICE_STORAGE_KEY = 'passive-bci.acquisition.device'
 
@@ -283,9 +290,9 @@ export function AcquisitionDebugPage() {
   )
   const [impedanceRows, setImpedanceRows] = useState<ImpedanceRowState[]>([])
   const [impedanceDetail, setImpedanceDetail] = useState('')
-  const [recording, setRecording] = useState(false)
-  const [recBytes, setRecBytes] = useState(0)
-  const [recSink, setRecSink] = useState<RecordSinkKind | null>(null)
+  const [recording, setRecording] = useState(() => acqRuntime.recorder.recording)
+  const [recBytes, setRecBytes] = useState(() => acqRuntime.recorder.byteLength)
+  const [recSink, setRecSink] = useState<RecordSinkKind | null>(() => acqRuntime.recorder.sinkKind)
   const [featureLatest, setFeatureLatest] = useState<LiveFeatureSnapshot | null>(null)
   const [featureHistory, setFeatureHistory] = useState<LiveFeatureSnapshot[]>([])
   const [enabledFeatures, setEnabledFeatures] = useState<string[]>(() => loadEnabledFeatures())
@@ -321,6 +328,12 @@ export function AcquisitionDebugPage() {
     packetLoss: number
     packetCount: number
   }) => void>(() => {})
+  const lagValueRef = useRef<HTMLElement>(null)
+  const lagSparkRef = useRef<HTMLSpanElement>(null)
+  const recLagRef = useRef<HTMLSpanElement>(null)
+  const backlogValueRef = useRef<HTMLElement>(null)
+  const catchupFlagRef = useRef<HTMLSpanElement>(null)
+  const lagHistRef = useRef<number[]>([])
   const viewFilteredRef = useRef(viewFiltered)
   const eegModeRef = useRef(eegMode)
   viewFilteredRef.current = viewFiltered
@@ -404,6 +417,7 @@ export function AcquisitionDebugPage() {
           recorderRef.current.append(f.raw)
         }
       }
+      noteLiveSamples(frames.length)
 
       const now = performance.now()
       rateWinRef.current.n += frames.length
@@ -498,6 +512,61 @@ export function AcquisitionDebugPage() {
         setRecBytes(recorderRef.current.byteLength)
       }
     }, 250)
+    return () => clearInterval(id)
+  }, [status])
+
+  useEffect(() => {
+    const paint = () => {
+      const live = status === 'streaming' || status === 'demo'
+      const clockMs = live ? liveClockLagMs() : 0
+      const backlogSec = live ? liveLagSec() : 0
+      const warn = live ? lagWarnLevel(clockMs, backlogSec) : 0
+      const valueEl = lagValueRef.current
+      if (valueEl) {
+        valueEl.textContent = live ? formatLagMs(clockMs) : '—'
+        valueEl.parentElement?.setAttribute('data-warn', String(warn))
+        const tip = live
+          ? `当前超期 ${formatLagMs(clockMs)} · 距上一包 ${formatLagMs(liveSinceBatchMs())} · 抖动 ${formatLagMs(liveJitterMs())} · 处理积压 ${backlogSec.toFixed(2)} s`
+          : '开始采集后显示相对应到节拍的瞬时延迟（不累加）'
+        valueEl.parentElement?.setAttribute('title', tip)
+      }
+      const backlogEl = backlogValueRef.current
+      if (backlogEl) {
+        backlogEl.textContent = live && backlogSec > 0.005 ? `${backlogSec.toFixed(2)} s` : '0'
+      }
+      const hist = lagHistRef.current
+      if (live) {
+        hist.push(clockMs)
+        if (hist.length > LAG_SPARK_BARS) hist.splice(0, hist.length - LAG_SPARK_BARS)
+      } else if (hist.length) {
+        hist.length = 0
+      }
+      const spark = lagSparkRef.current
+      if (spark) {
+        const max = 400
+        for (let i = 0; i < spark.children.length; i++) {
+          const bar = spark.children[i] as HTMLElement
+          const v = hist[hist.length - spark.children.length + i] ?? 0
+          bar.style.height = v > 0 ? `${Math.max(12, Math.min(100, (v / max) * 100))}%` : '8%'
+        }
+      }
+      const recEl = recLagRef.current
+      if (recEl) {
+        const queued = recorderRef.current.recording ? recorderRef.current.inflightBytes : 0
+        if (queued > 0) {
+          recEl.hidden = false
+          recEl.textContent = `落盘积压 ${formatRecordBytes(queued)}`
+          recEl.setAttribute('data-warn', queued > 256 * 1024 ? '2' : '1')
+        } else {
+          recEl.hidden = true
+        }
+      }
+      const catchupEl = catchupFlagRef.current
+      if (catchupEl) catchupEl.hidden = !(live && isCatchingUp())
+    }
+    paint()
+    if (status !== 'streaming' && status !== 'demo') return
+    const id = window.setInterval(paint, 100)
     return () => clearInterval(id)
   }, [status])
 
@@ -655,9 +724,10 @@ export function AcquisitionDebugPage() {
       /* ignore */
     }
     if (recorderRef.current.recording) {
-      recorderRef.current.discard()
+      await recorderRef.current.discard()
       setRecording(false)
       setRecBytes(0)
+      setRecSink(null)
     }
     await transportRef.current.close()
     setStatus('idle')
@@ -809,6 +879,7 @@ export function AcquisitionDebugPage() {
       const filtered = filterRef.current.processSample(uv, true)
       pushFrame(uv, filtered)
     }
+    noteLiveSamples(batch.samples)
     const now = performance.now()
     rateWinRef.current.n += batch.samples
     const elapsed = (now - rateWinRef.current.t0) / 1000
@@ -939,6 +1010,50 @@ export function AcquisitionDebugPage() {
     })()
   }
 
+  const currentRecordMeta = (): RecordMeta => {
+    if (isBridgeDevice(device)) {
+      const names = streamLabels.length ? [...streamLabels] : [...CHANNEL_NAMES]
+      return {
+        device,
+        format: 'float32-le-interleaved',
+        dtype: 'float32',
+        endian: 'le',
+        layout: 'sample-major',
+        unit: 'uV',
+        sampleRate,
+        channels: names.length,
+        channelNames: names,
+      }
+    }
+    return {
+      device: 'omni',
+      format: 'ads1299-frame',
+      frameBytes: FRAME_BYTES,
+      sampleRate: FS,
+      channels: CHANNELS,
+      channelNames: cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!),
+    }
+  }
+
+  const beginRecording = async (): Promise<RecordSinkKind> => {
+    const kind = await recorderRef.current.start({
+      filenamePrefix: recordPrefix(device),
+      meta: currentRecordMeta(),
+    })
+    setRecording(true)
+    setRecBytes(0)
+    setRecSink(kind)
+    return kind
+  }
+
+  const finishRecording = async () => {
+    const saved = await recorderRef.current.stop()
+    setRecording(false)
+    setRecBytes(0)
+    setRecSink(null)
+    return saved
+  }
+
   const startStream = async () => {
     stopDemo()
     if (acqRuntime.impedanceActive) {
@@ -957,13 +1072,11 @@ export function AcquisitionDebugPage() {
       filterRef.current.reset()
       rateWinRef.current = { t0: performance.now(), n: 0, samplesBase: 0 }
       beginRawBridgeStream()
+      const recKind = await beginRecording()
       streamingRef.current = true
       acqRuntime.streaming = true
       acqRuntime.status = 'streaming'
       acqRuntime.device = device
-      recorderRef.current.start()
-      setRecording(true)
-      setRecBytes(0)
       setFeatureLatest(null)
       setFeatureHistory([])
       resetCatchup()
@@ -971,10 +1084,7 @@ export function AcquisitionDebugPage() {
       statsRef.current = { ...statsRef.current, samples: 0, rateHz: 0 }
       setStats({ ...statsRef.current })
       setStatus('streaming')
-      const streamDetail =
-        device === 'bcigo'
-          ? '采集中：强脑 EEG 写入浏览器内存，停止时下载 BIN。'
-          : '采集中：博睿康转发数据写入浏览器内存，停止时下载 BIN。'
+      const streamDetail = streamingRecordDetail(device, recKind)
       liveEegHub.configure({
         device,
         sampleRate,
@@ -1001,25 +1111,24 @@ export function AcquisitionDebugPage() {
       await t.write(CMD_STOP)
       await sleep(50)
       parserRef.current?.reset()
+      const recKind = await beginRecording()
       await t.write(CMD_START)
       streamingRef.current = true
       acqRuntime.streaming = true
       acqRuntime.status = 'streaming'
       acqRuntime.device = 'omni'
       setStatus('streaming')
+      const streamDetail = streamingRecordDetail('omni', recKind)
       liveEegHub.configure({
         device: 'omni',
         sampleRate: FS,
         channelNames: cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!),
-        detail: '采集中：原始 48 字节帧写入浏览器内存，停止时下载 BIN。',
+        detail: streamDetail,
       })
-      liveEegHub.markStreaming('采集中：原始 48 字节帧写入浏览器内存，停止时下载 BIN。')
-      recorderRef.current.start()
-      setRecording(true)
-      setRecBytes(0)
+      liveEegHub.markStreaming(streamDetail)
       setFeatureLatest(null)
       setFeatureHistory([])
-      setDetail('采集中：原始 48 字节帧写入浏览器内存，停止时下载 BIN。')
+      setDetail(streamDetail)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setStatus('error')
@@ -1042,11 +1151,7 @@ export function AcquisitionDebugPage() {
       }
     }
     // 桥接设备：停止采集但保持连接（对齐 OmniBCI「停止」≠「断开」）
-    const prefix =
-      device === 'neuracle' ? 'neuracle_eeg' : device === 'bcigo' ? 'bcigo_eeg' : 'omni_ads1299'
-    const saved = recorderRef.current.stopAndDownload(prefix)
-    setRecording(false)
-    setRecBytes(0)
+    const saved = await finishRecording()
     setFeatureLatest(null)
     setFeatureHistory([])
     const stillLinked =
@@ -1058,11 +1163,7 @@ export function AcquisitionDebugPage() {
     const nextStatus = stillLinked ? 'open' : 'idle'
     acqRuntime.status = nextStatus
     setStatus(nextStatus)
-    const stopDetail = saved
-      ? `已停止采集，下载 ${saved.name}（${(saved.bytes / 1024).toFixed(1)} KB）。${stillLinked ? '设备仍连接，可再次开始。' : ''}`
-      : stillLinked
-        ? '已停止采集；设备仍连接。'
-        : '已停止采集。'
+    const stopDetail = savedRecordDetail(saved, stillLinked)
     if (stillLinked) liveEegHub.markOpen(stopDetail)
     else liveEegHub.markIdle(stopDetail)
     setDetail(stopDetail)
@@ -1115,6 +1216,7 @@ export function AcquisitionDebugPage() {
           }
           pushFrame(uv, filterRef.current.processSample(uv, true))
         }
+        noteLiveSamples(batch)
         phase += batch
         samples += batch
         lastSeqRef.current = samples - 1
@@ -1159,15 +1261,12 @@ export function AcquisitionDebugPage() {
 
   const impedanceHardware = device === 'omni' && status !== 'demo' ? 'omni' : device === 'bcigo' ? 'bcigo' : 'none'
 
-  const finalizeBinIfRecording = () => {
+  const finalizeBinIfRecording = async () => {
     if (!recorderRef.current.recording) return
-    const prefix =
-      device === 'neuracle' ? 'neuracle_eeg' : device === 'bcigo' ? 'bcigo_eeg' : 'omni_ads1299'
-    const saved = recorderRef.current.stopAndDownload(prefix)
-    setRecording(false)
-    setRecBytes(0)
+    const saved = await finishRecording()
     if (saved) {
-      setDetail(`已结束 EEG 记录 ${saved.name}，避免把导联激励写入 BIN。`)
+      const where = saved.rel || saved.path || saved.name
+      setDetail(`已结束 EEG 记录 ${where}（${formatRecordBytes(saved.bytes)}），避免把导联激励写入 BIN。`)
     }
   }
 
@@ -1261,7 +1360,7 @@ export function AcquisitionDebugPage() {
         setImpedanceDetail('请先连接强脑设备。')
         return
       }
-      finalizeBinIfRecording()
+      await finalizeBinIfRecording()
       streamingRef.current = false
       acqRuntime.streaming = false
       acqRuntime.impedanceActive = true
@@ -1291,7 +1390,7 @@ export function AcquisitionDebugPage() {
         await t.write(CMD_STOP)
         streamingRef.current = false
         acqRuntime.streaming = false
-        finalizeBinIfRecording()
+        await finalizeBinIfRecording()
         await sleep(80)
       }
       parserRef.current?.reset()
@@ -1426,8 +1525,6 @@ export function AcquisitionDebugPage() {
   const filterLabel = viewFiltered
     ? `${bandLoHz}–${bandHiHz} Hz${useNotch ? ' + 50/100 Hz 谐波陷波' : ''}`
     : '未滤波（不修改记录数据）'
-  const lagSec = liveLagSec()
-  const catchingUp = lagSec > LIVE_CATCHUP_THRESHOLD_S
 
   return (
     <div className="acq-omni">
@@ -1482,7 +1579,8 @@ export function AcquisitionDebugPage() {
         </button>
         {recording ? (
           <span className="chip" style={{ color: 'var(--accent-2)' }}>
-            录制 {(recBytes / 1024).toFixed(1)} KB
+            录制 {formatRecordBytes(recBytes)}
+            {recSink === 'disk' ? ' · 磁盘' : recSink === 'memory' ? ' · 内存' : ''}
           </span>
         ) : null}
       </div>
@@ -2009,10 +2107,22 @@ export function AcquisitionDebugPage() {
         <span>
           滤波 <strong>{filterLabel}</strong>
         </span>
-        <span>
-          积压 <strong>{lagSec > 0.005 ? `${lagSec.toFixed(2)} s` : '0'}</strong>
+        <span className="acq-lag">
+          延迟{' '}
+          <strong ref={lagValueRef}>—</strong>
+          <span className="acq-lag-spark" ref={lagSparkRef} aria-hidden>
+            {Array.from({ length: LAG_SPARK_BARS }, (_, i) => (
+              <i key={i} />
+            ))}
+          </span>
         </span>
-        {catchingUp ? <span className="acq-catchup">追帧中</span> : null}
+        <span>
+          积压 <strong ref={backlogValueRef}>0</strong>
+        </span>
+        <span className="acq-lag" ref={recLagRef} hidden />
+        <span className="acq-catchup" ref={catchupFlagRef} hidden>
+          追帧中
+        </span>
         {device === 'omni' ? (
           <>
             <span>CRC {stats.crcBad}</span>

@@ -13,6 +13,7 @@ import {
   INGEST_DRAIN_BUDGET_MS,
   addPendingSamples,
   addQueuedBytes,
+  noteLiveSamples,
   setCatchupClock,
 } from './liveCatchup'
 
@@ -172,6 +173,7 @@ function deliverSerial(chunk: Uint8Array): void {
       acqRuntime.recorder.append(f.raw)
     }
   }
+  if (frames.length) noteLiveSamples(frames.length)
 }
 
 function deliverBridge(batch: BridgeBatch): void {
@@ -210,6 +212,7 @@ function deliverBridge(batch: BridgeBatch): void {
     )
     acqRuntime.recorder.append(bytes)
   }
+  if (acqRuntime.streaming) noteLiveSamples(batch.samples)
 }
 
 /** Bridge batches while the acquisition page is unmounted. */

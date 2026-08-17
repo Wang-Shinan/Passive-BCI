@@ -3,7 +3,7 @@ import type { WaveformSnapshot } from './WaveformCanvas'
 import { CHANNEL_COLORS } from './WaveformCanvas'
 import { copyLatestChannel } from './analysis/impedance'
 import { smoothPsdDb, welchPsd } from './analysis/welch'
-import { LIVE_CATCHUP_THRESHOLD_S, PLOT_INTERVAL_MS, liveLagSec } from './liveCatchup'
+import { PLOT_INTERVAL_MS, isCatchingUp } from './liveCatchup'
 
 export interface FftCanvasProps {
   getSnapshot: () => WaveformSnapshot
@@ -70,8 +70,7 @@ export function FftCanvas({
         timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
         return
       }
-      const lag = liveLagSec()
-      if (lag > LIVE_CATCHUP_THRESHOLD_S && painted) {
+      if (isCatchingUp() && painted) {
         timer = window.setTimeout(draw, PLOT_INTERVAL_MS)
         return
       }

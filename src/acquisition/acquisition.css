@@ -358,6 +358,34 @@
   font-weight: 650;
 }
 
+.acq-lag[data-warn='1'] strong,
+.acq-lag[data-warn='1'] {
+  color: #b83c00;
+}
+
+.acq-lag[data-warn='2'] strong,
+.acq-lag[data-warn='2'] {
+  color: #c0392b;
+}
+
+.acq-lag-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 14px;
+  width: 64px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.acq-lag-spark i {
+  flex: 1;
+  min-width: 1px;
+  height: 8%;
+  background: currentColor;
+  opacity: 0.7;
+}
+
 .acq-modal-backdrop {
   position: fixed;
   inset: 0;

@@ -104,4 +104,37 @@ describe('BinRecorder', () => {
     expect(rec.byteLength).toBe(0)
     expect(abort).toHaveBeenCalled()
   })
+
+  it('falls back to memory when the disk API is missing', async () => {
+    const rec = new BinRecorder({ flushBytes: 32 })
+    const kind = await rec.start({ filenamePrefix: 't' })
+    expect(kind).toBe('memory')
+    rec.append(new Uint8Array(8).fill(9))
+    const saved = await rec.stop()
+    expect(saved?.sink).toBe('memory')
+    expect(saved?.bytes).toBe(8)
+  })
+
+  it('counts unflushed bytes while a sink write is in flight', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const rec = new BinRecorder({
+      flushBytes: 8,
+      createSink: async () => ({
+        kind: 'disk',
+        write: () => gate,
+        finish: async () => ({ name: 't.bin' }),
+        abort: async () => {},
+      }),
+    })
+    await rec.start({ filenamePrefix: 't' })
+    rec.append(new Uint8Array(8).fill(1))
+    expect(rec.pendingBytes).toBe(8)
+    release()
+    const saved = await rec.stop()
+    expect(saved?.bytes).toBe(8)
+    expect(rec.pendingBytes).toBe(0)
+  })
 })
