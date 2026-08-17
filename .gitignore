@@ -50,6 +50,7 @@ __pycache__/
 venv/
 tetris-rl/.venv/
 tetris-rl/checkpoints/
+tetris-rl/runs/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/

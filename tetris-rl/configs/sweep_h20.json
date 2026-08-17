@@ -1,0 +1,58 @@
+{
+  "run_dir": "runs",
+  "device": "auto",
+  "precision": "bf16",
+  "eval_seeds": 16,
+  "runs": [
+    {
+      "algo": "bc",
+      "run_name": "bc_h20",
+      "steps": 150000,
+      "num_envs": 16,
+      "bc_batch": 4096,
+      "eval_every": 25000,
+      "log_every": 5000,
+      "ckpt_every": 25000
+    },
+    {
+      "algo": "dqn",
+      "run_name": "dqn_h20",
+      "steps": 2000000,
+      "num_envs": 32,
+      "batch_size": 4096,
+      "buffer_size": 400000,
+      "train_interval": 1,
+      "train_updates": 2,
+      "n_step": 3,
+      "double": true,
+      "dueling": true,
+      "imitate_frac": 0.35,
+      "eval_every": 50000,
+      "log_every": 10000,
+      "ckpt_every": 50000
+    },
+    {
+      "algo": "ppo",
+      "run_name": "ppo_h20",
+      "steps": 2000000,
+      "num_envs": 64,
+      "rollout_steps": 128,
+      "ppo_minibatch": 2048,
+      "eval_every": 65536,
+      "log_every": 16384,
+      "ckpt_every": 65536
+    },
+    {
+      "algo": "bc_ppo",
+      "run_name": "bc_ppo_h20",
+      "steps": 2000000,
+      "bc_steps": 80000,
+      "num_envs": 64,
+      "rollout_steps": 128,
+      "ppo_minibatch": 2048,
+      "eval_every": 65536,
+      "log_every": 16384,
+      "ckpt_every": 65536
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "algo": "bc",
+  "run_name": "bc_h20",
+  "steps": 150000,
+  "num_envs": 16,
+  "device": "auto",
+  "precision": "bf16",
+  "width": 64,
+  "hidden": 512,
+  "lr": 3e-4,
+  "bc_batch": 4096,
+  "eval_every": 25000,
+  "eval_seeds": 16,
+  "log_every": 5000,
+  "ckpt_every": 25000
+}
