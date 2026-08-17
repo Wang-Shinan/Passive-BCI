@@ -32,15 +32,20 @@ import {
 import { FeatureMonitorPanel, SignalModeControls, useStressControl } from '../../lib/features'
 import { ModelServicePanel } from '../../lib/model-runtime/ModelServicePanel'
 import { useModelRuntime } from '../../lib/model-runtime/useModelRuntime'
+import { RlAgentPanel } from './RlAgentPanel'
 import { StressPanel } from './StressPanel'
 import {
   applyMiControlAction,
   describeMiControlAction,
   miControlActionForPrediction,
 } from './miControl'
+import { RL_DECISION_INTERVAL_MS, type RlModelMetadata } from './rl/contracts'
+import { TetrisOnnxAgent } from './rl/onnxSession'
+import { describeRlAction, rlStep } from './rl/step'
 import { useStressBroadcast } from './useStressBroadcast'
 
 const MI_CONTROL_KEY = 'passive-bci.tetris-mi-control'
+const RL_CONTROL_KEY = 'passive-bci.tetris-rl-control'
 const RIGHT_COL_KEY = 'passive-bci.tetris-right-col'
 const RIGHT_COL_DEFAULT = 320
 const RIGHT_COL_MIN = 260
@@ -50,6 +55,11 @@ const MID_COL_MIN = 340
 function loadMiControlEnabled(): boolean {
   if (typeof localStorage === 'undefined') return false
   return localStorage.getItem(MI_CONTROL_KEY) === 'true'
+}
+
+function loadRlControlEnabled(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  return localStorage.getItem(RL_CONTROL_KEY) === 'true'
 }
 
 function clampRightCol(value: number): number {
@@ -101,6 +111,16 @@ export function TetrisExperiment() {
   const [miControlEnabled, setMiControlEnabled] = useState(loadMiControlEnabled)
   const lastMiObservationRef = useRef<string | null>(null)
   const [lastMiAction, setLastMiAction] = useState<string>('—')
+  const rlAgentRef = useRef(new TetrisOnnxAgent())
+  const [rlEnabled, setRlEnabled] = useState(loadRlControlEnabled)
+  const [rlLoading, setRlLoading] = useState(false)
+  const [rlError, setRlError] = useState<string | null>(null)
+  const [rlMetadata, setRlMetadata] = useState<RlModelMetadata | null>(null)
+  const [lastRlAction, setLastRlAction] = useState('—')
+  const [rlLatencyMs, setRlLatencyMs] = useState<number | null>(null)
+  const rlDecisionAccRef = useRef(0)
+  const rlInferringRef = useRef(false)
+  const rlAutoRestartRef = useRef<number | null>(null)
   const [cfg, setCfg] = useState<GravityConfig>(() => defaultGravityConfig())
   const gravityRef = useRef<GravityState>(initGravityState(defaultGravityConfig()))
   const [gravityDisplay, setGravityDisplay] = useState(gravityRef.current.smoothed)
@@ -192,6 +212,42 @@ export function TetrisExperiment() {
     }
   }, [miControlEnabled])
 
+  useEffect(() => {
+    localStorage.setItem(RL_CONTROL_KEY, String(rlEnabled))
+    if (rlEnabled) {
+      setMiControlEnabled(false)
+    } else {
+      setLastRlAction('—')
+      setRlLatencyMs(null)
+    }
+  }, [rlEnabled])
+
+  const loadRlModel = useCallback(async () => {
+    setRlLoading(true)
+    setRlError(null)
+    try {
+      const meta = await rlAgentRef.current.load()
+      setRlMetadata(meta)
+      loggerRef.current.log('rl_model_loaded', {
+        version: meta.version,
+        trainedSteps: meta.trainedSteps,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setRlError(message)
+      setRlMetadata(null)
+    } finally {
+      setRlLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (rlAutoRestartRef.current) window.clearTimeout(rlAutoRestartRef.current)
+      rlAgentRef.current.dispose()
+    }
+  }, [])
+
   const applyResult = useCallback((next: GameState, events: GameEvent[]) => {
     stateRef.current = next
     setState(next)
@@ -214,7 +270,7 @@ export function TetrisExperiment() {
   }, [])
 
   useEffect(() => {
-    if (!miControlEnabled) return
+    if (!miControlEnabled || rlEnabled) return
     const prediction = modelRuntime.latestPrediction
     if (!prediction || prediction.observation_id === lastMiObservationRef.current) return
 
@@ -239,7 +295,40 @@ export function TetrisExperiment() {
     const result = applyMiControlAction(s, action, rngRef.current)
     if (!result) return
     applyResult(result.state, result.events)
-  }, [miControlEnabled, modelRuntime.latestPrediction, applyResult])
+  }, [miControlEnabled, rlEnabled, modelRuntime.latestPrediction, applyResult])
+
+  const runRlDecision = useCallback(async () => {
+    if (!rlEnabled || !rlAgentRef.current.loaded || rlInferringRef.current) return
+    const s = stateRef.current
+    if (s.gameOver || s.paused || s.anim) return
+
+    rlInferringRef.current = true
+    try {
+      const result = await rlAgentRef.current.predict(s, gravityRef.current.smoothed)
+      setRlLatencyMs(result.latencyMs)
+      setLastRlAction(describeRlAction(result.actionName))
+
+      const latest = stateRef.current
+      if (latest.gameOver || latest.paused || latest.anim) return
+
+      const stepped = rlStep(latest, result.actionName, rngRef.current, {
+        cellsPerSec: gravityRef.current.smoothed,
+        instantAnim: false,
+      })
+      applyResult(stepped.state, stepped.events)
+      loggerRef.current.log('rl_control', {
+        action: result.actionName,
+        action_index: result.actionIndex,
+        latency_ms: result.latencyMs,
+        model_version: rlMetadata?.version,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setRlError(message)
+    } finally {
+      rlInferringRef.current = false
+    }
+  }, [applyResult, rlEnabled, rlMetadata?.version])
 
   // Smooth game loop — update every frame
   useEffect(() => {
@@ -272,11 +361,12 @@ export function TetrisExperiment() {
       }
 
       const s = stateRef.current
+      const rlActive = rlEnabled && rlAgentRef.current.loaded
       if (!s.gameOver && !s.paused) {
         if (s.anim) {
           const result = advanceBoardAnim(s, rngRef.current, dt)
           applyResult(result.state, result.events)
-        } else if (s.piece) {
+        } else if (s.piece && !rlActive) {
           const speed = softDropHeldRef.current
             ? Math.max(gState.smoothed, 22)
             : gState.smoothed
@@ -287,11 +377,26 @@ export function TetrisExperiment() {
         }
       }
 
+      if (rlActive) {
+        rlDecisionAccRef.current += dt
+        if (rlDecisionAccRef.current >= RL_DECISION_INTERVAL_MS) {
+          rlDecisionAccRef.current = 0
+          void runRlDecision()
+        }
+        const after = stateRef.current
+        if (after.gameOver && !rlAutoRestartRef.current) {
+          rlAutoRestartRef.current = window.setTimeout(() => {
+            rlAutoRestartRef.current = null
+            restart()
+          }, 1200)
+        }
+      }
+
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
-  }, [applyResult])
+  }, [applyResult, rlEnabled, runRlDecision])
 
   // Keyboard controls
   useEffect(() => {
@@ -316,6 +421,7 @@ export function TetrisExperiment() {
         restart()
         return
       }
+      if (rlEnabled) return
       if (e.key === 'ArrowDown') {
         softDropHeldRef.current = true
         return
@@ -343,7 +449,7 @@ export function TetrisExperiment() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [applyResult])
+  }, [applyResult, rlEnabled])
 
   const restart = () => {
     const nextSeed = (Math.random() * 0xffffffff) >>> 0
@@ -355,6 +461,11 @@ export function TetrisExperiment() {
     lastTsRef.current = 0
     t0Ref.current = performance.now()
     softDropHeldRef.current = false
+    rlDecisionAccRef.current = 0
+    if (rlAutoRestartRef.current) {
+      window.clearTimeout(rlAutoRestartRef.current)
+      rlAutoRestartRef.current = null
+    }
     setTrace([])
     loggerRef.current.log('restart', { seed: nextSeed })
   }
@@ -370,6 +481,7 @@ export function TetrisExperiment() {
           <p className="muted m-0 mt-1 text-sm">
             ←→ 移动 · ↑/X 顺时针 · Z 逆时针 · ↓ 软降 · 空格硬降 · P 暂停 · R 重开
             {miControlEnabled ? ' · MI：左手← 右手→ 脚↻ 舌静止' : ''}
+            {rlEnabled ? ' · RL Agent 代打中' : ''}
           </p>
         </div>
         <ExportButtons
@@ -512,14 +624,26 @@ export function TetrisExperiment() {
             </div>
           </Panel>
 
+          <RlAgentPanel
+            enabled={rlEnabled}
+            onEnabledChange={setRlEnabled}
+            loading={rlLoading}
+            loadError={rlError}
+            metadata={rlMetadata}
+            lastAction={lastRlAction}
+            latencyMs={rlLatencyMs}
+            onLoad={loadRlModel}
+          />
+
           <Panel title="MI 分类控制">
             <label className="acq-check mb-3 flex items-center gap-2">
               <input
                 type="checkbox"
                 checked={miControlEnabled}
+                disabled={rlEnabled}
                 onChange={(event) => setMiControlEnabled(event.target.checked)}
               />
-              启用模型分类控制（与键盘并行）
+              启用模型分类控制（与键盘并行；RL 启用时不可用）
             </label>
             <p className="muted m-0 mb-3 text-sm">
               左手 → 左移 · 右手 → 右移 · 脚 → 顺时针旋转 · 舌 → 静止。

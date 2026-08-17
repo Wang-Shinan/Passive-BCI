@@ -75,6 +75,7 @@ import {
   type LiveFeatureSnapshot,
 } from '../lib/features'
 import { ModelServicePanel } from '../lib/model-runtime'
+import { formatRecordBytes, type RecordMeta, type RecordSinkKind } from './session/recorder'
 
 const RING_SECONDS = 12
 const FEATURE_HISTORY = 60
@@ -110,6 +111,32 @@ function sleep(ms: number): Promise<void> {
 
 function isBridgeDevice(d: DeviceKind): boolean {
   return d === 'neuracle' || d === 'bcigo'
+}
+
+function recordPrefix(d: DeviceKind): string {
+  return d === 'neuracle' ? 'neuracle_eeg' : d === 'bcigo' ? 'bcigo_eeg' : 'omni_ads1299'
+}
+
+function streamingRecordDetail(d: DeviceKind, sink: RecordSinkKind): string {
+  const dest =
+    sink === 'disk' ? '边采边写入项目 recordings/ 目录' : '暂存在浏览器内存，停止时下载 BIN'
+  if (d === 'bcigo') return `采集中：强脑 EEG ${dest}。`
+  if (d === 'neuracle') return `采集中：博睿康转发数据 ${dest}。`
+  return `采集中：原始 48 字节帧 ${dest}。`
+}
+
+function savedRecordDetail(
+  saved: { name: string; bytes: number; sink: RecordSinkKind; path?: string; rel?: string } | null,
+  stillLinked: boolean,
+): string {
+  const linked = stillLinked ? '设备仍连接，可再次开始。' : ''
+  if (!saved) return stillLinked ? '已停止采集；设备仍连接。' : '已停止采集。'
+  const size = formatRecordBytes(saved.bytes)
+  if (saved.sink === 'disk') {
+    const where = saved.rel || saved.path || saved.name
+    return `已停止采集，已写入 ${where}（${size}）。${linked}`
+  }
+  return `已停止采集，下载 ${saved.name}（${size}）。${linked}`
 }
 
 function idleImpedanceRows(
@@ -258,6 +285,7 @@ export function AcquisitionDebugPage() {
   const [impedanceDetail, setImpedanceDetail] = useState('')
   const [recording, setRecording] = useState(false)
   const [recBytes, setRecBytes] = useState(0)
+  const [recSink, setRecSink] = useState<RecordSinkKind | null>(null)
   const [featureLatest, setFeatureLatest] = useState<LiveFeatureSnapshot | null>(null)
   const [featureHistory, setFeatureHistory] = useState<LiveFeatureSnapshot[]>([])
   const [enabledFeatures, setEnabledFeatures] = useState<string[]>(() => loadEnabledFeatures())

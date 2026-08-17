@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect } from 'vite'
 import { bridgeManagerPlugin } from './vite.bridge-manager.ts'
+import { recordWriterPlugin } from './vite.record-writer.ts'
 
 const MAX_LOG_CHARS = 2400
 
@@ -301,7 +302,7 @@ async function proxyLlm(req: IncomingMessage, res: ServerResponse) {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), llmProxyPlugin(), bridgeManagerPlugin()],
+  plugins: [react(), tailwindcss(), llmProxyPlugin(), bridgeManagerPlugin(), recordWriterPlugin()],
   server: {
     proxy: {
       // Neuracle bridge (bridges/neuracle/ws_bridge.py) — JellyFish TCP → WS

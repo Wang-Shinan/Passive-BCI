@@ -48,12 +48,17 @@ __pycache__/
 *$py.class
 .venv/
 venv/
+tetris-rl/.venv/
+tetris-rl/checkpoints/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .Python
 pip-log.txt
+
+# Local streamed EEG recordings (Vite /api/record)
+recordings/
 
 # EEG / experiment dumps (browser downloads, EDF, arrays)
 *.bin
