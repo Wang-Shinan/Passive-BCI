@@ -40,6 +40,8 @@ export type ModelServiceHello = {
   class_names?: string[]
   model_revision?: string
   strategy?: string
+  window_sec?: number
+  step_sec?: number
 }
 
 export type ModelPrediction = {
@@ -133,10 +135,16 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
     value.online && typeof value.online === 'object'
       ? (value.online as Record<string, unknown>)
       : null
+  const input =
+    value.input && typeof value.input === 'object'
+      ? (value.input as Record<string, unknown>)
+      : null
   const classNamesRaw = value.class_names ?? model?.class_names
   const classNames = Array.isArray(classNamesRaw)
     ? classNamesRaw.filter((name): name is string => typeof name === 'string')
     : undefined
+  const windowSec = finiteNumber(input?.window_sec) ? Number(input.window_sec) : undefined
+  const stepSec = finiteNumber(input?.step_sec) ? Number(input.step_sec) : undefined
   return {
     type: 'hello',
     schema_version: finiteNumber(value.schema_version) ? value.schema_version : 0,
@@ -157,6 +165,8 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
     strategy:
       (typeof value.strategy === 'string' ? value.strategy : undefined) ??
       (typeof online?.strategy === 'string' ? online.strategy : undefined),
+    window_sec: windowSec && windowSec > 0 ? windowSec : undefined,
+    step_sec: stepSec && stepSec > 0 ? stepSec : undefined,
   }
 }
 

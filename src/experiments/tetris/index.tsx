@@ -4,7 +4,7 @@ import { SessionLogger } from '../../lib/logger'
 import { sessionHub } from '../../lib/session/sessionHub'
 import { mulberry32 } from '../../lib/rng'
 import { ManualSignalSource } from '../../lib/signal/manual'
-import { ExportButtons } from '../../lib/ui/ExportButtons'
+import { ExportButtons, loadStoredSubjectId } from '../../lib/ui/ExportButtons'
 import { LineChart } from '../../lib/ui/LineChart'
 import { ColumnResizer } from '../../lib/ui/ColumnResizer'
 import { Panel } from '../../lib/ui/Panel'
@@ -33,14 +33,27 @@ import {
 } from './gravity'
 import { FeatureMonitorPanel, SignalModeControls, useStressControl } from '../../lib/features'
 import { ModelServicePanel } from '../../lib/model-runtime/ModelServicePanel'
+import { ensureModelService } from '../../lib/model-runtime/modelServiceApi'
+import { modelRuntimeHub } from '../../lib/model-runtime/modelRuntimeHub'
 import { useModelRuntime } from '../../lib/model-runtime/useModelRuntime'
+import { ReveActionPanel } from './ReveActionPanel'
 import { RlAgentPanel } from './RlAgentPanel'
 import { StressPanel } from './StressPanel'
 import {
   applyMiControlAction,
   describeMiControlAction,
+  isSmrControlPrediction,
+  miControlActionForClassName,
   miControlActionForPrediction,
 } from './miControl'
+import {
+  applyTetrisActionClass,
+  describeTetrisAction,
+  isTetrisActionPrediction,
+  tetrisActionFromPrediction,
+  tetrisActionLabelIndex,
+  shouldAutoLabelRest,
+} from './reveAction'
 import { RL_DECISION_INTERVAL_MS, type RlModelMetadata } from './rl/contracts'
 import { TetrisOnnxAgent } from './rl/onnxSession'
 import { describeRlAction, rlStep } from './rl/step'
@@ -81,7 +94,7 @@ interface TracePoint {
 }
 
 export function TetrisExperiment() {
-  const [subjectId, setSubjectId] = useState('S01')
+  const [subjectId, setSubjectId] = useState(() => loadStoredSubjectId('S01'))
   const [seed] = useState(() => (Math.random() * 0xffffffff) >>> 0)
   const seedRef = useRef(seed)
   const rngRef = useRef(mulberry32(seed))
@@ -114,6 +127,20 @@ export function TetrisExperiment() {
   const [miControlEnabled, setMiControlEnabled] = useState(loadMiControlEnabled)
   const lastMiObservationRef = useRef<string | null>(null)
   const [lastMiAction, setLastMiAction] = useState<string>('—')
+  const [smrEnsureError, setSmrEnsureError] = useState('')
+  const [smrEnsuring, setSmrEnsuring] = useState(false)
+  const [reveLearnEnabled, setReveLearnEnabled] = useState(false)
+  const [reveControlEnabled, setReveControlEnabled] = useState(false)
+  const [reveRestLabel, setReveRestLabel] = useState(false)
+  const [lastReveLabel, setLastReveLabel] = useState('')
+  const [reveLabeledCount, setReveLabeledCount] = useState(0)
+  const reveLearnRef = useRef(false)
+  const reveRestLabelRef = useRef(false)
+  const labeledObsRef = useRef<string | null>(null)
+  const lastActionAtRef = useRef(0)
+  const lastReveControlObsRef = useRef<string | null>(null)
+  const reveActionCountRef = useRef(0)
+  const reveRestCountRef = useRef(0)
   const rlAgentRef = useRef(new TetrisOnnxAgent())
   const [rlEnabled, setRlEnabled] = useState(loadRlControlEnabled)
   const [rlLoading, setRlLoading] = useState(false)
@@ -231,10 +258,39 @@ export function TetrisExperiment() {
     }
   }, [miControlEnabled])
 
+  const enableSmrControl = async (enabled: boolean) => {
+    setMiControlEnabled(enabled)
+    if (!enabled) return
+    setReveControlEnabled(false)
+    setRlEnabled(false)
+    setSmrEnsuring(true)
+    setSmrEnsureError('')
+    try {
+      const statusTask = modelRuntime.serviceHello?.task
+      const force = Boolean(statusTask && statusTask !== 'smr_control')
+      await ensureModelService({ backend: 'reve', task: 'smr_control', force })
+      modelRuntimeHub.setEnabled(true)
+      modelRuntimeHub.connect()
+    } catch (error) {
+      setSmrEnsureError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSmrEnsuring(false)
+    }
+  }
+
+  useEffect(() => {
+    reveLearnRef.current = reveLearnEnabled
+  }, [reveLearnEnabled])
+
+  useEffect(() => {
+    reveRestLabelRef.current = reveRestLabel
+  }, [reveRestLabel])
+
   useEffect(() => {
     localStorage.setItem(RL_CONTROL_KEY, String(rlEnabled))
     if (rlEnabled) {
       setMiControlEnabled(false)
+      setReveControlEnabled(false)
     } else {
       setLastRlAction('—')
       setRlLatencyMs(null)
@@ -242,9 +298,19 @@ export function TetrisExperiment() {
   }, [rlEnabled])
 
   useEffect(() => {
+    if (reveControlEnabled) setMiControlEnabled(false)
+  }, [reveControlEnabled])
+
+  useEffect(() => {
     controlRef.current =
-      rlEnabled && rlAgentRef.current.loaded ? 'rl' : miControlEnabled ? 'mi' : 'human'
-  }, [rlEnabled, miControlEnabled, rlMetadata])
+      rlEnabled && rlAgentRef.current.loaded
+        ? 'rl'
+        : reveControlEnabled
+          ? 'reve'
+          : miControlEnabled
+            ? 'mi'
+            : 'human'
+  }, [rlEnabled, miControlEnabled, reveControlEnabled, rlMetadata])
 
   const loadRlModel = useCallback(async () => {
     setRlLoading(true)
@@ -293,8 +359,48 @@ export function TetrisExperiment() {
     }
   }, [])
 
+  const labelTetrisAction = useCallback((action: string, source: 'keyboard' | 'rest') => {
+    if (!reveLearnRef.current) return
+    const index = tetrisActionLabelIndex(action)
+    if (index == null) return
+    const observation = modelRuntimeHub.latestObservation(8000)
+    if (!observation || !isTetrisActionPrediction(observation)) return
+    if (source === 'rest') {
+      if (labeledObsRef.current === observation.observation_id) return
+      if (!shouldAutoLabelRest(reveActionCountRef.current, reveRestCountRef.current)) return
+      reveRestCountRef.current += 1
+    } else {
+      reveActionCountRef.current += 1
+    }
+    lastActionAtRef.current = performance.now()
+    labeledObsRef.current = observation.observation_id
+    const feedbackId = modelRuntimeHub.submitFeedback({
+      observationId: observation.observation_id,
+      label: index,
+      metadata: {
+        experiment: 'tetris',
+        source,
+        action,
+        subjectId: loggerRef.current.meta.subjectId,
+      },
+    })
+    if (!feedbackId) return
+    setLastReveLabel(describeTetrisAction(action))
+    setReveLabeledCount((count) => count + 1)
+    loggerRef.current.log('reve_action_label', {
+      action,
+      label: index,
+      source,
+      observation_id: observation.observation_id,
+      feedback_id: feedbackId,
+    })
+  }, [])
+
+  const labelTetrisActionRef = useRef(labelTetrisAction)
+  labelTetrisActionRef.current = labelTetrisAction
+
   useEffect(() => {
-    if (!miControlEnabled || rlEnabled) return
+    if (!miControlEnabled || rlEnabled || reveControlEnabled) return
     const prediction = modelRuntime.latestPrediction
     if (!prediction || prediction.observation_id === lastMiObservationRef.current) return
 
@@ -305,7 +411,7 @@ export function TetrisExperiment() {
     lastMiObservationRef.current = prediction.observation_id
 
     loggerRef.current.log('action', {
-      source: 'mi',
+      source: isSmrControlPrediction(prediction) ? 'smr' : 'mi',
       action: action === 'rotate' ? 'rotateCW' : (action ?? 'unknown'),
       class_name: prediction.class_name,
       observation_id: prediction.observation_id,
@@ -320,7 +426,42 @@ export function TetrisExperiment() {
     const result = applyMiControlAction(s, action, rngRef.current)
     if (!result) return
     applyResult(result.state, result.events)
-  }, [miControlEnabled, rlEnabled, modelRuntime.latestPrediction, applyResult])
+  }, [miControlEnabled, rlEnabled, reveControlEnabled, modelRuntime.latestPrediction, applyResult])
+
+  useEffect(() => {
+    if (!reveLearnEnabled || !reveRestLabel) return
+    const prediction = modelRuntime.latestPrediction
+    if (!prediction || !isTetrisActionPrediction(prediction)) return
+    if (labeledObsRef.current === prediction.observation_id) return
+    const timer = window.setTimeout(() => {
+      if (!reveLearnRef.current || !reveRestLabelRef.current) return
+      if (performance.now() - lastActionAtRef.current < 450) return
+      labelTetrisActionRef.current('rest', 'rest')
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [reveLearnEnabled, reveRestLabel, modelRuntime.latestPrediction])
+
+  useEffect(() => {
+    if (!reveControlEnabled || rlEnabled) return
+    const prediction = modelRuntime.latestPrediction
+    if (!prediction || prediction.observation_id === lastReveControlObsRef.current) return
+    if (!isTetrisActionPrediction(prediction)) return
+    lastReveControlObsRef.current = prediction.observation_id
+    const action = tetrisActionFromPrediction(prediction)
+    loggerRef.current.log('action', {
+      source: 'reve',
+      action: action ?? 'unknown',
+      class_name: prediction.class_name,
+      observation_id: prediction.observation_id,
+      confidence: prediction.confidence,
+    })
+    if (!action || action === 'rest') return
+    const current = stateRef.current
+    if (current.gameOver || current.paused || current.anim) return
+    const result = applyTetrisActionClass(current, action, rngRef.current)
+    if (!result) return
+    applyResult(result.state, result.events)
+  }, [reveControlEnabled, rlEnabled, modelRuntime.latestPrediction, applyResult])
 
   const runRlDecision = useCallback(async () => {
     if (!rlEnabled || !rlAgentRef.current.loaded || rlInferringRef.current) return
@@ -462,6 +603,7 @@ export function TetrisExperiment() {
       if (e.key === 'ArrowDown') {
         if (!softDropHeldRef.current) {
           loggerRef.current.log('action', { source: 'keyboard', action: 'softDrop' })
+          labelTetrisActionRef.current('softDrop', 'keyboard')
         }
         softDropHeldRef.current = true
         return
@@ -488,6 +630,7 @@ export function TetrisExperiment() {
       } else return
 
       loggerRef.current.log('action', { source: 'keyboard', action })
+      labelTetrisActionRef.current(action, 'keyboard')
       applyResult(result.state, result.events)
     }
 
@@ -529,6 +672,17 @@ export function TetrisExperiment() {
     loggerRef.current.log('restart', { seed: nextSeed })
   }
 
+  const smrPrediction =
+    modelRuntime.latestPrediction && isSmrControlPrediction(modelRuntime.latestPrediction)
+      ? modelRuntime.latestPrediction
+      : null
+  const smrHeadWrong =
+    miControlEnabled &&
+    modelRuntime.status === 'ready' &&
+    Boolean(modelRuntime.serviceHello) &&
+    !smrPrediction &&
+    modelRuntime.serviceHello?.task !== 'smr_control'
+
   return (
     <div className="mx-auto max-w-7xl px-4 py-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -539,7 +693,9 @@ export function TetrisExperiment() {
           <h1 className="m-0 mt-1 text-2xl font-semibold">实验二 · 压力自适应俄罗斯方块</h1>
           <p className="muted m-0 mt-1 text-sm">
             ←→ 移动 · ↑/X 顺时针 · Z 逆时针 · ↓ 软降 · 空格硬降 · P 暂停 · R 重开
-            {miControlEnabled ? ' · MI：左手← 右手→ 脚↻ 舌静止' : ''}
+            {miControlEnabled ? ' · SMR：左手← 右手→ 双手↻ 休息静止' : ''}
+            {reveLearnEnabled ? ' · REVE 操作学习中' : ''}
+            {reveControlEnabled ? ' · REVE 预测操控' : ''}
             {rlEnabled ? ' · RL Agent 代打中' : ''}
           </p>
         </div>
@@ -547,6 +703,9 @@ export function TetrisExperiment() {
           logger={loggerRef.current}
           subjectId={subjectId}
           onSubjectChange={setSubjectId}
+          experiment="tetris"
+          getSeed={() => seedRef.current}
+          recordControl
         />
       </div>
 
@@ -695,25 +854,80 @@ export function TetrisExperiment() {
             onLoad={loadRlModel}
           />
 
-          <Panel title="MI 分类控制">
+          <ReveActionPanel
+            disabled={rlEnabled}
+            learnEnabled={reveLearnEnabled}
+            onLearnChange={setReveLearnEnabled}
+            controlEnabled={reveControlEnabled}
+            onControlChange={setReveControlEnabled}
+            restLabelEnabled={reveRestLabel}
+            onRestLabelChange={setReveRestLabel}
+            lastLabel={lastReveLabel}
+            labeledCount={reveLabeledCount}
+          />
+
+          <Panel title="SMR 控制">
             <label className="acq-check mb-3 flex items-center gap-2">
               <input
                 type="checkbox"
                 checked={miControlEnabled}
-                disabled={rlEnabled}
-                onChange={(event) => setMiControlEnabled(event.target.checked)}
+                disabled={rlEnabled || reveControlEnabled || smrEnsuring}
+                onChange={(event) => void enableSmrControl(event.target.checked)}
               />
-              启用模型分类控制（与键盘并行；RL 启用时不可用）
+              用 SMR 头操控方块（与键盘并行；RL / 操作头操控时不可用）
             </label>
             <p className="muted m-0 mb-3 text-sm">
-              左手 → 左移 · 右手 → 右移 · 脚 → 顺时针旋转 · 舌 → 静止。
+              左手 → 左移 · 右手 → 右移 · 双手 → 顺时针旋转 · 休息 → 静止。勾选后拉起已拟合的
+              smr_control，每 0.5 秒按当前预测动一次。
             </p>
+            {smrEnsureError ? (
+              <p className="mb-3 text-sm" style={{ color: 'var(--danger)' }}>
+                {smrEnsureError}
+              </p>
+            ) : null}
+            {smrHeadWrong ? (
+              <p className="mb-3 text-sm" style={{ color: 'var(--warn)' }}>
+                当前不是 SMR 头（{modelRuntime.serviceHello?.task ?? modelRuntime.latestPrediction?.task ?? '未知'}）。
+                <button
+                  type="button"
+                  className="btn ml-2"
+                  disabled={smrEnsuring}
+                  onClick={() => void enableSmrControl(true)}
+                >
+                  切换到 smr_control
+                </button>
+              </p>
+            ) : null}
             <div className="rounded-xl border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-sm">
-              <div className="muted text-xs">最近 MI 动作</div>
+              <div className="muted text-xs">最近 SMR 动作</div>
               <div className="font-mono text-xs">{lastMiAction}</div>
+              {smrPrediction ? (
+                <div className="mt-2 space-y-1">
+                  {smrPrediction.class_names.map((name, index) => {
+                    const value = smrPrediction.probabilities[index] ?? 0
+                    return (
+                      <div key={`${name}-${index}`}>
+                        <div className="mb-0.5 flex justify-between text-xs">
+                          <span>{describeMiControlAction(miControlActionForClassName(name))}</span>
+                          <span className="muted">{(value * 100).toFixed(0)}%</span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full" style={{ background: 'var(--panel-2)' }}>
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${Math.max(0, Math.min(100, value * 100))}%`,
+                              background: 'var(--accent)',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null}
             </div>
             <div className="mt-4">
-              <ModelServicePanel embedded />
+              <ModelServicePanel embedded reveTask="smr_control" />
             </div>
           </Panel>
 

@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect } from 'vite'
 import { bridgeManagerPlugin } from './vite.bridge-manager.ts'
+import { modelServiceManagerPlugin } from './vite.model-service-manager.ts'
 import { recordWriterPlugin } from './vite.record-writer.ts'
 
 const MAX_LOG_CHARS = 2400
@@ -302,7 +303,14 @@ async function proxyLlm(req: IncomingMessage, res: ServerResponse) {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), llmProxyPlugin(), bridgeManagerPlugin(), recordWriterPlugin()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    llmProxyPlugin(),
+    bridgeManagerPlugin(),
+    modelServiceManagerPlugin(),
+    recordWriterPlugin(),
+  ],
   server: {
     proxy: {
       // Neuracle bridge (bridges/neuracle/ws_bridge.py) — JellyFish TCP → WS
@@ -316,12 +324,6 @@ export default defineConfig({
         target: 'ws://127.0.0.1:8767',
         ws: true,
         rewrite: (path) => path.replace(/^\/ws\/bcigo/, '/v1/stream'),
-      },
-      // NCC Runtime Package model service — raw EEG windows → predictions/feedback.
-      '/ws/model': {
-        target: process.env.MODEL_SERVICE_WS_TARGET || 'ws://127.0.0.1:8768',
-        ws: true,
-        rewrite: (path) => path.replace(/^\/ws\/model/, ''),
       },
     },
   },

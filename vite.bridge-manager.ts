@@ -9,11 +9,12 @@
 
 import type { Plugin } from 'vite'
 import type { Connect } from 'vite'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
+import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 
 type BridgeName = 'bcigo' | 'neuracle'
 
@@ -52,7 +53,7 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
     script: 'bridges/bcigo/ws_bridge.py',
     readyPattern: /\[bcigo-bridge\].*waiting/i,
     buildEnv: (_root) => ({ ...process.env, PYTHONUNBUFFERED: '1' }),
-    resolvePython: () => process.env.BCIGO_PYTHON || 'python3',
+    resolvePython: () => process.env.BCIGO_PYTHON || findPython(),
   },
   neuracle: {
     name: 'neuracle',
@@ -65,15 +66,47 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
         path.join(os.homedir(), 'Documents', 'oi-mi')
       return { ...process.env, PYTHONUNBUFFERED: '1', OI_MI_ROOT: oi }
     },
-    resolvePython: (_root) => {
+    resolvePython: () => {
       const oi =
         process.env.OI_MI_ROOT ||
         path.join(os.homedir(), 'Documents', 'oi-mi')
-      const venvPy = path.join(oi, '.venv', 'bin', 'python')
-      if (existsSync(venvPy)) return venvPy
-      return process.env.NEURACLE_PYTHON || 'python3'
+      const venvCandidates = [
+        path.join(oi, '.venv', 'Scripts', 'python.exe'),
+        path.join(oi, '.venv', 'bin', 'python'),
+      ]
+      for (const venvPy of venvCandidates) {
+        if (existsSync(venvPy)) return venvPy
+      }
+      return process.env.NEURACLE_PYTHON || findPython()
     },
   },
+}
+
+/** Windows `python3` is often the Microsoft Store stub (exit 9009). Probe real interpreters. */
+function findPython(): string {
+  const win = process.platform === 'win32'
+  const names = win
+    ? [process.env.PYTHON, 'python', 'py', 'python3']
+    : [process.env.PYTHON, 'python3', 'python']
+  for (const name of names.filter((n): n is string => Boolean(n))) {
+    try {
+      const args =
+        name === 'py'
+          ? ['-3', '-c', 'import sys; print(sys.executable)']
+          : ['-c', 'import sys; print(sys.executable)']
+      const out = execFileSync(name, args, {
+        encoding: 'utf8',
+        timeout: 8000,
+        windowsHide: true,
+      })
+      const exe = out.trim().split(/\r?\n/).find((line) => line.length > 0)
+      if (exe && existsSync(exe)) return exe
+      if (exe) return exe
+    } catch {
+      /* try next */
+    }
+  }
+  return win ? 'python' : 'python3'
 }
 
 function isPortOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
@@ -108,10 +141,10 @@ function sendJson(res: import('node:http').ServerResponse, status: number, body:
 }
 
 export function bridgeManagerPlugin(): Plugin {
-  const managed: Record<BridgeName, ManagedBridge> = {
+  const managed = persistentDevStore('bridge-manager', (): Record<BridgeName, ManagedBridge> => ({
     bcigo: { child: null, owned: false, lastError: '', starting: null },
     neuracle: { child: null, owned: false, lastError: '', starting: null },
-  }
+  }))
   let projectRoot = process.cwd()
 
   async function statusOf(name: BridgeName): Promise<EnsureResult> {
@@ -212,7 +245,9 @@ export function bridgeManagerPlugin(): Plugin {
         if (child.exitCode !== null) {
           const hint =
             name === 'bcigo'
-              ? '请确认已 pip install bcigo-sdk websockets numpy'
+              ? child.exitCode === 9009
+                ? 'Windows 找不到 python3（退出码 9009）。请用 Anaconda 的 python，或设置 BCIGO_PYTHON'
+                : '请确认已 pip install bcigo-sdk websockets numpy'
               : '请确认 OI_MI_ROOT / oi-mi 与 neuracle 依赖可用'
           return {
             ok: false,
@@ -370,9 +405,9 @@ export function bridgeManagerPlugin(): Plugin {
     configureServer(server) {
       projectRoot = server.config.root
       server.middlewares.use(middleware)
-      const exit = () => stopAll()
-      server.httpServer?.once('close', exit)
-      process.once('exit', exit)
+      // Vite config reloads close httpServer but keep this Node process.
+      // Do not SIGTERM owned bridges here — only on real process exit.
+      onDevProcessExit('bridge-manager', stopAll)
       console.log(
         '\x1b[35m[bridge]\x1b[0m ready — POST /api/bridge/{bcigo|neuracle}/ensure 可一键启动',
       )

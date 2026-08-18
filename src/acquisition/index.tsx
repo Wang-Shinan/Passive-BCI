@@ -516,12 +516,18 @@ export function AcquisitionDebugPage() {
   }, [ingestFrames])
 
   useEffect(() => {
+    const id = window.setInterval(() => {
+      setRecording(recorderRef.current.recording)
+      setRecBytes(recorderRef.current.byteLength)
+      setRecSink(recorderRef.current.sinkKind)
+    }, 400)
+    return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => {
     if (status !== 'streaming' && status !== 'demo') return
     const id = window.setInterval(() => {
       setStats({ ...statsRef.current })
-      if (recorderRef.current.recording) {
-        setRecBytes(recorderRef.current.byteLength)
-      }
     }, 250)
     return () => clearInterval(id)
   }, [status])
@@ -602,13 +608,15 @@ export function AcquisitionDebugPage() {
       return
     }
     const id = window.setInterval(() => {
-      const snap = computeLiveFeatures({
+        const snap = computeLiveFeatures({
         buffers: rawRingRef.current,
         writeHead: writeHeadRef.current,
         filled: filledRef.current,
         sampleRate,
         windowSec: featureWindowSec,
         channelMask: visible,
+        channelNames: streamLabels,
+        channelTypes: streamTypes,
         enabledFeatures,
       })
       if (!snap) return
@@ -619,7 +627,7 @@ export function AcquisitionDebugPage() {
       })
     }, 200)
     return () => clearInterval(id)
-  }, [status, sampleRate, visible, enabledFeatures, featureWindowSec])
+  }, [status, sampleRate, visible, enabledFeatures, featureWindowSec, streamLabels, streamTypes])
 
   useEffect(() => {
     liveEegHub.setChannelMask(visible)
@@ -1552,6 +1560,9 @@ export function AcquisitionDebugPage() {
         <Link to="/" className="acq-home">
           ← 首页
         </Link>
+        <Link to="/recordings" className="acq-home">
+          会话库
+        </Link>
         <div className="acq-brand">
           <strong>全域智能</strong>
           <span>脑电测试 · EEG</span>
@@ -1598,11 +1609,15 @@ export function AcquisitionDebugPage() {
           {status === 'demo' ? '停止演示' : '演示波形'}
         </button>
         {recording ? (
-          <span className="chip" style={{ color: 'var(--accent-2)' }}>
+          <Link to="/recordings" className="chip" style={{ color: 'var(--accent-2)' }}>
             录制 {formatRecordBytes(recBytes)}
             {recSink === 'disk' ? ' · 磁盘' : recSink === 'memory' ? ' · 内存' : ''}
-          </span>
-        ) : null}
+          </Link>
+        ) : (
+          <Link to="/recordings" className="chip">
+            会话库
+          </Link>
+        )}
       </div>
 
       <section className="acq-group">
@@ -1864,13 +1879,13 @@ export function AcquisitionDebugPage() {
                   setVisible((v) => {
                     const n = v.length === channelLabels.length ? [...v] : channelLabels.map(() => true)
                     channelLabels.forEach((name, i) => {
-                      if (name.replace(/\s+/g, '').toUpperCase() === 'FT10') n[i] = false
+                      if (name.replace(/\s+/g, '').toUpperCase() === 'IO') n[i] = false
                     })
                     return n
                   })
                 }
               >
-                关闭 FT10
+                关闭 IO
               </button>
             </>
           ) : null}

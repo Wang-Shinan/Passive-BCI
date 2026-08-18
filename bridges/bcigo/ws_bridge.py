@@ -61,41 +61,117 @@ _SAMPLE_ATTRS = (
     "sample_4",
 )
 
-# Official 10–20 layout from bcigo-sdk docs (32 ch, last is reference).
-BCIGO_CHANNEL_NAMES: tuple[str, ...] = (
-    "FP1",
-    "FP2",
-    "F3",
-    "F4",
-    "F7",
-    "F8",
-    "Fz",
-    "C3",
-    "C4",
-    "Cz",
-    "P3",
-    "P4",
-    "P7",
+# Hardware / EDF column order after stripping sample_index (get_eeg_buffer).
+BCIGO_HARDWARE_CHANNEL_NAMES: tuple[str, ...] = (
     "P8",
-    "Pz",
-    "O1",
-    "O2",
-    "T7",
+    "P7",
     "T8",
+    "T7",
+    "F8",
+    "F7",
+    "O2",
+    "O1",
+    "P4",
+    "P3",
+    "C4",
+    "C3",
+    "F4",
+    "F3",
+    "Fp2",
+    "Fp1",
+    "TP10",
+    "TP9",
+    "FT10",
+    "FT9",
+    "CP6",
+    "CP5",
+    "FC6",
+    "FC5",
+    "CP2",
+    "CP1",
+    "FC2",
+    "FC1",
+    "IO",
+    "Pz",
+    "Cz",
+    "Fz",
+)
+
+# Front-to-back 10–20 display / feature / recording order (IO last).
+BCIGO_CHANNEL_NAMES: tuple[str, ...] = (
+    "Fp1",
+    "Fp2",
+    "F7",
+    "F3",
+    "Fz",
+    "F4",
+    "F8",
+    "FT9",
+    "FC5",
     "FC1",
     "FC2",
-    "FC5",
     "FC6",
+    "FT10",
+    "T7",
+    "C3",
+    "Cz",
+    "C4",
+    "T8",
+    "TP9",
+    "CP5",
     "CP1",
     "CP2",
-    "CP5",
     "CP6",
-    "FT9",
-    "FT10",
-    "TP9",
     "TP10",
+    "P7",
+    "P3",
+    "Pz",
+    "P4",
+    "P8",
+    "O1",
+    "O2",
     "IO",
 )
+
+
+def _name_key(name: str) -> str:
+    return str(name).replace(" ", "").upper()
+
+
+def display_permutation(n_channels: int) -> list[int] | None:
+    """Map hardware columns → front-to-back 10–20 order."""
+    if n_channels != len(BCIGO_HARDWARE_CHANNEL_NAMES):
+        return None
+    hw_index = {_name_key(n): i for i, n in enumerate(BCIGO_HARDWARE_CHANNEL_NAMES)}
+    perm: list[int] = []
+    used: set[int] = set()
+    for name in BCIGO_CHANNEL_NAMES:
+        idx = hw_index.get(_name_key(name))
+        if idx is None or idx in used:
+            return None
+        perm.append(idx)
+        used.add(idx)
+    if len(perm) != n_channels:
+        return None
+    return perm
+
+
+def reorder_to_display(arr: np.ndarray, perm: list[int] | None) -> np.ndarray:
+    if perm is None or arr.size == 0:
+        return arr
+    if arr.ndim == 1:
+        if arr.shape[0] < len(perm):
+            return arr
+        return np.ascontiguousarray(arr[perm])
+    if arr.ndim == 2:
+        if arr.shape[1] < len(perm):
+            return arr
+        return np.ascontiguousarray(arr[:, perm])
+    return arr
+
+
+def _channel_types(names: tuple[str, ...] | list[str]) -> list[str]:
+    return ["EOG" if str(n).upper() == "IO" else "EEG" for n in names]
 
 
 def _gain_enum(sdk: Any, gain: int) -> Any:
@@ -287,7 +363,14 @@ class BciGoSession:
         self.msg_type_name = msg_type_name
         self.n_channels = int(n_channels)
         self.ready_timeout = float(ready_timeout)
-        self.channel_names = tuple(channel_names) if channel_names else BCIGO_CHANNEL_NAMES[: self.n_channels]
+        self._custom_names = channel_names is not None
+        self._display_perm = None if self._custom_names else display_permutation(self.n_channels)
+        if channel_names:
+            self.channel_names = tuple(channel_names)
+        elif self._display_perm:
+            self.channel_names = BCIGO_CHANNEL_NAMES[: self.n_channels]
+        else:
+            self.channel_names = BCIGO_HARDWARE_CHANNEL_NAMES[: self.n_channels]
         if len(self.channel_names) != self.n_channels:
             # Pad / truncate to n_channels
             names = list(self.channel_names)
@@ -537,7 +620,7 @@ class BciGoSession:
             "device": "bcigo",
             "sample_rate": self.sample_rate,
             "channels": list(self.channel_names),
-            "channel_types": ["EEG"] * self.n_channels,
+            "channel_types": _channel_types(self.channel_names),
             "module": f"BCIGo@{self.resolved_host}:{self.resolved_port}",
             "unit": "uV",
             "host": self.resolved_host,
@@ -606,6 +689,7 @@ class BciGoSession:
         out = np.full(self.n_channels, np.nan, dtype=np.float32)
         n = min(self.n_channels, vals.size)
         out[:n] = vals[:n]
+        out = reorder_to_display(out, self._display_perm)
         return {
             "type": "impedance",
             "schema_version": SCHEMA_VERSION,
@@ -672,10 +756,14 @@ class BciGoSession:
         # Hot-fix channel count if SDK reports a different width
         if wire.shape[1] != self.n_channels and wire.shape[1] > 0:
             self.n_channels = int(wire.shape[1])
-            names = list(BCIGO_CHANNEL_NAMES)
+            if not self._custom_names:
+                self._display_perm = display_permutation(self.n_channels)
+            names = list(BCIGO_CHANNEL_NAMES if self._display_perm else BCIGO_HARDWARE_CHANNEL_NAMES)
             while len(names) < self.n_channels:
                 names.append(f"Ch{len(names) + 1}")
             self.channel_names = tuple(names[: self.n_channels])
+
+        wire = reorder_to_display(wire, self._display_perm)
 
         with self._lock:
             pkt = self._packet_count

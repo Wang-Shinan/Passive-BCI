@@ -4,19 +4,38 @@ import { move, rotate, type GameState, type StepResult } from './engine'
 export type MiControlAction = 'left' | 'right' | 'rotate' | 'none'
 
 const CLASS_TO_ACTION: Record<string, MiControlAction> = {
+  left: 'left',
   left_hand: 'left',
+  right: 'right',
   right_hand: 'right',
   feet: 'rotate',
+  both: 'rotate',
+  both_hand: 'rotate',
+  both_hands: 'rotate',
+  up: 'rotate',
   tongue: 'none',
+  rest: 'none',
+  down: 'none',
+  idle: 'none',
+}
+
+export const SMR_CONTROL_SEMANTICS = 'smr_control_4'
+
+export function isSmrControlPrediction(prediction: ModelPrediction): boolean {
+  return prediction.output_semantics === SMR_CONTROL_SEMANTICS || prediction.task === 'smr_control'
+}
+
+export function miControlActionForClassName(name: string): MiControlAction | null {
+  return CLASS_TO_ACTION[name] ?? null
 }
 
 export function miControlActionForPrediction(
   prediction: ModelPrediction,
 ): MiControlAction | null {
-  const byName = CLASS_TO_ACTION[prediction.class_name]
-  if (byName) return byName
-  const byId = CLASS_TO_ACTION[prediction.class_names[prediction.class_id] ?? '']
-  return byId ?? null
+  return (
+    miControlActionForClassName(prediction.class_name) ??
+    miControlActionForClassName(prediction.class_names[prediction.class_id] ?? '')
+  )
 }
 
 export function applyMiControlAction(

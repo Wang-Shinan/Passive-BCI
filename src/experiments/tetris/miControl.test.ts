@@ -31,4 +31,17 @@ describe('tetris mi control mapping', () => {
     expect(miControlActionForPrediction(prediction(2, 'feet'))).toBe('rotate')
     expect(miControlActionForPrediction(prediction(3, 'tongue'))).toBe('none')
   })
+
+  it('maps the SMR cursor head onto the same board actions', () => {
+    const smr = (id: number, name: string) => ({
+      ...prediction(id, name),
+      class_names: ['left_hand', 'right_hand', 'both_hand', 'rest'],
+      task: 'smr_control',
+      output_semantics: 'smr_control_4',
+    })
+    expect(miControlActionForPrediction(smr(0, 'left_hand'))).toBe('left')
+    expect(miControlActionForPrediction(smr(1, 'right_hand'))).toBe('right')
+    expect(miControlActionForPrediction(smr(2, 'both_hand'))).toBe('rotate')
+    expect(miControlActionForPrediction(smr(3, 'rest'))).toBe('none')
+  })
 })

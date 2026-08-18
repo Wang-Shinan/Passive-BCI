@@ -21,6 +21,36 @@ export interface LiveFeatureSnapshot {
 
 const EPS = 1e-12
 const HEAVY_CH_CAP = 8
+/** BCIGo disconnected-lead sentinel (μV). */
+export const EEG_LEAD_OFF_SENTINEL_UV = -750000
+const SENTINEL_ABS_UV = 1e5
+
+function normalizeChName(name: string | undefined): string {
+  return (name ?? '').replace(/\s+/g, '').toUpperCase()
+}
+
+export function isNonScalpEegChannel(name?: string, type?: string): boolean {
+  const t = (type ?? '').replace(/\s+/g, '').toUpperCase()
+  if (t === 'EOG' || t === 'ECG' || t === 'EMG' || t === 'REF' || t === 'GND') return true
+  const n = normalizeChName(name)
+  return n === 'IO' || n === 'EOG' || n === 'ECG' || n === 'REF' || n === 'GND' || n.startsWith('EOG')
+}
+
+function sliceLooksLeadOff(slice: Float32Array): boolean {
+  if (!slice.length) return true
+  let bad = 0
+  for (let i = 0; i < slice.length; i++) {
+    const v = slice[i]!
+    if (
+      !Number.isFinite(v) ||
+      Math.abs(v - EEG_LEAD_OFF_SENTINEL_UV) < 1 ||
+      Math.abs(v) > SENTINEL_ABS_UV
+    ) {
+      bad += 1
+    }
+  }
+  return bad > slice.length * 0.5
+}
 
 function nextPow2(n: number): number {
   let p = 1
@@ -586,6 +616,8 @@ export function computeLiveFeatures(opts: {
   sampleRate: number
   windowSec?: number
   channelMask?: boolean[]
+  channelNames?: string[]
+  channelTypes?: string[]
   enabledFeatures?: string[]
 }): LiveFeatureSnapshot | null {
   const {
@@ -595,6 +627,8 @@ export function computeLiveFeatures(opts: {
     sampleRate,
     windowSec = 1.0,
     channelMask,
+    channelNames,
+    channelTypes,
     enabledFeatures,
   } = opts
   if (!buffers.length || filled < 16) return null
@@ -619,12 +653,14 @@ export function computeLiveFeatures(opts: {
   const winSamples = Math.min(filled, Math.max(16, Math.floor(windowSec * sampleRate)))
   const bufLen = buffers[0]!.length
   const usedIdx: number[] = []
-  for (let c = 0; c < buffers.length; c++) {
-    if (channelMask && channelMask[c] === false) continue
+  const consider = (c: number, honorMask: boolean) => {
+    if (honorMask && channelMask && channelMask[c] === false) return
+    if (isNonScalpEegChannel(channelNames?.[c], channelTypes?.[c])) return
     usedIdx.push(c)
   }
+  for (let c = 0; c < buffers.length; c++) consider(c, true)
   if (!usedIdx.length) {
-    for (let c = 0; c < buffers.length; c++) usedIdx.push(c)
+    for (let c = 0; c < buffers.length; c++) consider(c, false)
   }
 
   const heavyIdx = needHeavy(enabled) ? subsampleChannels(usedIdx, HEAVY_CH_CAP) : []
@@ -664,6 +700,7 @@ export function computeLiveFeatures(opts: {
       const idx = (((writeHead - winSamples + i) % bufLen) + bufLen) % bufLen
       slice[i] = buf[idx]!
     }
+    if (sliceLooksLeadOff(slice)) continue
 
     const mean = meanOf(slice)
     const variance = varianceOf(slice, mean)
@@ -872,7 +909,7 @@ export function computeLiveFeatures(opts: {
 
   return {
     t: performance.now(),
-    nChannels: usedIdx.length,
+    nChannels: nOk,
     windowSec,
     values,
   }

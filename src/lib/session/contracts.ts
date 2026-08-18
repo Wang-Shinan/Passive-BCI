@@ -30,4 +30,5 @@ export type SessionBindMeta = {
   subjectId?: string
   game?: string
   seed?: number
+  notes?: string
 }

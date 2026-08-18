@@ -5,9 +5,33 @@ const TOOLS = [
     path: '/acquisition',
     title: '采集调试',
     blurb:
-      'OmniBCI / 博睿康 / 强脑：实时波形、通道配置与录制。开流后实验页可切「实时 EEG」。',
-    tag: 'OmniBCI · 博睿康',
+      'OmniBCI / 博睿康 / 强脑：实时波形、通道配置与开流。开流后实验页可切「实时 EEG」，并在方块页按局录制。',
+    tag: 'OmniBCI · 博睿康 · 强脑',
     accent: '#22d3ee',
+  },
+  {
+    path: '/recordings',
+    title: '会话库',
+    blurb:
+      '浏览 recordings/ 里的每一局：被试、实验、时长、事件数、备注，打包 ZIP 下载或删除。',
+    tag: 'EEG · events · context',
+    accent: '#38d39f',
+  },
+  {
+    path: '/smr-adapt',
+    title: 'SMR 个体化适配',
+    blurb:
+      'Stieger 式光标：左手左、右手右、双手上、休息下。一边用线索给 REVE SMR 头在线学习，一边把 EEG 和标签写入会话库供离线再训。',
+    tag: 'Stieger SMR · C3/C4',
+    accent: '#c084fc',
+  },
+  {
+    path: '/online-learn',
+    title: '基模在线学习',
+    blurb:
+      '2 秒窗送进本地 REVE。可选评分 / SMR / 方块操作头，按当前 class_names 打标签，只更新冻结编码器上的线性头。',
+    tag: 'REVE · 2s · supervised-head',
+    accent: '#e8b84a',
   },
 ]
 
@@ -22,8 +46,8 @@ const EXPERIMENTS = [
   {
     path: '/tetris',
     title: '实验二 · 压力自适应俄罗斯方块',
-    blurb: '标准方块玩法。主试用滑块调节压力，下落速度随之动态变化。',
-    tag: 'Adaptive difficulty',
+    blurb: '标准方块玩法。按局录制 EEG + 落子事件；压力可调下落速度。可用已拟合的 SMR 头控左右/旋转，或用键盘给 7 类操作头在线学习。',
+    tag: 'Adaptive difficulty · REVE actions',
     accent: '#38d39f',
   },
   {
@@ -100,7 +124,7 @@ export function Home() {
           被动脑机接口实验网页
         </h1>
         <p className="muted mt-3 max-w-2xl text-base">
-          先在采集调试连接设备并点「开始采集」，再进实验选「实时 EEG」。
+          先在采集调试连接设备并点「开始采集」，再进实验。采俄罗斯方块时在实验页点「开始本局 / 结束本局」，到「会话库」查看和下载。
           未开流时仍可用手动滑块或「演示数据」。采集支持 OmniBCI、博睿康与强脑 BCIGo。
         </p>
       </header>
@@ -108,7 +132,7 @@ export function Home() {
       <section className="mb-12">
         <div className="mb-4 flex items-baseline justify-between gap-3">
           <h2 className="m-0 text-xl font-semibold tracking-tight">采集调试</h2>
-          <span className="muted text-sm">信号接入 · 质量检查</span>
+          <span className="muted text-sm">信号接入 · 会话落盘</span>
         </div>
         <CardGrid items={TOOLS} />
       </section>

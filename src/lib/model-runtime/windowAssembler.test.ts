@@ -105,4 +105,15 @@ describe('ModelWindowAssembler', () => {
     expect(second[0]!.header.window_id).toBe(firstId + 1)
     expect(second[0]!.header.segment_id).not.toBe(first[0]!.header.segment_id)
   })
+
+  it('sizes a 2 second window from the configured duration', () => {
+    const assembler = new ModelWindowAssembler({ windowSec: 2, stepSec: 0.5 })
+    const values: number[] = []
+    for (let sample = 1; sample <= 8; sample++) values.push(sample, sample * 10)
+    const emitted = assembler.push(batch(values))
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0]!.header.samples).toBe(8)
+    expect(emitted[0]!.header.start_time_sec).toBe(0)
+    expect(emitted[0]!.header.end_time_sec).toBe(2)
+  })
 })

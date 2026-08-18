@@ -56,6 +56,62 @@ describe('model runtime protocol', () => {
     expect(predictionToOrdinalRating(prediction)).toBeNull()
   })
 
+  it('does not treat tetris action heads as ordinal ratings', () => {
+    const prediction = parseServerMessage(
+      JSON.stringify({
+        type: 'prediction',
+        schema_version: 1,
+        request_id: 'window-1',
+        observation_id: 'obs-1',
+        window_id: 1,
+        segment_id: 'segment-1',
+        class_id: 1,
+        class_name: 'left',
+        class_names: ['rest', 'left', 'right', 'rotateCW', 'rotateCCW', 'softDrop', 'hardDrop'],
+        probabilities: [0.1, 0.7, 0.05, 0.05, 0.03, 0.04, 0.03],
+        confidence: 0.7,
+        model_revision: 'base',
+        online_update_step: 0,
+        online_update_applied: false,
+        prepare_latency_ms: 1,
+        inference_latency_ms: 2,
+        task: 'tetris_action',
+        output_semantics: 'tetris_action_7',
+      }),
+    )
+    if (prediction.type !== 'prediction') throw new Error('unexpected message')
+    expect(predictionToOrdinalRating(prediction)).toBeNull()
+    expect(prediction.output_semantics).toBe('tetris_action_7')
+  })
+
+  it('does not map smr_control_4 predictions onto 差/中/好', () => {
+    const prediction = parseServerMessage(
+      JSON.stringify({
+        type: 'prediction',
+        schema_version: 1,
+        request_id: 'window-1',
+        observation_id: 'obs-1',
+        window_id: 1,
+        segment_id: 'segment-1',
+        class_id: 0,
+        class_name: 'left_hand',
+        class_names: ['left_hand', 'right_hand', 'both_hand', 'rest'],
+        probabilities: [0.4, 0.3, 0.2, 0.1],
+        confidence: 0.4,
+        model_revision: 'base',
+        online_update_step: 0,
+        online_update_applied: false,
+        prepare_latency_ms: 1,
+        inference_latency_ms: 2,
+        task: 'smr_control',
+        output_semantics: 'smr_control_4',
+      }),
+    )
+    if (prediction.type !== 'prediction') throw new Error('unexpected message')
+    expect(predictionToOrdinalRating(prediction)).toBeNull()
+    expect(prediction.output_semantics).toBe('smr_control_4')
+  })
+
   it('rejects malformed probability vectors', () => {
     expect(() =>
       parseServerMessage(
@@ -91,6 +147,12 @@ describe('model runtime protocol', () => {
           model_revision: 'base',
           strategy: 'none',
         },
+        input: {
+          window_sec: 2,
+          step_sec: 0.5,
+          unit: 'uV',
+          layout: 'CT',
+        },
       }),
     )
     expect(hello).toMatchObject({
@@ -100,6 +162,8 @@ describe('model runtime protocol', () => {
       model_revision: 'base',
       strategy: 'none',
       class_names: ['left', 'right', 'feet', 'rest'],
+      window_sec: 2,
+      step_sec: 0.5,
     })
 
     const prediction = parseServerMessage(

@@ -6,8 +6,8 @@ export type LiveEegLink = 'idle' | 'connecting' | 'open' | 'streaming' | 'demo' 
 export const LIVE_FRESH_MS = 1500
 const HUB_SECONDS = 6
 const HIDDEN_CH_KEY = 'passive-bci.hidden-channel-names'
-/** Off by default (noisy / unused on BCIGo 32-ch). */
-export const DEFAULT_HIDDEN_CHANNELS = ['FT10']
+/** Off by default (EOG / unused on BCIGo 32-ch). */
+export const DEFAULT_HIDDEN_CHANNELS = ['IO']
 
 export function normalizeChannelName(name: string): string {
   return name.replace(/\s+/g, '').toUpperCase()
