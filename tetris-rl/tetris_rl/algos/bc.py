@@ -17,7 +17,12 @@ class BCLearner:
     def __init__(self, cfg: TrainConfig, device: torch.device, obs_shape: tuple[int, ...]):
         self.cfg = cfg
         self.device = device
-        self.net = ActorCritic(width=cfg.width, hidden=cfg.hidden).to(device)
+        self.net = ActorCritic(
+            width=cfg.width,
+            hidden=cfg.hidden,
+            depth=cfg.depth,
+            in_channels=int(obs_shape[0]),
+        ).to(device)
         self.optimizer = optim.Adam(self.net.parameters(), lr=cfg.lr)
         self.loss_fn = nn.CrossEntropyLoss()
         cap = max(cfg.bc_batch * 8, 16_384)
@@ -28,15 +33,28 @@ class BCLearner:
         self.idx = 0
         self.env_steps = 0
         self.updates = 0
+        self.kind = "dagger" if cfg.algo == "dagger" else "bc"
         self._use_amp = cfg.precision == "bf16" and device.type == "cuda"
 
     def remember(self, obs: np.ndarray, actions: np.ndarray) -> None:
-        n = obs.shape[0]
-        for i in range(n):
-            self.obs[self.idx] = obs[i]
-            self.actions[self.idx] = actions[i]
-            self.idx = (self.idx + 1) % self.cap
-            self.size = min(self.size + 1, self.cap)
+        n = int(obs.shape[0])
+        if n == 0:
+            return
+        cap = self.cap
+        idx = self.idx
+        end = idx + n
+        if end <= cap:
+            sl = slice(idx, end)
+            self.obs[sl] = obs
+            self.actions[sl] = actions
+        else:
+            first = cap - idx
+            self.obs[idx:] = obs[:first]
+            self.obs[: n - first] = obs[first:]
+            self.actions[idx:] = actions[:first]
+            self.actions[: n - first] = actions[first:]
+        self.idx = end % cap
+        self.size = min(self.size + n, cap)
         self.env_steps += n
 
     def act(self, obs: np.ndarray, *, explore: bool) -> np.ndarray:
@@ -84,13 +102,15 @@ class BCLearner:
 
     def checkpoint(self) -> dict[str, Any]:
         return {
-            "kind": "bc",
+            "kind": self.kind,
             "policy": self.net.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "env_steps": self.env_steps,
             "updates": self.updates,
             "width": self.cfg.width,
             "hidden": self.cfg.hidden,
+            "depth": self.cfg.depth,
+            "in_channels": int(self.obs.shape[1]),
         }
 
     def load(self, payload: dict[str, Any]) -> None:

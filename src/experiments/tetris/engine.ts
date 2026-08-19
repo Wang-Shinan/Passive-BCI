@@ -373,7 +373,7 @@ export function createGame(seed = 1): GameState {
   }
 }
 
-function collides(board: Cell[][], piece: Piece, ox = 0, oy = 0, matrix = piece.matrix): boolean {
+export function collides(board: Cell[][], piece: Piece, ox = 0, oy = 0, matrix = piece.matrix): boolean {
   for (let r = 0; r < matrix.length; r++) {
     for (let c = 0; c < matrix[r]!.length; c++) {
       if (!matrix[r]![c]) continue
@@ -591,7 +591,7 @@ export function rotate(state: GameState, dir: 1 | -1, _rng: () => number): StepR
       matrix,
       x: piece.x + ox,
       y: piece.y - oy,
-      fy: 0,
+      fy: piece.fy,
     }
     if (!collides(state.board, test)) {
       return { state: { ...state, piece: test, lockTimer: 0 }, events: [] }

@@ -8,7 +8,7 @@ export interface BoardFeatures {
   wells: number
 }
 
-export type TetrisControlSource = 'human' | 'mi' | 'rl'
+export type TetrisControlSource = 'human' | 'mi' | 'rl' | 'teacher'
 
 export interface TetrisContextSnapshot extends BoardFeatures {
   score: number

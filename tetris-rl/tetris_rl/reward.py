@@ -60,17 +60,16 @@ def compute_reward(
     prev: GameState,
     nxt: GameState,
     lines_delta: int,
+    survival_bonus: float = 0.05,
 ) -> float:
     reward = 0.0
 
     if lines_delta > 0:
         reward += [0.0, 12.0, 36.0, 60.0, 100.0][min(lines_delta, 4)]
 
-    reward += 2.0 * (board_potential(nxt.board) - board_potential(prev.board))
-
     if nxt.game_over and not prev.game_over:
         reward -= 2.0
 
-    reward += 0.05  # survival bonus
+    reward += survival_bonus
 
     return reward

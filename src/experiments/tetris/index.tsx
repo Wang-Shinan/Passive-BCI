@@ -41,8 +41,8 @@ import {
   describeMiControlAction,
   miControlActionForPrediction,
 } from './miControl'
-import { RL_DECISION_INTERVAL_MS, type RlModelMetadata } from './rl/contracts'
-import { TetrisOnnxAgent } from './rl/onnxSession'
+import { RL_DECISION_INTERVAL_MS } from './rl/contracts'
+import { HeuristicPlanner } from './rl/heuristic'
 import { describeRlAction, rlStep } from './rl/step'
 import { useStressBroadcast } from './useStressBroadcast'
 
@@ -114,15 +114,12 @@ export function TetrisExperiment() {
   const [miControlEnabled, setMiControlEnabled] = useState(loadMiControlEnabled)
   const lastMiObservationRef = useRef<string | null>(null)
   const [lastMiAction, setLastMiAction] = useState<string>('—')
-  const rlAgentRef = useRef(new TetrisOnnxAgent())
+  const teacherRef = useRef(new HeuristicPlanner())
   const [rlEnabled, setRlEnabled] = useState(loadRlControlEnabled)
-  const [rlLoading, setRlLoading] = useState(false)
-  const [rlError, setRlError] = useState<string | null>(null)
-  const [rlMetadata, setRlMetadata] = useState<RlModelMetadata | null>(null)
   const [lastRlAction, setLastRlAction] = useState('—')
   const [rlLatencyMs, setRlLatencyMs] = useState<number | null>(null)
   const rlDecisionAccRef = useRef(0)
-  const rlInferringRef = useRef(false)
+  const rlBusyRef = useRef(false)
   const rlAutoRestartRef = useRef<number | null>(null)
   const [cfg, setCfg] = useState<GravityConfig>(() => defaultGravityConfig())
   const gravityRef = useRef<GravityState>(initGravityState(defaultGravityConfig()))
@@ -235,6 +232,7 @@ export function TetrisExperiment() {
     localStorage.setItem(RL_CONTROL_KEY, String(rlEnabled))
     if (rlEnabled) {
       setMiControlEnabled(false)
+      teacherRef.current.reset()
     } else {
       setLastRlAction('—')
       setRlLatencyMs(null)
@@ -242,33 +240,12 @@ export function TetrisExperiment() {
   }, [rlEnabled])
 
   useEffect(() => {
-    controlRef.current =
-      rlEnabled && rlAgentRef.current.loaded ? 'rl' : miControlEnabled ? 'mi' : 'human'
-  }, [rlEnabled, miControlEnabled, rlMetadata])
-
-  const loadRlModel = useCallback(async () => {
-    setRlLoading(true)
-    setRlError(null)
-    try {
-      const meta = await rlAgentRef.current.load()
-      setRlMetadata(meta)
-      loggerRef.current.log('rl_model_loaded', {
-        version: meta.version,
-        trainedSteps: meta.trainedSteps,
-      })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setRlError(message)
-      setRlMetadata(null)
-    } finally {
-      setRlLoading(false)
-    }
-  }, [])
+    controlRef.current = rlEnabled ? 'teacher' : miControlEnabled ? 'mi' : 'human'
+  }, [rlEnabled, miControlEnabled])
 
   useEffect(() => {
     return () => {
       if (rlAutoRestartRef.current) window.clearTimeout(rlAutoRestartRef.current)
-      rlAgentRef.current.dispose()
     }
   }, [])
 
@@ -322,39 +299,36 @@ export function TetrisExperiment() {
     applyResult(result.state, result.events)
   }, [miControlEnabled, rlEnabled, modelRuntime.latestPrediction, applyResult])
 
-  const runRlDecision = useCallback(async () => {
-    if (!rlEnabled || !rlAgentRef.current.loaded || rlInferringRef.current) return
+  const runRlDecision = useCallback(() => {
+    if (!rlEnabled || rlBusyRef.current) return
     const s = stateRef.current
     if (s.gameOver || s.paused || s.anim) return
 
-    rlInferringRef.current = true
+    rlBusyRef.current = true
     try {
-      const result = await rlAgentRef.current.predict(s, gravityRef.current.smoothed)
-      setRlLatencyMs(result.latencyMs)
-      setLastRlAction(describeRlAction(result.actionName))
+      const t0 = performance.now()
+      const action = teacherRef.current.act(s)
+      const latencyMs = performance.now() - t0
+      setRlLatencyMs(latencyMs)
+      setLastRlAction(describeRlAction(action))
 
       const latest = stateRef.current
       if (latest.gameOver || latest.paused || latest.anim) return
 
-      const stepped = rlStep(latest, result.actionName, rngRef.current, {
+      const stepped = rlStep(latest, action, rngRef.current, {
         cellsPerSec: gravityRef.current.smoothed,
         instantAnim: false,
       })
       applyResult(stepped.state, stepped.events)
       loggerRef.current.log('action', {
-        source: 'rl',
-        action: result.actionName,
-        action_index: result.actionIndex,
-        latency_ms: result.latencyMs,
-        model_version: rlMetadata?.version,
+        source: 'teacher',
+        action,
+        latency_ms: latencyMs,
       })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setRlError(message)
     } finally {
-      rlInferringRef.current = false
+      rlBusyRef.current = false
     }
-  }, [applyResult, rlEnabled, rlMetadata?.version])
+  }, [applyResult, rlEnabled])
 
   // Smooth game loop — update every frame
   useEffect(() => {
@@ -397,7 +371,7 @@ export function TetrisExperiment() {
       }
 
       const s = stateRef.current
-      const rlActive = rlEnabled && rlAgentRef.current.loaded
+      const rlActive = rlEnabled
       if (!s.gameOver && !s.paused) {
         if (s.anim) {
           const result = advanceBoardAnim(s, rngRef.current, dt)
@@ -515,6 +489,7 @@ export function TetrisExperiment() {
     t0Ref.current = performance.now()
     softDropHeldRef.current = false
     rlDecisionAccRef.current = 0
+    teacherRef.current.reset()
     if (rlAutoRestartRef.current) {
       window.clearTimeout(rlAutoRestartRef.current)
       rlAutoRestartRef.current = null
@@ -687,12 +662,8 @@ export function TetrisExperiment() {
           <RlAgentPanel
             enabled={rlEnabled}
             onEnabledChange={setRlEnabled}
-            loading={rlLoading}
-            loadError={rlError}
-            metadata={rlMetadata}
             lastAction={lastRlAction}
             latencyMs={rlLatencyMs}
-            onLoad={loadRlModel}
           />
 
           <Panel title="MI 分类控制">

@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Literal
 
-AlgoName = Literal["dqn", "ppo", "bc", "bc_ppo"]
+AlgoName = Literal["dqn", "ppo", "bc", "bc_ppo", "dagger", "iql", "pqn", "afterstate", "afterstate_ppo"]
 
 
 @dataclass
@@ -20,6 +20,11 @@ class TrainConfig:
     precision: str = "fp32"
     width: int = 64
     hidden: int = 512
+    depth: int = 2
+    frame_stack: int = 1
+    frame_stride: int = 1
+    vec_backend: str = "sync"
+    num_workers: int = 0
     lr: float = 3e-4
     gamma: float = 0.99
     max_grad_norm: float = 10.0
@@ -45,9 +50,22 @@ class TrainConfig:
     entropy_coef: float = 0.02
     value_coef: float = 0.5
     reward_clip: float = 10.0
+    survival_bonus: float = 0.05
 
     bc_steps: int = 30_000
     bc_batch: int = 1024
+    dagger_beta_start: float = 1.0
+    dagger_beta_end: float = 0.1
+    iql_expectile: float = 0.7
+    iql_temperature: float = 3.0
+    planner_depth: int = 1
+    planner_beam: int = 512
+    planner_max_nodes: int = 0
+    planner_workers: int = 0
+    planner_mc_samples: int = 0
+    planner_mc_horizon: int = 3
+    offline_path: str = ""
+    afterstate_encoder: str = "mlp"
 
     gravity_min: float = 1.0
     gravity_max: float = 6.0

@@ -1,4 +1,5 @@
 export * from './contracts'
 export * from './encode'
+export * from './heuristic'
 export * from './instantResolve'
 export * from './step'

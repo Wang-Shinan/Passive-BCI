@@ -1,87 +1,40 @@
-"""Greedy placement heuristic that emits realtime actions."""
+"""Placement heuristic that emits realtime actions. Search lives in search.py."""
 
 from __future__ import annotations
 
-from .engine import (
-    COLS,
-    collides,
-    copy_game_state,
-    hard_drop,
-    move,
-    rotate,
-    GameState,
+from concurrent.futures import ProcessPoolExecutor
+
+from .engine import GameState
+from .search import (
+    DEFAULT_BEAM,
+    DEFAULT_DEPTH,
+    DEFAULT_MAX_NODES,
+    best_placement_actions,
+    resolve_search_workers,
 )
-from .reward import board_potential
-from .rng import mulberry32
-
-
-def _try_rotate(state: GameState, times: int) -> GameState | None:
-    s = copy_game_state(state)
-    for _ in range(times):
-        before = s.piece.rot if s.piece else None
-        s = rotate(s, 1)
-        if not s.piece or s.piece.rot == before:
-            if times > 0 and (not s.piece or s.piece.type != "O"):
-                return None
-    return s
-
-
-def _try_move_to_x(state: GameState, target_x: int) -> GameState | None:
-    s = copy_game_state(state)
-    if not s.piece:
-        return None
-    dx = 1 if target_x > s.piece.x else -1
-    guard = 0
-    while s.piece and s.piece.x != target_x and guard < COLS + 4:
-        before = s.piece.x
-        s = move(s, dx)
-        if not s.piece or s.piece.x == before:
-            return None
-        guard += 1
-    return s
-
-
-def best_placement_actions(state: GameState, rng) -> list[str]:
-    """Return a short realtime action plan for the current piece."""
-    if not state.piece or state.game_over or state.anim:
-        return ["noop"]
-
-    piece = state.piece
-    rotations = 1 if piece.type == "O" else 4
-    best_score = float("-inf")
-    best_plan: list[str] = ["hardDrop"]
-
-    for rot in range(rotations):
-        rotated = _try_rotate(state, rot)
-        if rotated is None or rotated.piece is None:
-            continue
-        min_x = -4
-        max_x = COLS + 4
-        for x in range(min_x, max_x):
-            moved = _try_move_to_x(rotated, x)
-            if moved is None or moved.piece is None:
-                continue
-            if collides(moved.board, moved.piece):
-                continue
-            dummy_rng = mulberry32(1)
-            dropped = hard_drop(copy_game_state(moved), dummy_rng)
-            lines_gain = dropped.lines - state.lines
-            score = board_potential(dropped.board) + 12.0 * lines_gain
-            if dropped.game_over:
-                score -= 50.0
-            if score > best_score:
-                best_score = score
-                plan = (["rotateCW"] * rot) + (
-                    ["right"] * max(0, x - piece.x) + ["left"] * max(0, piece.x - x)
-                )
-                plan.append("hardDrop")
-                best_plan = plan or ["hardDrop"]
-
-    return best_plan
 
 
 class HeuristicPlanner:
-    def __init__(self):
+    def __init__(
+        self,
+        depth: int = 1,
+        mc_samples: int = 0,
+        mc_horizon: int = 3,
+        beam: int = DEFAULT_BEAM,
+        max_nodes: int = DEFAULT_MAX_NODES,
+        workers: int = 0,
+        device: str = "none",
+    ):
+        self.depth = depth
+        self.mc_samples = mc_samples
+        self.mc_horizon = mc_horizon
+        self.beam = beam
+        self.max_nodes = max_nodes
+        self.device = device
+        self.workers = resolve_search_workers(workers)
+        self._pool: ProcessPoolExecutor | None = None
+        if self.workers > 1:
+            self._pool = ProcessPoolExecutor(max_workers=self.workers)
         self._plan: list[str] = []
         self._piece_id: tuple | None = None
 
@@ -89,14 +42,27 @@ class HeuristicPlanner:
         p = state.piece
         if not p:
             return None
-        return (p.type, p.x, p.y, p.rot, state.lines)
+        # Commit one placement per piece. Including y/x made gravity replan
+        # every 100ms and flip targets before hardDrop.
+        return (p.type, state.lines, state.next, tuple(state.bag))
 
     def act(self, state: GameState, rng) -> int:
         from .engine import RL_ACTION_NAMES
 
         key = self._piece_key(state)
         if key != self._piece_id or not self._plan:
-            self._plan = best_placement_actions(state, rng)
+            self._plan = best_placement_actions(
+                state,
+                rng,
+                depth=self.depth,
+                mc_samples=self.mc_samples,
+                mc_horizon=self.mc_horizon,
+                beam=self.beam,
+                max_nodes=self.max_nodes,
+                workers=self.workers,
+                pool=self._pool,
+                device=self.device,
+            )
             self._piece_id = key
 
         if not self._plan:
@@ -106,3 +72,35 @@ class HeuristicPlanner:
             self._piece_id = None
             self._plan = []
         return RL_ACTION_NAMES.index(action)
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+def lookahead_planner(
+    depth: int = DEFAULT_DEPTH,
+    beam: int = DEFAULT_BEAM,
+    max_nodes: int = DEFAULT_MAX_NODES,
+    workers: int = -1,
+    mc_samples: int = 0,
+    mc_horizon: int = 3,
+    device: str = "auto",
+) -> HeuristicPlanner:
+    """Teacher for offline collect: several pieces ahead, parallel locks."""
+    return HeuristicPlanner(
+        depth=depth,
+        beam=beam,
+        max_nodes=max_nodes,
+        workers=workers,
+        mc_samples=mc_samples,
+        mc_horizon=mc_horizon,
+        device=device,
+    )

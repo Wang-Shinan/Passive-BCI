@@ -1,0 +1,22 @@
+{
+  "algo": "afterstate",
+  "run_name": "afterstate_1m",
+  "afterstate_encoder": "cnn",
+  "steps": 50000,
+  "num_envs": 16,
+  "device": "auto",
+  "precision": "fp32",
+  "width": 32,
+  "depth": 3,
+  "hidden": 160,
+  "lr": 3e-4,
+  "bc_batch": 64,
+  "imitate_frac": 1.0,
+  "reward_clip": 0.0,
+  "survival_bonus": 0.0,
+  "eval_every": 5000,
+  "eval_seeds": 8,
+  "eval_max_steps": 800,
+  "log_every": 500,
+  "ckpt_every": 5000
+}

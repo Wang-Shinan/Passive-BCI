@@ -1,0 +1,14 @@
+{
+  "algo": "collect",
+  "run_name": "offline_lookahead_probe",
+  "device": "auto",
+  "depth": 3,
+  "beam": 256,
+  "min_episodes": 8,
+  "min_cleared": 8,
+  "min_lines": 80,
+  "min_clear_events": 16,
+  "min_transitions": 2000,
+  "max_episodes": 16,
+  "max_steps": 800
+}

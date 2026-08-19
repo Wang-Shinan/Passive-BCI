@@ -1,6 +1,6 @@
 {
-  "algo": "bc",
-  "run_name": "bc_h20_wide",
+  "algo": "dagger",
+  "run_name": "dagger_h20_wide",
   "steps": 150000,
   "num_envs": 128,
   "vec_backend": "subproc",
@@ -14,6 +14,8 @@
   "hidden": 4096,
   "lr": 3e-4,
   "bc_batch": 8192,
+  "dagger_beta_start": 1.0,
+  "dagger_beta_end": 0.1,
   "eval_every": 25000,
   "eval_seeds": 16,
   "log_every": 5000,

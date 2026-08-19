@@ -26,10 +26,12 @@ class TetrisEnv(gym.Env):
         gravity_min: float = 1.0,
         gravity_max: float = 6.0,
         seed: int | None = None,
+        survival_bonus: float = 0.05,
     ):
         super().__init__()
         self.gravity_min = gravity_min
         self.gravity_max = gravity_max
+        self.survival_bonus = survival_bonus
         self._seed = seed if seed is not None else 1
         self._rng_fn = mulberry32(self._seed)
         self._cells_per_sec = gravity_min
@@ -81,7 +83,9 @@ class TetrisEnv(gym.Env):
             instant_anim=True,
         )
         lines_delta = self.state.lines - prev_lines
-        reward = compute_reward(prev, self.state, lines_delta)
+        reward = compute_reward(
+            prev, self.state, lines_delta, survival_bonus=self.survival_bonus
+        )
         terminated = self.state.game_over
         truncated = False
         return self._obs(), reward, terminated, truncated, {

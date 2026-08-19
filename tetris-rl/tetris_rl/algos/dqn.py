@@ -35,15 +35,34 @@ class CircularReplay:
         next_obs: np.ndarray,
         dones: np.ndarray,
     ) -> None:
-        n = obs.shape[0]
-        for i in range(n):
-            self.obs[self.idx] = obs[i]
-            self.next_obs[self.idx] = next_obs[i]
-            self.actions[self.idx] = actions[i]
-            self.rewards[self.idx] = rewards[i]
-            self.dones[self.idx] = float(dones[i])
-            self.idx = (self.idx + 1) % self.capacity
-            self.size = min(self.size + 1, self.capacity)
+        n = int(obs.shape[0])
+        if n == 0:
+            return
+        cap = self.capacity
+        idx = self.idx
+        end = idx + n
+        done_f = dones.astype(np.float32)
+        if end <= cap:
+            sl = slice(idx, end)
+            self.obs[sl] = obs
+            self.next_obs[sl] = next_obs
+            self.actions[sl] = actions
+            self.rewards[sl] = rewards
+            self.dones[sl] = done_f
+        else:
+            first = cap - idx
+            self.obs[idx:] = obs[:first]
+            self.obs[: n - first] = obs[first:]
+            self.next_obs[idx:] = next_obs[:first]
+            self.next_obs[: n - first] = next_obs[first:]
+            self.actions[idx:] = actions[:first]
+            self.actions[: n - first] = actions[first:]
+            self.rewards[idx:] = rewards[:first]
+            self.rewards[: n - first] = rewards[first:]
+            self.dones[idx:] = done_f[:first]
+            self.dones[: n - first] = done_f[first:]
+        self.idx = end % cap
+        self.size = min(self.size + n, cap)
 
     def sample(self, batch_size: int, rng: Random) -> tuple[np.ndarray, ...]:
         indices = np.array(rng.sample(range(self.size), batch_size), dtype=np.int64)
@@ -65,9 +84,14 @@ class DQNLearner:
         self.device = device
         self.rng = Random(cfg.seed)
         self.n_actions = len(RL_ACTION_NAMES)
+        in_channels = int(obs_shape[0])
         if cfg.dueling:
-            self.policy = DuelingDQN(width=cfg.width, hidden=cfg.hidden).to(device)
-            self.target = DuelingDQN(width=cfg.width, hidden=cfg.hidden).to(device)
+            self.policy = DuelingDQN(
+                width=cfg.width, hidden=cfg.hidden, depth=cfg.depth, in_channels=in_channels
+            ).to(device)
+            self.target = DuelingDQN(
+                width=cfg.width, hidden=cfg.hidden, depth=cfg.depth, in_channels=in_channels
+            ).to(device)
         else:
             self.policy = TetrisDQN().to(device)
             self.target = TetrisDQN().to(device)
@@ -196,6 +220,10 @@ class DQNLearner:
             "dueling": self.cfg.dueling,
             "width": self.cfg.width,
             "hidden": self.cfg.hidden,
+            "depth": self.cfg.depth,
+            "in_channels": int(self.policy.backbone[0].in_channels)
+            if self.cfg.dueling
+            else 12,
         }
 
     def load(self, payload: dict[str, Any]) -> None:

@@ -10,10 +10,10 @@ import numpy as np
 import torch
 
 from .config import TrainConfig, resolve_device
+from .encode import RL_OBS_CHANNELS, RL_OBS_COLS, RL_OBS_ROWS
 from .evaluate import evaluate_act, heuristic_baseline, random_baseline
 from .export_onnx import export_checkpoint
 from .run import make_learner, train, sweep
-from .vec_env import SyncVectorEnv
 
 
 def _cfg_from_args(args: argparse.Namespace) -> TrainConfig:
@@ -72,18 +72,31 @@ def cmd_sweep(args: argparse.Namespace) -> None:
 
 
 def cmd_eval(args: argparse.Namespace) -> None:
+    from .algos.afterstate import AfterstateLearner
+    from .evaluate import evaluate_afterstate
+
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     cfg = TrainConfig.from_dict(payload.get("config") or {})
     device = torch.device(resolve_device(args.device or cfg.device))
-    dummy = SyncVectorEnv(1, 0)
-    learner = make_learner(cfg, device, dummy.obs_shape)
-    learner.load(payload)
+    kind = payload.get("kind") or cfg.algo
     seeds = list(range(20_000, 20_000 + args.seeds))
+    if kind in ("afterstate", "afterstate_ppo") or cfg.algo in ("afterstate", "afterstate_ppo"):
+        if cfg.algo not in ("afterstate", "afterstate_ppo"):
+            cfg.algo = "afterstate"
+        learner = AfterstateLearner(cfg, device)
+        learner.load(payload)
+        metrics = evaluate_afterstate(learner, seeds, max_pieces=max(80, args.max_steps // 4))
+    else:
+        obs_shape = (RL_OBS_CHANNELS * max(1, cfg.frame_stack), RL_OBS_ROWS, RL_OBS_COLS)
+        learner = make_learner(cfg, device, obs_shape)
+        learner.load(payload)
 
-    def act(obs: np.ndarray) -> int:
-        return int(learner.act(obs[None], explore=False)[0])
+        def act(obs: np.ndarray) -> int:
+            return int(learner.act(obs[None], explore=False)[0])
 
-    metrics = evaluate_act(act, seeds, max_steps=args.max_steps)
+        metrics = evaluate_act(
+            act, seeds, max_steps=args.max_steps, frame_stack=cfg.frame_stack, frame_stride=cfg.frame_stride
+        )
     summary = {
         "eval": metrics,
         "random_baseline": random_baseline(seeds[:8]),
@@ -106,7 +119,11 @@ def main(argv: list[str] | None = None) -> None:
 
     p_train = sub.add_parser("train", help="train one algorithm")
     p_train.add_argument("--config", type=Path, default=None)
-    p_train.add_argument("--algo", choices=["dqn", "ppo", "bc", "bc_ppo"], default=None)
+    p_train.add_argument(
+        "--algo",
+        choices=["dqn", "ppo", "bc", "bc_ppo", "dagger", "iql", "pqn", "afterstate", "afterstate_ppo"],
+        default=None,
+    )
     p_train.add_argument("--seed", type=int, default=None)
     p_train.add_argument("--steps", type=int, default=None)
     p_train.add_argument("--num-envs", dest="num_envs", type=int, default=None)

@@ -1,0 +1,19 @@
+{
+  "algo": "afterstate",
+  "run_name": "afterstate_small",
+  "steps": 20000,
+  "num_envs": 16,
+  "device": "auto",
+  "hidden": 64,
+  "depth": 2,
+  "lr": 3e-4,
+  "bc_batch": 256,
+  "imitate_frac": 1.0,
+  "reward_clip": 0.0,
+  "survival_bonus": 0.0,
+  "eval_every": 2000,
+  "eval_seeds": 8,
+  "eval_max_steps": 800,
+  "log_every": 500,
+  "ckpt_every": 2000
+}
