@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { classBarColor, isReveTaskId, labelHotkey, rewardForClass } from './reveTasks'
+import { classBarColor, defaultReveStrategy, isReveTaskId, labelHotkey, rewardForClass } from './reveTasks'
 
 describe('reve task catalog', () => {
   it('accepts known task ids only', () => {
     expect(isReveTaskId('smr_control')).toBe(true)
     expect(isReveTaskId('passive_rating')).toBe(true)
     expect(isReveTaskId('rating')).toBe(false)
+  })
+
+  it('keeps smr_control frozen and other heads updatable', () => {
+    expect(defaultReveStrategy('smr_control')).toBe('none')
+    expect(defaultReveStrategy('passive_rating')).toBe('supervised-head')
+    expect(defaultReveStrategy('tetris_action')).toBe('supervised-head')
   })
 
   it('only attaches ordinal rewards to the rating head', () => {
@@ -21,9 +27,9 @@ describe('reve task catalog', () => {
     expect(labelHotkey(9)).toBeNull()
   })
 
-  it('keeps the 3-class rating colors distinct', () => {
-    expect(classBarColor(0, 3)).toBe('var(--danger)')
-    expect(classBarColor(2, 3)).toBe('var(--accent-2)')
-    expect(classBarColor(0, 4)).not.toBe(classBarColor(0, 3))
+  it('keeps the 3-class palette colors distinct', () => {
+    expect(classBarColor(0, 3)).not.toBe(classBarColor(1, 3))
+    expect(classBarColor(1, 3)).not.toBe(classBarColor(2, 3))
+    expect(classBarColor(0, 3)).not.toBe(classBarColor(2, 3))
   })
 })

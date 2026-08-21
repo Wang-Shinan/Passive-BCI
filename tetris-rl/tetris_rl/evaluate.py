@@ -59,3 +59,105 @@ def random_baseline(seeds: list[int], max_steps: int = 500) -> dict:
         "cleared_episodes": int(sum(1 for x in lines if x > 0)),
         "episodes": len(seeds),
     }
+
+
+def evaluate_afterstate(learner, seeds: list[int], max_pieces: int = 200) -> dict:
+    from .afterstate import enumerate_placements, pack_boards, pack_placements, play_plan
+
+    env = TetrisEnv()
+    lines: list[int] = []
+    scores: list[int] = []
+    for seed in seeds:
+        env.reset(seed=seed)
+        info = {"lines": 0, "score": 0}
+        for _ in range(max_pieces):
+            placements = enumerate_placements(env.state)
+            if not placements:
+                break
+            feats, mask, _ = pack_placements(placements)
+            boards = pack_boards(placements) if getattr(learner, "use_cnn", False) else None
+            idx = learner.act(feats, mask, explore=False, boards=boards)
+            idx = min(idx, len(placements) - 1)
+            done, info, _ = play_plan(env, placements[idx].plan)
+            if done:
+                break
+        lines.append(int(info["lines"]))
+        scores.append(int(info["score"]))
+    return {
+        "mean_lines": float(np.mean(lines)),
+        "median_lines": float(np.median(lines)),
+        "mean_score": float(np.mean(scores)),
+        "cleared_episodes": int(sum(1 for x in lines if x > 0)),
+        "episodes": len(seeds),
+        "lines": lines,
+    }
+
+
+def evaluate_act(
+    act_fn,
+    seeds: list[int],
+    max_steps: int = 800,
+    gravity_min: float = 1.0,
+    gravity_max: float = 6.0,
+    frame_stack: int = 1,
+    frame_stride: int = 1,
+) -> dict:
+    env = TetrisEnv(gravity_min=gravity_min, gravity_max=gravity_max)
+    k = max(1, int(frame_stack))
+    stride = max(1, int(frame_stride))
+    lines: list[int] = []
+    scores: list[int] = []
+    for seed in seeds:
+        obs, _ = env.reset(seed=seed)
+        buf = np.repeat(obs[None], k, axis=0)
+        packed = buf.reshape(k * obs.shape[0], *obs.shape[1:])
+        info = {"lines": 0, "score": 0}
+        count = 0
+        for _ in range(max_steps):
+            action = int(act_fn(packed))
+            obs, _, terminated, truncated, info = env.step(action)
+            if terminated or truncated:
+                break
+            count += 1
+            if k > 1 and count % stride == 0:
+                buf[:-1] = buf[1:]
+            buf[-1] = obs
+            packed = buf.reshape(k * obs.shape[0], *obs.shape[1:])
+        lines.append(int(info["lines"]))
+        scores.append(int(info["score"]))
+    return {
+        "mean_lines": float(np.mean(lines)),
+        "median_lines": float(np.median(lines)),
+        "mean_score": float(np.mean(scores)),
+        "cleared_episodes": int(sum(1 for x in lines if x > 0)),
+        "episodes": len(seeds),
+        "lines": lines,
+    }
+
+
+def heuristic_baseline(
+    seeds: list[int],
+    max_steps: int = 400,
+    gravity_min: float = 1.0,
+    gravity_max: float = 6.0,
+) -> dict:
+    from .heuristic import HeuristicPlanner
+
+    env = TetrisEnv(gravity_min=gravity_min, gravity_max=gravity_max)
+    lines: list[int] = []
+    for seed in seeds:
+        env.reset(seed=seed)
+        planner = HeuristicPlanner()
+        info = {"lines": 0}
+        for _ in range(max_steps):
+            action = planner.act(env.state, env._rng_fn)
+            _, _, terminated, truncated, info = env.step(action)
+            if terminated or truncated:
+                break
+        lines.append(int(info["lines"]))
+    return {
+        "mean_lines": float(np.mean(lines)),
+        "cleared_episodes": int(sum(1 for x in lines if x > 0)),
+        "episodes": len(seeds),
+        "lines": lines,
+    }

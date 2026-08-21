@@ -7,7 +7,7 @@ Passive BCI 负责采集与切窗；推理和在线适配留在独立的 [NCC-OI
 - 浏览器只发送 **原始 EEG 窗口**（`uV`，`layout=CT`）
 - 窗长由服务端 hello 的 `input.window_sec` 决定：50M / mock 为 4 秒，本地 REVE 为 **2 秒**
 - 不要把浏览器 FFT / 频域特征当作模型输入
-- 当前 MI 四分类头仅用于链路验收；只有服务明确返回 `output_semantics: "ordinal_rating_3"` 时，RL 实验才允许用预测当作「差/中/好」奖励
+- 当前 MI 四分类头仅用于链路验收；只有服务明确返回 `output_semantics: "ordinal_rating_3"` 时，RL 实验才允许用预测当作三类奖励
 
 ## 启动模型服务
 
@@ -62,15 +62,15 @@ SMR 光标四类头（`left_hand` / `right_hand` / `both_hand` / `rest`）：
 npm run model-service:reve:smr
 ```
 
-适配页 `/smr-adapt` 会一键拉起该头，并按线索给当前 2 秒窗打标签。已经录过的 `recordings/*smr-adapt*` bin **可以直接训头**，不必重采：
+适配页 `/smr-adapt` 会一键拉起该头（**strategy=none，不在线微调**）。已经录过的 `recordings/*smr-adapt*` bin **可以直接离线训头**，不必重采：
 
 ```bash
 npm run model-service:reve:smr:fit
 ```
 
-拟合结果写到 `recordings/.reve-heads/smr_control.pt`，之后启动 `smr_control` 会自动加载。不要把左右/休息标签写进 `passive_rating`（差/中/好）。
+`smr_control` 默认合并 S02 livehead LoRA（`checkpoints/adapters/smr_control_s02_4class_reve_livehead_lora/best.pt`，含当日 LP 头）。个人线性头写到 `recordings/.reve-heads/smr_control_s02_4class_livehead.pt`。退回 Stieger 四分类 mi5init：`$env:MODEL_REVE_LORA=".../stieger2021_4class_reve_lora_r16_mi5init/best.pt"`。旧的左右手二分类适配器和 `smr_control_stieger_lora.pt` 不会自动加载。不要把左右/休息标签写进 `passive_rating`（任务一/任务二/任务三）。不要 LoRA 时加 `--no-lora` 或 `$env:MODEL_REVE_NO_LORA="1"`。退回二分类：`$env:MODEL_REVE_LORA=".../stieger2021_lr_reve_lora_r16_mi5init/best.pt"`。
 
-也可在终端手动启动评分头：
+也可在终端手动启动三类头：
 
 ```bash
 npm run model-service:reve
@@ -80,6 +80,20 @@ npm run model-service:reve
 
 WebSocket：`ws://127.0.0.1:8768/v1/model`  
 Vite 开发时也可走同源代理 `/ws/model`。
+
+## 局域网跟随（TCP JSONL）
+
+实验机启动 REVE 后会额外监听 **TCP 8769**（`0.0.0.0`），按行推送 `hello` / `prediction` / `feedback_ack`。**不传原始 EEG**。模型面板会显示本机局域网地址。
+
+对端电脑（同一 Wi‑Fi / 局域网）**不必克隆仓库**。把这一份文件拷过去即可：
+
+`scripts/follow_reve_tcp.py`
+
+```bash
+python follow_reve_tcp.py --host 192.168.x.x
+```
+
+终端会打印预测；浏览器打开脚本提示的 `http://127.0.0.1:8770` 可看条形图。只要系统自带 Python 3.8+。Windows 实验机需放行入站 8769。关掉 TCP：`$env:MODEL_NO_TCP="1"`。
 
 ## Passive BCI 侧
 

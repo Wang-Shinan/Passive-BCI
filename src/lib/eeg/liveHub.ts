@@ -92,6 +92,8 @@ class LiveEegHub {
       if (this.channelMask.length !== opts.channelNames.length) {
         this.channelMask = visibleMaskForNames(opts.channelNames)
       }
+    } else if (opts.sampleRate != null && this.buffers.length) {
+      this.ensureRing(this.buffers.length)
     }
     if (opts.device !== undefined) this.device = opts.device
     if (opts.detail !== undefined) this.detail = opts.detail
@@ -140,9 +142,27 @@ class LiveEegHub {
 
   pushInterleaved(values: Float32Array, samples: number, channels: number): void {
     if (samples <= 0 || channels <= 0) return
-    for (let s = 0; s < samples; s++) {
-      this.pushFrame(values.subarray(s * channels, s * channels + channels))
+    if (this.buffers.length !== channels) {
+      if (this.channelNames.length !== channels) {
+        this.channelNames = Array.from(
+          { length: channels },
+          (_, i) => this.channelNames[i] ?? `Ch${i + 1}`,
+        )
+      }
+      this.ensureRing(channels)
     }
+    const cap = this.capacity
+    let head = this.writeHead
+    for (let s = 0; s < samples; s++) {
+      const off = s * channels
+      for (let c = 0; c < channels; c++) {
+        this.buffers[c]![head] = values[off + c]!
+      }
+      head = (head + 1) % cap
+    }
+    this.writeHead = head
+    this.filled = Math.min(cap, this.filled + samples)
+    this.lastAt = performance.now()
   }
 
   markConnecting(detail?: string): void {

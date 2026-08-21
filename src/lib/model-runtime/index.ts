@@ -17,6 +17,7 @@ export type { ModelServiceBackend, ModelServiceEnsureResult } from './modelServi
 export {
   REVE_TASKS,
   classBarColor,
+  defaultReveStrategy,
   isReveTaskId,
   labelHotkey,
   loadOnlineLearnTask,

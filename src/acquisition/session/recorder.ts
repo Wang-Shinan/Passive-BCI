@@ -126,7 +126,11 @@ class DiskSink implements RecordSink {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename, meta: meta ?? null }),
       })
-      if (!res.ok) return null
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        console.warn(`[record] disk start failed (${res.status}) ${text}`)
+        return null
+      }
       const body = (await res.json()) as {
         ok?: boolean
         id?: string
@@ -135,23 +139,25 @@ class DiskSink implements RecordSink {
         dir?: string
         rel?: string
       }
-      if (!body.ok || !body.id || !body.rel) return null
+      if (!body.ok || !body.id || !body.rel) {
+        console.warn('[record] disk start returned an incomplete session', body)
+        return null
+      }
       const path = body.dir || body.path
       if (!path) return null
       sessionHub.attach({ id: body.id, rel: body.rel })
       return new DiskSink(body.id, body.filename || filename, path, body.rel)
-    } catch {
+    } catch (err) {
+      console.warn('[record] disk start threw', err)
       return null
     }
   }
 
   async write(chunk: Uint8Array): Promise<void> {
-    const payload = new Uint8Array(chunk.byteLength)
-    payload.set(chunk)
     const res = await fetch(`/api/record/${this.id}/chunk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
-      body: payload.buffer,
+      body: chunk,
     })
     if (!res.ok) throw new Error(`record chunk failed (${res.status})`)
   }

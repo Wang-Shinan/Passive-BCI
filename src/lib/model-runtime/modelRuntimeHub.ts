@@ -6,6 +6,7 @@ import {
   describeModelSource,
   describeWaitingModelSource,
   matchModelSourceProfile,
+  projectRawBatchToProfile,
 } from './sourceProfiles'
 import {
   createProtocolId,
@@ -409,8 +410,8 @@ class ModelRuntimeHub {
       this.sourceDraining = false
       return
     }
-    const profile = matchModelSourceProfile(batch)
-    if (!profile) {
+    const matched = matchModelSourceProfile(batch)
+    if (!matched) {
       this.pending = []
       this.sentWindowKeys.clear()
       this.assembler.reset()
@@ -422,12 +423,13 @@ class ModelRuntimeHub {
             : `模型旁路暂不接收 ${batch.device}`,
       })
     } else {
+      const projected = projectRawBatchToProfile(batch, matched)
       this.patch({
         sourceCompatible: true,
-        sourceDetail: describeModelSource(profile, batch),
+        sourceDetail: describeModelSource(matched.profile, projected, batch.channels),
       })
       try {
-        for (const packet of this.assembler.push(batch)) this.enqueue(packet)
+        for (const packet of this.assembler.push(projected)) this.enqueue(packet)
       } catch (error) {
         this.patch({
           sourceCompatible: false,

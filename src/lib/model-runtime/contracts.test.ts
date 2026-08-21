@@ -12,8 +12,8 @@ describe('model runtime protocol', () => {
         window_id: 7,
         segment_id: 'segment-1',
         class_id: 2,
-        class_name: '好',
-        class_names: ['差', '中', '好'],
+        class_name: '任务三',
+        class_names: ['任务一', '任务二', '任务三'],
         probabilities: [0.1, 0.2, 0.7],
         confidence: 0.7,
         model_revision: 'online-000003',
@@ -84,7 +84,7 @@ describe('model runtime protocol', () => {
     expect(prediction.output_semantics).toBe('tetris_action_7')
   })
 
-  it('does not map smr_control_4 predictions onto 差/中/好', () => {
+  it('does not map smr_control_4 predictions onto 任务一/任务二/任务三', () => {
     const prediction = parseServerMessage(
       JSON.stringify({
         type: 'prediction',
@@ -153,6 +153,11 @@ describe('model runtime protocol', () => {
           unit: 'uV',
           layout: 'CT',
         },
+        follow: {
+          transport: 'tcp-jsonl',
+          bind: '0.0.0.0:8769',
+          advertised: ['192.168.1.8:8769'],
+        },
       }),
     )
     expect(hello).toMatchObject({
@@ -164,6 +169,11 @@ describe('model runtime protocol', () => {
       class_names: ['left', 'right', 'feet', 'rest'],
       window_sec: 2,
       step_sec: 0.5,
+      follow: {
+        transport: 'tcp-jsonl',
+        bind: '0.0.0.0:8769',
+        advertised: ['192.168.1.8:8769'],
+      },
     })
 
     const prediction = parseServerMessage(

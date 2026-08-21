@@ -150,6 +150,11 @@ function ModelServiceLaunchBar({
             : proc?.message || '开发服务可一键拉起本地模型'}
         </span>
       </div>
+      {reveTask === 'smr_control' ? (
+        <p className="m-0 text-xs" style={{ color: 'var(--warn)' }}>
+          SMR 头冻结，不在线微调。光标仍可由 REVE 驱动。
+        </p>
+      ) : null}
       {launchError ? (
         <p className="m-0 text-sm" style={{ color: 'var(--danger)' }}>
           {launchError}
@@ -278,6 +283,11 @@ export function ModelServicePanel({
               : '—'}
           </strong>
         </span>
+        {state.serviceHello?.follow?.advertised?.[0] ? (
+          <span>
+            TCP 跟随 <strong>{state.serviceHello.follow.advertised.join(' · ')}</strong>
+          </span>
+        ) : null}
       </div>
 
       {state.lastError ? (
@@ -319,7 +329,8 @@ export function ModelServicePanel({
         </pre>
         <p className="muted m-0 mt-2 text-xs">
           点「启动 REVE」即可，无需另开终端（需 <code>npm run dev</code>）。代理失败时试「直连 8768」。hello
-          会把切窗改成 2s。50M 真模型仍用 <code>MODEL_PACKAGE=...</code> 在终端启动。
+          会把切窗改成 2s。SMR 头冻结（strategy=none），三类头仍可在线更新。50M 真模型仍用{' '}
+          <code>MODEL_PACKAGE=...</code> 在终端启动。
         </p>
       </details>
     </>

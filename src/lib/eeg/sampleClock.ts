@@ -49,6 +49,7 @@ export class SampleClock {
   private minOffsetMs: number | null = null
   private source: SampleClockSource = 'arrival'
   private readonly batches: SampleClockBatchDump[] = []
+  private static readonly MAX_BATCHES = 1024
 
   reset(): void {
     this.sampleRate = 250
@@ -141,6 +142,9 @@ export class SampleClock {
       deviceEndMs: this.lastDeviceEndMs,
       acquiredMs,
     })
+    if (this.batches.length > SampleClock.MAX_BATCHES) {
+      this.batches.splice(0, this.batches.length - SampleClock.MAX_BATCHES)
+    }
     return this.snapshot()
   }
 

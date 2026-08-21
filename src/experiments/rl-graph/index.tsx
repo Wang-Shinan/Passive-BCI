@@ -1246,7 +1246,7 @@ export function RlGraphExperiment() {
           <Panel title="评分窗口">
             <p className="muted mb-3 text-xs">
               默认：到达终点自动满分（+{AUTO_GOAL_RATING}）；人工超时不更新价值表。人脑评分是线性 3
-              类头：按键 1–5 训练差/中/好，超时用预测写入。随机模式可作 chance-level 基线。
+              类头：按键 1–5 训练任务一/任务二/任务三，超时用预测写入。随机模式可作 chance-level 基线。
               {algo === 'ai' ? ' AI 模式下评分窗口默认不超时，并支持文字反馈。' : ''}
             </p>
 
@@ -1262,7 +1262,7 @@ export function RlGraphExperiment() {
                   {
                     id: 'eeg' as const,
                     label: '人脑评分（线性 3 类）',
-                    hint: '1–2 差 / 3 中 / 4–5 好；按键训练，超时预测；终点仍 +1',
+                    hint: '1–2 任务一 / 3 任务二 / 4–5 任务三；按键训练，超时预测；终点仍 +1',
                   },
                   {
                     id: 'foundation' as const,

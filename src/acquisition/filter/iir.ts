@@ -84,6 +84,7 @@ export class LiveIirFilter {
   private useNotch: boolean
   private nChannels: number
   private scratch: Float32Array
+  private batchScratch: Float32Array
 
   constructor(
     nChannels = 8,
@@ -97,6 +98,7 @@ export class LiveIirFilter {
     this.useNotch = useNotch
     this.zi = allocZi(nChannels, bandSos.length, notchSos.length)
     this.scratch = new Float32Array(nChannels)
+    this.batchScratch = new Float32Array(0)
   }
 
   setChannelCount(n: number): void {
@@ -104,6 +106,7 @@ export class LiveIirFilter {
     this.nChannels = n
     this.zi = allocZi(n, this.bandSos.length, this.notchSos.length)
     this.scratch = new Float32Array(n)
+    this.batchScratch = new Float32Array(0)
     this.generation += 1
   }
 
@@ -155,5 +158,34 @@ export class LiveIirFilter {
       out[ch] = valid && Number.isFinite(uv[ch]!) ? y : Number.NaN
     }
     return out
+  }
+
+  /** Filter an interleaved (sample-major) batch in place of per-sample calls. */
+  processInterleaved(values: Float32Array, samples: number, channels: number): Float32Array {
+    const n = Math.max(1, channels)
+    if (n !== this.nChannels) this.setChannelCount(n)
+    const need = samples * n
+    if (this.batchScratch.length < need) this.batchScratch = new Float32Array(need)
+    const out = this.batchScratch
+    for (let s = 0; s < samples; s++) {
+      const off = s * n
+      for (let ch = 0; ch < n; ch++) {
+        let x = values[off + ch]!
+        const finite = Number.isFinite(x)
+        if (!finite) {
+          x = this.zi.have[ch] ? this.zi.last[ch]! : 0
+        } else {
+          if (!this.zi.have[ch]) primeBandZi(this.zi, ch, x, this.bandSos)
+          this.zi.last[ch] = x
+          this.zi.have[ch] = true
+        }
+        let y = sosfiltOne(this.bandSos, this.zi.band, ch * this.zi.bandSections * 2, x)
+        if (this.useNotch) {
+          y = sosfiltOne(this.notchSos, this.zi.notch, ch * this.zi.notchSections * 2, y)
+        }
+        out[off + ch] = finite ? y : Number.NaN
+      }
+    }
+    return this.batchScratch.subarray(0, need)
   }
 }

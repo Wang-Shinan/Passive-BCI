@@ -75,7 +75,7 @@ function main() {
   }
   const python = findPython(ncc)
   const recordings = path.join(passiveRoot, 'recordings')
-  const stateFile = path.join(recordings, '.reve-heads', 'smr_control.pt')
+  const stateFile = path.join(recordings, '.reve-heads', 'smr_control_s02_4class_livehead.pt')
   const args = [
     'scripts/fit_smr_control_head.py',
     '--recordings',

@@ -84,6 +84,6 @@ describe('REVE label mapping', () => {
     expect(canLabelSmrHead(names)).toBe(true)
     expect(labelIndexForTarget(names, 'left')).toBe(0)
     expect(labelIndexForTarget(names, 'up')).toBe(2)
-    expect(canLabelSmrHead(['差', '中', '好'])).toBe(false)
+    expect(canLabelSmrHead(['任务一', '任务二', '任务三'])).toBe(false)
   })
 })

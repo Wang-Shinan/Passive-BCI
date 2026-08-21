@@ -12,6 +12,10 @@ describe('isNonScalpEegChannel', () => {
     expect(isNonScalpEegChannel('Fp1', 'EOG')).toBe(true)
     expect(isNonScalpEegChannel('Fp1', 'EEG')).toBe(false)
     expect(isNonScalpEegChannel('Cz')).toBe(false)
+    expect(isNonScalpEegChannel('HEOR')).toBe(true)
+    expect(isNonScalpEegChannel('VEOL')).toBe(true)
+    expect(isNonScalpEegChannel('Trigger')).toBe(true)
+    expect(isNonScalpEegChannel('ECG')).toBe(true)
   })
 })
 
@@ -49,5 +53,34 @@ describe('computeLiveFeatures', () => {
     expect(snap).not.toBeNull()
     expect(snap!.nChannels).toBe(2)
     expect(snap!.values.mean).toBeCloseTo(15, 5)
+  })
+
+  it('caps dense 1000 Hz montages to a handful of channels', () => {
+    const n = 32
+    const fs = 1000
+    const cap = fs
+    const buffers = Array.from({ length: n }, () => new Float32Array(cap))
+    const names = Array.from({ length: n }, (_, i) => `Ch${i + 1}`)
+    names[2] = 'C3'
+    names[3] = 'Cz'
+    names[4] = 'C4'
+    names[5] = 'F3'
+    names[6] = 'F4'
+    names[7] = 'P3'
+    names[8] = 'P4'
+    names[9] = 'Pz'
+    for (let c = 0; c < n; c++) {
+      for (let i = 0; i < cap; i++) buffers[c]![i] = c + 1
+    }
+    const snap = computeLiveFeatures({
+      buffers,
+      writeHead: 0,
+      filled: cap,
+      sampleRate: fs,
+      channelNames: names,
+      enabledFeatures: ['mean', 'rms', 'std', 'pow_freq_bands'],
+    })
+    expect(snap).not.toBeNull()
+    expect(snap!.nChannels).toBeLessThanOrEqual(8)
   })
 })

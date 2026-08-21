@@ -72,8 +72,14 @@ function argValue(flag) {
 }
 
 function defaultStateFile(task) {
-  if (task === 'smr_control') return path.join(passiveRoot, 'recordings', '.reve-heads', 'smr_control.pt')
+  if (task === 'smr_control') {
+    return path.join(passiveRoot, 'recordings', '.reve-heads', 'smr_control_s02_4class_livehead.pt')
+  }
   return undefined
+}
+
+function defaultStrategy(task) {
+  return task === 'smr_control' ? 'none' : 'supervised-head'
 }
 
 function main() {
@@ -90,6 +96,9 @@ function main() {
   const backend = (argValue('--backend') || process.env.MODEL_BACKEND || '').trim().toLowerCase()
   const task = argValue('--task') || process.env.MODEL_REVE_TASK || 'passive_rating'
   const stateFile = argValue('--state-file') || process.env.MODEL_STATE_FILE || defaultStateFile(task)
+  const strategy =
+    argValue('--strategy') ||
+    (task === 'smr_control' ? defaultStrategy(task) : process.env.MODEL_STRATEGY || defaultStrategy(task))
   const args = pkg
     ? [
         'scripts/serve_runtime_model.py',
@@ -116,10 +125,15 @@ function main() {
           '--device',
           process.env.MODEL_DEVICE || 'auto',
           '--strategy',
-          process.env.MODEL_STRATEGY || 'supervised-head',
+          strategy,
           '--task',
           task,
           ...(stateFile ? ['--state-file', stateFile] : []),
+          ...(process.env.MODEL_REVE_LORA ? ['--lora-checkpoint', process.env.MODEL_REVE_LORA] : []),
+          ...(process.env.MODEL_REVE_NO_LORA === '1' ? ['--no-lora'] : []),
+          ...(process.env.MODEL_TCP_HOST ? ['--tcp-host', process.env.MODEL_TCP_HOST] : []),
+          ...(process.env.MODEL_TCP_PORT ? ['--tcp-port', process.env.MODEL_TCP_PORT] : []),
+          ...(process.env.MODEL_NO_TCP === '1' ? ['--no-tcp'] : []),
         ]
       : [
           'scripts/serve_dev_mock_model.py',
@@ -136,7 +150,7 @@ function main() {
   if (pkg) {
     console.log(`[model-service] runtime package=${pkg}`)
   } else if (backend === 'reve') {
-    console.log(`[model-service] backend=reve，启动本地 REVE（2s 窗，task=${task}）…`)
+    console.log(`[model-service] backend=reve，启动本地 REVE（2s 窗，task=${task}，strategy=${strategy}）…`)
     if (stateFile) console.log(`[model-service] state-file=${stateFile}`)
   } else {
     console.log(`[model-service] 启动 dev mock（hello ${profile} 窗长；接受 neuracle59 / bcigo32）…`)

@@ -13,6 +13,7 @@ import {
   proficient,
   resetCursor,
   resolveLaplacianMontage,
+  reveCursorAxes,
   smrFeatures,
   stepCursor,
 } from './smrControl'
@@ -127,5 +128,15 @@ describe('cursor and scoring', () => {
     expect(norm.polarity()).toBe(-1)
     expect(norm.z(-2)).toBeGreaterThan(0)
     expect(norm.z(4)).toBeLessThan(0)
+  })
+})
+
+describe('reveCursorAxes', () => {
+  it('turns 4-class probabilities into left/right/up/down cursor axes', () => {
+    const names = ['left_hand', 'right_hand', 'both_hand', 'rest']
+    expect(reveCursorAxes(names, [0.8, 0.1, 0.05, 0.05]).zH).toBeCloseTo(-0.7)
+    expect(reveCursorAxes(names, [0.1, 0.8, 0.05, 0.05]).zH).toBeCloseTo(0.7)
+    expect(reveCursorAxes(names, [0.05, 0.05, 0.8, 0.1]).zV).toBeCloseTo(0.7)
+    expect(reveCursorAxes(names, [0.05, 0.05, 0.1, 0.8]).zV).toBeCloseTo(-0.7)
   })
 })

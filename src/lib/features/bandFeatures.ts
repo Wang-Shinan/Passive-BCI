@@ -21,6 +21,11 @@ export interface LiveFeatureSnapshot {
 
 const EPS = 1e-12
 const HEAVY_CH_CAP = 8
+const FEATURE_FS = 250
+const PREFERRED_LIVE_CHANNELS = [
+  'C3', 'C4', 'CZ', 'F3', 'F4', 'P3', 'P4', 'PZ', 'FC3', 'FC4', 'CP3', 'CP4',
+]
+let sliceScratch = new Float32Array(0)
 /** BCIGo disconnected-lead sentinel (μV). */
 export const EEG_LEAD_OFF_SENTINEL_UV = -750000
 const SENTINEL_ABS_UV = 1e5
@@ -31,9 +36,47 @@ function normalizeChName(name: string | undefined): string {
 
 export function isNonScalpEegChannel(name?: string, type?: string): boolean {
   const t = (type ?? '').replace(/\s+/g, '').toUpperCase()
-  if (t === 'EOG' || t === 'ECG' || t === 'EMG' || t === 'REF' || t === 'GND') return true
+  if (
+    t === 'EOG' ||
+    t === 'ECG' ||
+    t === 'EKG' ||
+    t === 'EMG' ||
+    t === 'REF' ||
+    t === 'GND' ||
+    t === 'TRIG' ||
+    t === 'TRIGGER' ||
+    t === 'STIM' ||
+    t === 'EVENT' ||
+    t === 'MARKER'
+  ) {
+    return true
+  }
   const n = normalizeChName(name)
-  return n === 'IO' || n === 'EOG' || n === 'ECG' || n === 'REF' || n === 'GND' || n.startsWith('EOG')
+  if (!n) return false
+  if (
+    n === 'IO' ||
+    n === 'EOG' ||
+    n === 'ECG' ||
+    n === 'EKG' ||
+    n === 'EMG' ||
+    n === 'REF' ||
+    n === 'GND' ||
+    n === 'HEOR' ||
+    n === 'HEOL' ||
+    n === 'VEOU' ||
+    n === 'VEOL' ||
+    n === 'HEOG' ||
+    n === 'VEOG' ||
+    n === 'TRIG' ||
+    n === 'TRIGGER' ||
+    n === 'STIM' ||
+    n === 'EVENT' ||
+    n === 'MARKER' ||
+    n === 'STATUS'
+  ) {
+    return true
+  }
+  return n.startsWith('EOG') || n.startsWith('HEO') || n.startsWith('VEO') || n.startsWith('TRIG')
 }
 
 function sliceLooksLeadOff(slice: Float32Array): boolean {
@@ -190,6 +233,22 @@ function subsampleChannels(idxs: number[], cap: number): number[] {
     out.push(idxs[Math.floor((i * (idxs.length - 1)) / (cap - 1))]!)
   }
   return out
+}
+
+function pickLiveChannels(
+  idxs: number[],
+  names: string[] | undefined,
+  cap: number,
+): number[] {
+  if (idxs.length <= cap) return idxs
+  if (names?.length) {
+    const want = new Set(PREFERRED_LIVE_CHANNELS)
+    const preferred = idxs.filter((i) => want.has(normalizeChName(names[i])))
+    if (preferred.length >= Math.min(4, cap)) {
+      return preferred.length <= cap ? preferred : preferred.slice(0, cap)
+    }
+  }
+  return subsampleChannels(idxs, cap)
 }
 
 function linearRegressionSlope(xs: number[], ys: number[]): number {
@@ -663,10 +722,23 @@ export function computeLiveFeatures(opts: {
     for (let c = 0; c < buffers.length; c++) consider(c, false)
   }
 
-  const heavyIdx = needHeavy(enabled) ? subsampleChannels(usedIdx, HEAVY_CH_CAP) : []
+  const liveIdx = pickLiveChannels(usedIdx, channelNames, HEAVY_CH_CAP)
+  const heavyIdx = needHeavy(enabled) ? liveIdx : []
   const wantSpec = needSpectral(enabled)
-  const specIdx = wantSpec ? subsampleChannels(usedIdx, HEAVY_CH_CAP) : []
+  const specIdx = wantSpec ? liveIdx : []
   const specSet = new Set(specIdx)
+  const stride = Math.max(1, Math.round(sampleRate / FEATURE_FS))
+  const nKeep = Math.max(16, Math.floor(winSamples / stride))
+  const featFs = sampleRate / stride
+  if (sliceScratch.length < nKeep) sliceScratch = new Float32Array(nKeep)
+  const wantHjorth =
+    enabled.has('hjorth_mobility') || enabled.has('hjorth_complexity')
+  const wantShape =
+    enabled.has('skewness') ||
+    enabled.has('kurtosis') ||
+    enabled.has('line_length') ||
+    enabled.has('zero_crossings') ||
+    enabled.has('ptp_amp')
   const needScores =
     enabled.has('focus_score') ||
     enabled.has('engagement_score') ||
@@ -693,11 +765,12 @@ export function computeLiveFeatures(opts: {
   const tarCh: number[] = []
   const barCh: number[] = []
 
-  for (const c of usedIdx) {
+  for (const c of liveIdx) {
     const buf = buffers[c]!
-    const slice = new Float32Array(winSamples)
-    for (let i = 0; i < winSamples; i++) {
-      const idx = (((writeHead - winSamples + i) % bufLen) + bufLen) % bufLen
+    const slice = sliceScratch.subarray(0, nKeep)
+    for (let i = 0; i < nKeep; i++) {
+      const src = i * stride
+      const idx = (((writeHead - winSamples + src) % bufLen) + bufLen) % bufLen
       slice[i] = buf[idx]!
     }
     if (sliceLooksLeadOff(slice)) continue
@@ -712,31 +785,40 @@ export function computeLiveFeatures(opts: {
     let m4 = 0
     let line = 0
     let zc = 0
-    for (let i = 0; i < winSamples; i++) {
-      const v = slice[i]!
-      sumSq += v * v
-      if (v < min) min = v
-      if (v > max) max = v
-      const d = v - mean
-      m3 += d * d * d
-      m4 += d * d * d * d
-      if (i > 0) {
-        line += Math.abs(v - slice[i - 1]!)
-        if ((slice[i - 1]! - mean) * (v - mean) < 0) zc++
+    if (enabled.has('rms') || enabled.has('ptp_amp') || wantShape) {
+      for (let i = 0; i < nKeep; i++) {
+        const v = slice[i]!
+        sumSq += v * v
+        if (wantShape || enabled.has('ptp_amp')) {
+          if (v < min) min = v
+          if (v > max) max = v
+        }
+        if (wantShape) {
+          const d = v - mean
+          m3 += d * d * d
+          m4 += d * d * d * d
+          if (i > 0) {
+            line += Math.abs(v - slice[i - 1]!)
+            if ((slice[i - 1]! - mean) * (v - mean) < 0) zc++
+          }
+        }
       }
     }
-    const rms = Math.sqrt(sumSq / winSamples)
-    const skewness = std > EPS ? m3 / winSamples / (std * std * std) : 0
-    const kurtosis = std > EPS ? m4 / winSamples / (std * std * std * std) - 3 : 0
+    const rms = enabled.has('rms') ? Math.sqrt(sumSq / nKeep) : std
+    const skewness = std > EPS ? m3 / nKeep / (std * std * std) : 0
+    const kurtosis = std > EPS ? m4 / nKeep / (std * std * std * std) - 3 : 0
 
-    const d1 = diff1(slice)
-    const d2 = diff1(new Float32Array(d1))
-    const var0 = variance
-    const var1 = varianceOf(d1)
-    const var2 = varianceOf(d2)
-    const mobility = var0 > EPS ? Math.sqrt(var1 / var0) : 0
-    const mobilityD = var1 > EPS ? Math.sqrt(var2 / var1) : 0
-    const complexity = mobility > EPS ? mobilityD / mobility : 0
+    let mobility = 0
+    let complexity = 0
+    if (wantHjorth) {
+      const d1 = diff1(slice)
+      const d2 = diff1(new Float32Array(d1))
+      const var1 = varianceOf(d1)
+      const var2 = varianceOf(d2)
+      mobility = variance > EPS ? Math.sqrt(var1 / variance) : 0
+      const mobilityD = var1 > EPS ? Math.sqrt(var2 / var1) : 0
+      complexity = mobility > EPS ? mobilityD / mobility : 0
+    }
 
     if (enabled.has('mean')) bump('mean', mean)
     if (enabled.has('std')) bump('std', std)
@@ -755,7 +837,7 @@ export function computeLiveFeatures(opts: {
     if (enabled.has('perm_entropy')) bump('perm_entropy', permEntropy(slice))
 
     if (wantSpec && specSet.has(c)) {
-      const spec = channelPsd(slice, sampleRate)
+      const spec = channelPsd(slice, featFs)
       if (spec) {
         const { psd, freq } = spec
         const absBands: BandPowers = {

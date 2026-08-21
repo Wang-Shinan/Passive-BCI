@@ -21,16 +21,16 @@ const TOOLS = [
     path: '/smr-adapt',
     title: 'SMR 个体化适配',
     blurb:
-      'Stieger 式光标：左手左、右手右、双手上、休息下。一边用线索给 REVE SMR 头在线学习，一边把 EEG 和标签写入会话库供离线再训。',
-    tag: 'Stieger SMR · C3/C4',
+      'Stieger 式光标：左手左、右手右、双手上、休息下。可用已拟合的 REVE 四分类或原来的 C3/C4 mu 驱动。SMR 头冻结，不在线微调。',
+    tag: 'Stieger SMR · REVE 冻结',
     accent: '#c084fc',
   },
   {
     path: '/online-learn',
     title: '基模在线学习',
     blurb:
-      '2 秒窗送进本地 REVE。可选评分 / SMR / 方块操作头，按当前 class_names 打标签，只更新冻结编码器上的线性头。',
-    tag: 'REVE · 2s · supervised-head',
+      '2 秒窗送进本地 REVE。三类任务头可在线更新线性头；SMR 头冻结。方块操作头仍可切换。',
+    tag: 'REVE · 2s · 三类可学 / SMR 冻结',
     accent: '#e8b84a',
   },
 ]
@@ -46,8 +46,8 @@ const EXPERIMENTS = [
   {
     path: '/tetris',
     title: '实验二 · 压力自适应俄罗斯方块',
-    blurb: '标准方块玩法。按局录制 EEG + 落子事件；压力可调下落速度。可用已拟合的 SMR 头控左右/旋转，或用键盘给 7 类操作头在线学习。',
-    tag: 'Adaptive difficulty · REVE actions',
+    blurb: '标准方块玩法。按局录制 EEG + 落子事件；压力可调下落速度。可用已拟合的 SMR 头控左右/旋转。',
+    tag: 'Adaptive difficulty · SMR',
     accent: '#38d39f',
   },
   {

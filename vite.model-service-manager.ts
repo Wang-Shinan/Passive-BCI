@@ -338,7 +338,10 @@ export function modelServiceManagerPlugin(): Plugin {
       )
 
       const spawnArgs = [scriptPath, '--backend', backend]
-      if (backend === 'reve') spawnArgs.push('--task', task)
+      if (backend === 'reve') {
+        spawnArgs.push('--task', task)
+        if (task === 'smr_control') spawnArgs.push('--strategy', 'none')
+      }
       const child = spawn(process.execPath, spawnArgs, {
         cwd: projectRoot,
         env: { ...process.env, PYTHONUNBUFFERED: '1' },

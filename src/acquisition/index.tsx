@@ -41,7 +41,7 @@ import { FftCanvas } from './FftCanvas'
 import { ImpedancePanel } from './ImpedancePanel'
 import { FeaturePanel } from './FeaturePanel'
 import { ChannelRail, ChannelSettingsDialog } from './ChannelRail'
-import { ensureBridge } from './bridgeApi'
+import { ensureBridge, probeNeuracleForward } from './bridgeApi'
 import {
   acqRuntime,
   beginRawBridgeStream,
@@ -84,7 +84,16 @@ import {
 import { ModelServicePanel } from '../lib/model-runtime'
 import { formatRecordBytes, type RecordMeta, type RecordSinkKind } from './session/recorder'
 
-const RING_SECONDS = 12
+const RING_SECONDS = 6
+/** Extra ring beyond the visible window so scrolling never wraps inside the plot. */
+const RING_HEADROOM_SEC = 2
+const MAX_RING_SAMPLES = 120_000
+
+function ringCapacityFor(sampleRate: number, windowSec: number): number {
+  const fs = Math.max(1, sampleRate)
+  const spanSec = Math.max(windowSec, RING_SECONDS) + RING_HEADROOM_SEC
+  return Math.min(MAX_RING_SAMPLES, Math.max(16, Math.ceil(spanSec * fs)))
+}
 const FEATURE_HISTORY = 60
 const LAG_SPARK_BARS = 32
 const CFG_STORAGE_KEY = 'passive-bci.acquisition.channel-config'
@@ -126,13 +135,12 @@ function recordPrefix(d: DeviceKind): string {
 }
 
 function streamingRecordDetail(d: DeviceKind, sink: RecordSinkKind): string {
-  const dest =
-    sink === 'disk'
-      ? '边采边写入 recordings/<会话>/（原始 EEG + 游戏事件）'
-      : '暂存在浏览器内存，停止时下载 BIN'
-  if (d === 'bcigo') return `采集中：强脑 EEG ${dest}。`
-  if (d === 'neuracle') return `采集中：博睿康转发数据 ${dest}。`
-  return `采集中：原始 48 字节帧 ${dest}。`
+  const src =
+    d === 'bcigo' ? '强脑 EEG' : d === 'neuracle' ? '博睿康 EEG' : '原始 48 字节帧'
+  if (sink === 'disk') {
+    return `采集中：${src} 边采边写入 recordings/<会话>/（原始 EEG + 游戏事件）。`
+  }
+  return `采集中：${src}；会话库暂不可用，停止时将下载 BIN（无 events）。`
 }
 
 function savedRecordDetail(
@@ -184,7 +192,7 @@ function bcigoWsUrl(): string {
 
 function deviceDetail(d: DeviceKind, supported: boolean): string {
   if (d === 'neuracle') {
-    return '连接博睿康 JellyFish 转发（点连接会自动启动本机桥接）。'
+    return '连接博睿康 Collect 的 TCP 数据转发（不是实验设置里的 LSL）。开始实验后，在采集界面点「数据转发」→ 选探头 →「开始」。'
   }
   if (d === 'bcigo') {
     return '连接强脑 BCIGo Wi‑Fi（点连接会自动启动本机桥接；基于 bcigo-sdk）。'
@@ -231,7 +239,6 @@ function saveConfig(cfg: ChannelConfig): void {
 }
 
 export function AcquisitionDebugPage() {
-  const capacity = Math.ceil(RING_SECONDS * FS)
   const supported = webSerialSupported()
 
   const [device, setDevice] = useState<DeviceKind>(() => {
@@ -280,8 +287,10 @@ export function AcquisitionDebugPage() {
     return Array.from({ length: n }, () => true)
   })
   const [sampleRate, setSampleRate] = useState(() => liveEegHub.meta.sampleRate || FS)
-  const [jfHost, setJfHost] = useState('127.0.0.1')
-  const [jfPort, setJfPort] = useState(8712)
+  const [jfHost, setJfHost] = useState('')
+  const [jfPort, setJfPort] = useState<number | ''>('')
+  const [jfSampleRate, setJfSampleRate] = useState(0)
+  const [neuracleProbe, setNeuracleProbe] = useState('')
   const [neuracleMontage, setNeuracleMontage] = useState<'all' | '59' | 'motor8'>('all')
   const [bcigoHost, setBcigoHost] = useState('')
   const [bcigoPort, setBcigoPort] = useState<number | ''>('')
@@ -302,8 +311,16 @@ export function AcquisitionDebugPage() {
   const [featureLatest, setFeatureLatest] = useState<LiveFeatureSnapshot | null>(null)
   const [featureHistory, setFeatureHistory] = useState<LiveFeatureSnapshot[]>([])
   const [enabledFeatures, setEnabledFeatures] = useState<string[]>(() => loadEnabledFeatures())
+  const [featuresOpen, setFeaturesOpen] = useState(false)
   const [stats, setStats] = useState(() => ({ ...EMPTY_STATS }))
   const statsRef = useRef({ ...EMPTY_STATS })
+  const sampleRateRef = useRef(sampleRate)
+  const windowSecRef = useRef(windowSec)
+  sampleRateRef.current = sampleRate
+  windowSecRef.current = windowSec
+  const capacity = ringCapacityFor(sampleRate, windowSec)
+  const capacityRef = useRef(capacity)
+  capacityRef.current = capacity
 
   const transportRef = useRef(acqRuntime.transport)
   const neuracleRef = useRef<NeuracleWsClient | null>(acqRuntime.neuracle)
@@ -349,20 +366,28 @@ export function AcquisitionDebugPage() {
   impedanceSelectedRef.current = impedanceSelected
   impedanceSeriesRef.current = impedanceSeriesKohm
 
-  const resizeBuffers = useCallback(
-    (n: number) => {
-      nChRef.current = n
-      setNChannels(n)
-      filterRef.current.setChannelCount(n)
-      filterRef.current.reset()
-      rawRingRef.current = makeRing(n, capacity)
-      filtRingRef.current = makeRing(n, capacity)
-      validRingRef.current = new Uint8Array(capacity)
+  const resizeBuffers = useCallback((n: number, fs = sampleRateRef.current) => {
+    const cap = ringCapacityFor(fs, windowSecRef.current)
+    nChRef.current = n
+    setNChannels(n)
+    filterRef.current.setChannelCount(n)
+    filterRef.current.reset()
+    capacityRef.current = cap
+    if (rawRingRef.current.length === n && rawRingRef.current[0]?.length === cap) {
       writeHeadRef.current = 0
       filledRef.current = 0
-    },
-    [capacity],
-  )
+      return
+    }
+    rawRingRef.current = makeRing(n, cap)
+    filtRingRef.current = makeRing(n, cap)
+    validRingRef.current = new Uint8Array(cap)
+    writeHeadRef.current = 0
+    filledRef.current = 0
+  }, [])
+
+  useEffect(() => {
+    resizeBuffers(nChRef.current)
+  }, [capacity, resizeBuffers])
 
   const getSnapshot = useCallback(
     () => ({
@@ -374,7 +399,7 @@ export function AcquisitionDebugPage() {
   )
 
   const pushFrame = useCallback(
-    (uv: Float32Array, filtered: Float32Array, valid = true) => {
+    (uv: Float32Array, filtered: Float32Array, valid = true, toHub = true) => {
       const head = writeHeadRef.current
       const n = nChRef.current
       for (let c = 0; c < n; c++) {
@@ -382,16 +407,18 @@ export function AcquisitionDebugPage() {
         filtRingRef.current[c]![head] = filtered[c] ?? 0
       }
       validRingRef.current[head] = valid ? 1 : 0
-      writeHeadRef.current = (head + 1) % capacity
-      filledRef.current = Math.min(capacity, filledRef.current + 1)
+      const cap = rawRingRef.current[0]?.length || capacityRef.current
+      writeHeadRef.current = (head + 1) % cap
+      filledRef.current = Math.min(cap, filledRef.current + 1)
       if (
+        toHub &&
         !acqRuntime.impedanceActive &&
         (streamingRef.current || acqRuntime.streaming || acqRuntime.status === 'demo')
       ) {
         liveEegHub.pushFrame(uv)
       }
     },
-    [capacity],
+    [],
   )
 
   const ingestFrames = useCallback(
@@ -455,6 +482,22 @@ export function AcquisitionDebugPage() {
     },
     [pushFrame],
   )
+
+  useEffect(() => {
+    if (device !== 'neuracle') return
+    let cancelled = false
+    const tick = () => {
+      void probeNeuracleForward().then((r) => {
+        if (!cancelled && r.message) setNeuracleProbe(r.message)
+      })
+    }
+    tick()
+    const id = window.setInterval(tick, 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [device])
 
   useEffect(() => {
     neuracleRef.current = acqRuntime.neuracle
@@ -603,7 +646,7 @@ export function AcquisitionDebugPage() {
       setFeatureLatest(null)
       return
     }
-    if (!enabledFeatures.length) {
+    if (!enabledFeatures.length || !featuresOpen) {
       setFeatureLatest(null)
       return
     }
@@ -625,9 +668,9 @@ export function AcquisitionDebugPage() {
         const next = [...prev, snap]
         return next.length > FEATURE_HISTORY ? next.slice(-FEATURE_HISTORY) : next
       })
-    }, 200)
+    }, 400)
     return () => clearInterval(id)
-  }, [status, sampleRate, visible, enabledFeatures, featureWindowSec, streamLabels, streamTypes])
+  }, [status, sampleRate, visible, enabledFeatures, featureWindowSec, streamLabels, streamTypes, featuresOpen])
 
   useEffect(() => {
     liveEegHub.setChannelMask(visible)
@@ -803,9 +846,11 @@ export function AcquisitionDebugPage() {
       setDetail('正在自动启动本机 Neuracle 桥接…')
       try {
         const ensured = await ensureBridge('neuracle')
-        setDetail(
-          `${ensured.message ?? '桥接就绪'} → JellyFish ${jfHost}:${jfPort}…`,
-        )
+        const dest =
+          jfHost.trim() && jfPort
+            ? `${jfHost}:${jfPort}`
+            : '自动探测 Collect 转发端口'
+        setDetail(`${ensured.message ?? '桥接就绪'} → ${dest}…`)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         setStatus('error')
@@ -815,9 +860,9 @@ export function AcquisitionDebugPage() {
 
       const client = new NeuracleWsClient({
         url: neuracleWsUrl(),
-        host: jfHost,
-        port: jfPort,
-        sourceSfreq: 250,
+        host: jfHost.trim() || undefined,
+        port: jfPort === '' ? null : jfPort,
+        sourceSfreq: jfSampleRate > 0 ? jfSampleRate : undefined,
         eegChannelNames: neuracleChannelNames(),
         onStatus: (s, d) => {
           if (s === 'connecting') {
@@ -848,8 +893,11 @@ export function AcquisitionDebugPage() {
           if (d) setDetail(d)
         },
         onHello: (hello: NeuracleHello) => {
+          if (hello.host) setJfHost(hello.host)
+          if (hello.port) setJfPort(hello.port)
+          if (hello.sample_rate) setJfSampleRate(hello.sample_rate)
           const names = hello.channels
-          resizeBuffers(names.length)
+          resizeBuffers(names.length, hello.sample_rate)
           setStreamLabels(names)
           setStreamTypes(hello.channel_types ?? [])
           setSampleRate(hello.sample_rate)
@@ -884,7 +932,7 @@ export function AcquisitionDebugPage() {
     })()
   }
 
-  const ingestBridgeBatch = (batch: {
+    const ingestBridgeBatch = (batch: {
     values: Float32Array
     samples: number
     channels: number
@@ -898,13 +946,31 @@ export function AcquisitionDebugPage() {
       return
     }
     const n = batch.channels
-    for (let s = 0; s < batch.samples; s++) {
-      const uv = batch.values.subarray(s * n, s * n + n)
-      const filtered = filterRef.current.processSample(uv, true)
-      pushFrame(uv, filtered)
+    const samples = batch.samples
+    if (n > 0 && n !== nChRef.current) filterRef.current.setChannelCount(n)
+    const filtered = filterRef.current.processInterleaved(batch.values, samples, n)
+    let head = writeHeadRef.current
+    const cap = rawRingRef.current[0]?.length || capacityRef.current
+    const nWrite = Math.min(n, nChRef.current)
+    for (let s = 0; s < samples; s++) {
+      const off = s * n
+      for (let c = 0; c < nWrite; c++) {
+        rawRingRef.current[c]![head] = batch.values[off + c] ?? 0
+        filtRingRef.current[c]![head] = filtered[off + c] ?? 0
+      }
+      validRingRef.current[head] = 1
+      head = (head + 1) % cap
+    }
+    writeHeadRef.current = head
+    filledRef.current = Math.min(cap, filledRef.current + samples)
+    if (
+      !acqRuntime.impedanceActive &&
+      (streamingRef.current || acqRuntime.streaming)
+    ) {
+      liveEegHub.pushInterleaved(batch.values, samples, n)
     }
     const now = performance.now()
-    rateWinRef.current.n += batch.samples
+    rateWinRef.current.n += samples
     const elapsed = (now - rateWinRef.current.t0) / 1000
     let rateHz = 0
     if (elapsed >= 0.4) {
@@ -912,7 +978,7 @@ export function AcquisitionDebugPage() {
       rateWinRef.current = { t0: now, n: 0, samplesBase: 0 }
     }
     const st = statsRef.current
-    st.samples += batch.samples
+    st.samples += samples
     if (rateHz) st.rateHz = rateHz
     st.packetLoss = batch.packetLoss
     st.packetCount = batch.packetCount
@@ -987,7 +1053,7 @@ export function AcquisitionDebugPage() {
         },
         onHello: (hello: BcigoHello) => {
           const names = hello.channels
-          resizeBuffers(names.length)
+          resizeBuffers(names.length, hello.sample_rate)
           setStreamLabels(names)
           setStreamTypes(hello.channel_types ?? [])
           setSampleRate(hello.sample_rate)
@@ -1644,6 +1710,7 @@ export function AcquisitionDebugPage() {
                 Host
                 <input
                   className="input"
+                  placeholder="空=本机探测"
                   value={jfHost}
                   disabled={deviceBusy}
                   onChange={(e) => setJfHost(e.target.value)}
@@ -1654,10 +1721,30 @@ export function AcquisitionDebugPage() {
                 <input
                   className="input"
                   type="number"
+                  placeholder="自动"
                   value={jfPort}
                   disabled={deviceBusy}
-                  onChange={(e) => setJfPort(Number(e.target.value) || 8712)}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setJfPort(v === '' ? '' : Number(v) || '')
+                  }}
                 />
+              </label>
+              <label className="acq-field">
+                采样率
+                <select
+                  className="select"
+                  value={jfSampleRate}
+                  disabled={deviceBusy}
+                  onChange={(e) => setJfSampleRate(Number(e.target.value) || 0)}
+                >
+                  <option value={0}>自动</option>
+                  <option value={250}>250</option>
+                  <option value={500}>500</option>
+                  <option value={1000}>1000</option>
+                  <option value={2000}>2000</option>
+                  <option value={4000}>4000</option>
+                </select>
               </label>
               <label className="acq-field">
                 通道
@@ -1672,6 +1759,7 @@ export function AcquisitionDebugPage() {
                   <option value="motor8">运动区 8 导</option>
                 </select>
               </label>
+              {neuracleProbe ? <span className="acq-hint">{neuracleProbe}</span> : null}
             </>
           ) : null}
           {device === 'bcigo' ? (
@@ -1982,6 +2070,7 @@ export function AcquisitionDebugPage() {
                   sampleRate={sampleRate}
                   fill
                   theme="omni"
+                  scan={device === 'neuracle' ? 'sweep' : 'scroll'}
                   showChannelLabels={viewMode === 'single'}
                   onChannelDblClick={(i) => {
                     setSingleChannel(i)
@@ -2036,7 +2125,7 @@ export function AcquisitionDebugPage() {
         )}
       </div>
 
-      <details className="acq-extra">
+      <details className="acq-extra" onToggle={(e) => setFeaturesOpen(e.currentTarget.open)}>
         <summary>特征监控 / 工作模式（实验页共用勾选）</summary>
         {device === 'omni' ? (
           <div className="acq-bar" style={{ marginBottom: 8 }}>

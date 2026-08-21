@@ -11,10 +11,10 @@ export type ReveTaskOption = {
 export const REVE_TASKS: readonly ReveTaskOption[] = [
   {
     id: 'passive_rating',
-    label: '评分 · 差 / 中 / 好',
-    short: '评分头',
+    label: '三类 · 任务一 / 任务二 / 任务三',
+    short: '三类头',
     semantics: 'ordinal_rating_3',
-    classNames: ['差', '中', '好'],
+    classNames: ['任务一', '任务二', '任务三'],
   },
   {
     id: 'smr_control',
@@ -60,10 +60,11 @@ export function rewardForClass(semantics: string | undefined, classId: number): 
   return 0
 }
 
-export function classBarColor(index: number, count: number): string {
-  if (count === 3 && index === 0) return 'var(--danger)'
-  if (count === 3 && index === 2) return 'var(--accent-2)'
-  if (count === 3) return 'var(--warn)'
+export function defaultReveStrategy(task: string | null | undefined): 'none' | 'supervised-head' {
+  return task === 'smr_control' ? 'none' : 'supervised-head'
+}
+
+export function classBarColor(index: number, _count: number): string {
   const palette = ['#38d39f', '#5b8cff', '#c084fc', '#e8b84a', '#ff6b3d', '#22d3ee', '#f472b6']
   return palette[index % palette.length] ?? '#94a3b8'
 }

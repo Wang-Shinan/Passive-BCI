@@ -17,12 +17,13 @@
     "model-service:reve:smr": "node scripts/run-model-service.mjs --backend reve --task smr_control",
     "model-service:reve:smr:fit": "node scripts/fit-smr-head.mjs",
     "model-service:reve:smr:export": "node scripts/export-smr-hdf5.mjs",
+    "reve:follow": "node scripts/follow-reve-tcp.mjs",
     "model-service:mock": "node scripts/run-model-service.mjs --backend mock",
     "tetris-rl:parity": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python scripts/verify_parity.py'",
-    "tetris-rl:train": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python scripts/train.py \"$@\"' --",
-    "tetris-rl:train:smoke": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python scripts/train.py --smoke'",
-    "tetris-rl:eval": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python scripts/evaluate.py \"$@\"' --",
-    "tetris-rl:export": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python scripts/export_onnx.py \"$@\"' --"
+    "tetris-rl:train": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl train \"$@\"' --",
+    "tetris-rl:train:smoke": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl train --algo dqn --smoke'",
+    "tetris-rl:eval": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl eval \"$@\"' --",
+    "tetris-rl:export": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl export \"$@\"' --"
   },
   "dependencies": {
     "onnxruntime-web": "^1.27.0",

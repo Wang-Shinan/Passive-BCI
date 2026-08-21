@@ -1,65 +1,111 @@
 import { Panel } from '../../lib/ui/Panel'
-import type { RlModelMetadata } from './rl/contracts'
+import { Slider } from '../../lib/ui/Slider'
+import {
+  FOLLOW_MOVES_MAX,
+  FOLLOW_MOVES_MIN,
+  FOLLOW_STEPS_MAX,
+  FOLLOW_STEPS_MIN,
+} from './collab'
 
 export interface RlAgentPanelProps {
   enabled: boolean
   onEnabledChange: (value: boolean) => void
-  loading: boolean
-  loadError: string | null
-  metadata: RlModelMetadata | null
+  collabEnabled: boolean
+  onCollabChange: (value: boolean) => void
+  followEnabled: boolean
+  onFollowChange: (value: boolean) => void
+  followMoves: number
+  onFollowMovesChange: (value: number) => void
+  followSteps: number
+  onFollowStepsChange: (value: number) => void
+  followHumanCount: number
   lastAction: string
   latencyMs: number | null
-  onLoad: () => void
 }
 
 export function RlAgentPanel({
   enabled,
   onEnabledChange,
-  loading,
-  loadError,
-  metadata,
+  collabEnabled,
+  onCollabChange,
+  followEnabled,
+  onFollowChange,
+  followMoves,
+  onFollowMovesChange,
+  followSteps,
+  onFollowStepsChange,
+  followHumanCount,
   lastAction,
   latencyMs,
-  onLoad,
 }: RlAgentPanelProps) {
+  const strategy = followEnabled
+    ? `follow · human ${followHumanCount}/${followMoves} L/R · teacher ${followSteps} L/R · rotate free`
+    : collabEnabled
+      ? 'current column · I flat unless well'
+      : '1-ply heuristic · eval ~35.5 lines'
+
   return (
-    <Panel title="RL Agent（本地 ONNX）">
+    <Panel title="启发式教师（BC 演示）">
       <p className="muted m-0 mb-3 text-sm">
-        加载 Python 训练导出的 DQN 策略，按固定周期自主控制方块。启用后与键盘/MI 互斥。
+        直接跑训练时克隆的 1-ply 落点启发式。教师代打时与键盘/SMR 互斥。协作按当前列旋转：I
+        只在已有深井时才竖放。跟手模式按回合配额：人左右 m 次后，教师立刻走 n
+        步左右（不含硬降）。旋转不占用 m/n。
       </p>
-      <div className="mb-3 flex flex-wrap gap-2">
-        <button type="button" className="btn" onClick={onLoad} disabled={loading}>
-          {loading ? '加载中…' : metadata ? '重新加载模型' : '加载模型'}
-        </button>
+      <div className="mb-3 flex flex-col gap-2">
         <label className="acq-check flex items-center gap-2">
           <input
             type="checkbox"
             checked={enabled}
-            disabled={!metadata || loading}
             onChange={(e) => onEnabledChange(e.target.checked)}
           />
-          启用 AI 代打
+          启用教师代打
+        </label>
+        <label className="acq-check flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={collabEnabled}
+            onChange={(e) => onCollabChange(e.target.checked)}
+          />
+          人机协作：脑控左右 · 教师旋转
+        </label>
+        <label className="acq-check flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={followEnabled}
+            onChange={(e) => onFollowChange(e.target.checked)}
+          />
+          跟手：人 m 次 / 教师 n 步
         </label>
       </div>
-      {loadError && (
-        <div className="mb-3 rounded-xl border border-[#f55] bg-[#2a1010] px-3 py-2 text-sm text-[#f88]">
-          {loadError}
+      {followEnabled ? (
+        <div className="mb-3 space-y-3">
+          <Slider
+            label="人左右次数 m"
+            value={followMoves}
+            min={FOLLOW_MOVES_MIN}
+            max={FOLLOW_MOVES_MAX}
+            step={1}
+            format={(v) => `${v} 次`}
+            onChange={onFollowMovesChange}
+          />
+          <Slider
+            label="随后教师左右 n"
+            value={followSteps}
+            min={FOLLOW_STEPS_MIN}
+            max={FOLLOW_STEPS_MAX}
+            step={1}
+            format={(v) => `${v} 步`}
+            onChange={onFollowStepsChange}
+          />
         </div>
-      )}
-      {metadata && (
-        <div className="rounded-xl border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-sm">
-          <div className="muted text-xs">模型</div>
-          <div className="font-mono text-xs">
-            v{metadata.version} · {metadata.trainedSteps ?? '?'} steps
-            {metadata.evalMeanLines != null ? ` · eval ${metadata.evalMeanLines.toFixed(1)} lines` : ''}
-          </div>
-          <div className="muted mt-2 text-xs">最近动作</div>
-          <div className="font-mono text-xs">{lastAction}</div>
-          {latencyMs != null && (
-            <div className="muted mt-1 text-xs">推理 {latencyMs.toFixed(1)} ms</div>
-          )}
-        </div>
-      )}
+      ) : null}
+      <div className="rounded-xl border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-sm">
+        <div className="muted text-xs">策略</div>
+        <div className="font-mono text-xs">{strategy}</div>
+        <div className="muted mt-2 text-xs">最近动作</div>
+        <div className="font-mono text-xs">{lastAction}</div>
+        {latencyMs != null && <div className="muted mt-1 text-xs">规划 {latencyMs.toFixed(1)} ms</div>}
+      </div>
     </Panel>
   )
 }

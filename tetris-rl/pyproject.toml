@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tetris-rl"
+version = "0.2.0"
+description = "Tetris RL training (DQN / PPO / BC) for GPU servers"
+requires-python = ">=3.10"
+dependencies = [
+  "gymnasium>=0.29",
+  "numpy>=1.24",
+  "torch>=2.1",
+  "onnx>=1.15",
+  "onnxscript>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+tetris-rl = "tetris_rl.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["tetris_rl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

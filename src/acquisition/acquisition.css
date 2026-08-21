@@ -238,6 +238,8 @@
   flex: 1;
   min-height: 0;
   display: flex;
+  overflow: auto;
+  align-items: flex-start;
 }
 
 .acq-rail {
@@ -247,7 +249,8 @@
   display: flex;
   flex-direction: column;
   background: #ffffff;
-  min-height: 0;
+  align-self: flex-start;
+  min-height: 100%;
 }
 
 .acq-rail-head {
@@ -258,11 +261,15 @@
   border-bottom: 3px solid var(--omni-orange);
   font-size: 13px;
   font-weight: 700;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #ffffff;
 }
 
 .acq-rail-list {
   flex: 1;
-  overflow: auto;
+  overflow: visible;
 }
 
 .acq-rail-row {
@@ -326,15 +333,13 @@
 .acq-plot {
   flex: 1;
   min-width: 0;
-  min-height: 0;
+  min-height: 100%;
   position: relative;
 }
 
 .acq-plot canvas {
-  position: absolute;
-  inset: 0;
+  display: block;
   width: 100% !important;
-  height: 100% !important;
   border-radius: 0 !important;
 }
 

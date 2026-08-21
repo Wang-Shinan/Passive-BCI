@@ -8,6 +8,8 @@ import {
   noteLiveSamples,
   resetCatchup,
   setCatchupClock,
+  addPendingSamples,
+  isCatchingUp,
 } from './liveCatchup'
 
 describe('live clock lag', () => {
@@ -80,5 +82,30 @@ describe('lag display helpers', () => {
     expect(lagWarnLevel(20, 0)).toBe(0)
     expect(lagWarnLevel(90, 0)).toBe(1)
     expect(lagWarnLevel(40, 0.25)).toBe(2)
+  })
+})
+
+describe('catch-up hysteresis', () => {
+  it('does not flicker around a Collect-sized packet gap', () => {
+    resetCatchup()
+    setCatchupClock(1000)
+    expect(isCatchingUp()).toBe(false)
+    addPendingSamples(200)
+    expect(isCatchingUp()).toBe(false)
+    addPendingSamples(200)
+    expect(isCatchingUp()).toBe(true)
+    addPendingSamples(-250)
+    expect(isCatchingUp()).toBe(true)
+    addPendingSamples(-100)
+    expect(isCatchingUp()).toBe(false)
+  })
+
+  it('ignores inter-batch clock lag', () => {
+    resetCatchup()
+    setCatchupClock(1000)
+    noteLiveSamples(5, 1000)
+    noteLiveSamples(5, 1400)
+    expect(liveClockLagMs(1400)).toBeGreaterThan(200)
+    expect(isCatchingUp()).toBe(false)
   })
 })

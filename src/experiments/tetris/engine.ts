@@ -373,7 +373,7 @@ export function createGame(seed = 1): GameState {
   }
 }
 
-function collides(board: Cell[][], piece: Piece, ox = 0, oy = 0, matrix = piece.matrix): boolean {
+export function collides(board: Cell[][], piece: Piece, ox = 0, oy = 0, matrix = piece.matrix): boolean {
   for (let r = 0; r < matrix.length; r++) {
     for (let c = 0; c < matrix[r]!.length; c++) {
       if (!matrix[r]![c]) continue
@@ -591,7 +591,7 @@ export function rotate(state: GameState, dir: 1 | -1, _rng: () => number): StepR
       matrix,
       x: piece.x + ox,
       y: piece.y - oy,
-      fy: 0,
+      fy: piece.fy,
     }
     if (!collides(state.board, test)) {
       return { state: { ...state, piece: test, lockTimer: 0 }, events: [] }
@@ -833,6 +833,31 @@ export function advanceFall(
     },
     events: [],
   }
+}
+
+/**
+ * Grounded pieces wait `lockDelayMs` before locking. Moves/rotates already
+ * reset `lockTimer`. Used by follow-mode so a teacher slide onto the stack
+ * does not freeze the human out on the next frame.
+ */
+export function holdOrLock(
+  state: GameState,
+  rng: () => number,
+  dtMs: number,
+  lockDelayMs: number,
+): StepResult {
+  if (!state.piece || state.gameOver || state.paused || state.anim) {
+    return { state, events: [] }
+  }
+  if (!collides(state.board, state.piece, 0, 1)) {
+    if (state.lockTimer === 0) return { state, events: [] }
+    return { state: { ...state, lockTimer: 0 }, events: [] }
+  }
+  const lockTimer = state.lockTimer + Math.max(0, dtMs)
+  if (lockTimer >= lockDelayMs) {
+    return lockPiece({ ...state, piece: { ...state.piece, fy: 0 }, lockTimer: 0 }, rng)
+  }
+  return { state: { ...state, lockTimer }, events: [] }
 }
 
 /** @deprecated Use advanceFall for smooth gravity. */

@@ -184,14 +184,57 @@ export function recordWriterPlugin(): Plugin {
     }
   }
 
+  /** HMR / 未点停止会留下幽灵会话，下一轮采集会被 429 打回浏览器内存。 */
+  async function evictOldestIfNeeded() {
+    if (sessions.size < MAX_SESSIONS) return
+    const oldest = sessions.values().next().value as RecordSession | undefined
+    if (!oldest) return
+    const keep = oldest.bytes > 0
+    if (keep) {
+      oldest.manifest.stoppedAt = new Date().toISOString()
+      oldest.manifest.status = 'complete'
+      oldest.manifest.bytes = oldest.bytes
+      writeManifest(oldest)
+      writeEegSidecar(oldest, {
+        stoppedAt: oldest.manifest.stoppedAt,
+        status: 'complete',
+      })
+    }
+    console.log(
+      `\x1b[32m[record]\x1b[0m evict ${oldest.stem} (${keep ? 'keep' : 'drop empty'})`,
+    )
+    await closeSession(oldest, !keep)
+  }
+
   function closeAll() {
     for (const session of [...sessions.values()]) {
       void closeSession(session, false)
     }
   }
 
+  let lastPaintLine = ''
+
   const middleware: Connect.NextHandleFunction = (req, res, next) => {
     const url = req.url?.split('?')[0] ?? ''
+    if (url === '/api/debug/paint') {
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        res.end()
+        return
+      }
+      if (req.method === 'GET') {
+        sendJson(res, 200, { ok: true, line: lastPaintLine || null })
+        return
+      }
+      if (req.method === 'POST') {
+        req.resume()
+        res.statusCode = 204
+        res.end()
+        return
+      }
+    }
     if (!url.startsWith('/api/record')) {
       next()
       return
@@ -331,6 +374,7 @@ export function recordWriterPlugin(): Plugin {
         }
 
         if (url === '/api/record/start' && req.method === 'POST') {
+          await evictOldestIfNeeded()
           if (sessions.size >= MAX_SESSIONS) {
             sendJson(res, 429, { ok: false, message: '已有录制进行中' })
             return

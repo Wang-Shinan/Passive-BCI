@@ -42,6 +42,11 @@ export type ModelServiceHello = {
   strategy?: string
   window_sec?: number
   step_sec?: number
+  follow?: {
+    transport?: string
+    bind?: string
+    advertised?: string[]
+  }
 }
 
 export type ModelPrediction = {
@@ -167,6 +172,20 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
       (typeof online?.strategy === 'string' ? online.strategy : undefined),
     window_sec: windowSec && windowSec > 0 ? windowSec : undefined,
     step_sec: stepSec && stepSec > 0 ? stepSec : undefined,
+    follow: parseFollow(value.follow),
+  }
+}
+
+function parseFollow(raw: unknown): ModelServiceHello['follow'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const value = raw as Record<string, unknown>
+  const advertised = Array.isArray(value.advertised)
+    ? value.advertised.filter((item): item is string => typeof item === 'string')
+    : undefined
+  return {
+    transport: typeof value.transport === 'string' ? value.transport : undefined,
+    bind: typeof value.bind === 'string' ? value.bind : undefined,
+    advertised,
   }
 }
 

@@ -6,6 +6,7 @@ export const SMR_ALPHA_BAND_HZ = 3
 export const SMR_TICK_SEC = 0.04
 export const SMR_BUFFER_SEC = 30
 export const SMR_GAIN = 0.85
+export const REVE_CURSOR_GAIN = 2.4
 export const SMR_MIN_STD = 0.05
 
 export type TargetDir = 'right' | 'left' | 'up' | 'down'
@@ -200,6 +201,31 @@ export function smrFeatures(pC3: number, pC4: number): { horiz: number; vert: nu
     horiz: pC3 - pC4,
     vert: -(pC3 + pC4),
   }
+}
+
+const RIGHT_NAMES = new Set(['right_hand', 'right'])
+const LEFT_NAMES = new Set(['left_hand', 'left'])
+const UP_NAMES = new Set(['both_hand', 'both_hands', 'both', 'up'])
+const DOWN_NAMES = new Set(['rest', 'down', 'idle'])
+
+/** Map a 4-class REVE prediction onto the same cursor axes as C3/C4 mu. */
+export function reveCursorAxes(
+  classNames: readonly string[],
+  probabilities: readonly number[],
+): { zH: number; zV: number } {
+  let left = 0
+  let right = 0
+  let up = 0
+  let down = 0
+  for (let i = 0; i < classNames.length; i++) {
+    const value = probabilities[i] ?? 0
+    const name = classNames[i] ?? ''
+    if (RIGHT_NAMES.has(name)) right += value
+    else if (LEFT_NAMES.has(name)) left += value
+    else if (UP_NAMES.has(name)) up += value
+    else if (DOWN_NAMES.has(name)) down += value
+  }
+  return { zH: right - left, zV: up - down }
 }
 
 /** +1 if pos-class mean is higher; -1 if the physiology-signed axis is inverted. */

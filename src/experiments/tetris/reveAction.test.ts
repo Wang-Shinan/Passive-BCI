@@ -51,7 +51,7 @@ describe('tetris REVE action mapping', () => {
   it('reads tetris_action_7 predictions and ignores ordinal heads', () => {
     expect(isTetrisActionPrediction(prediction(1, 'left'))).toBe(true)
     expect(tetrisActionFromPrediction(prediction(1, 'left'))).toBe('left')
-    expect(tetrisActionFromPrediction(prediction(0, '差', 'ordinal_rating_3'))).toBeNull()
+    expect(tetrisActionFromPrediction(prediction(0, '任务一', 'ordinal_rating_3'))).toBeNull()
   })
 
   it('applies move/rotate and ignores rest', () => {

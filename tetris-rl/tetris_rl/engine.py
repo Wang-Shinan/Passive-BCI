@@ -487,7 +487,7 @@ def rotate(state: GameState, direction: int) -> GameState:
     for kx, ky in table:
         ox = kx if direction == 1 else -kx
         oy = ky if direction == 1 else -ky
-        test = Piece(piece.type, to_rot, piece.x + ox, piece.y - oy, 0.0, matrix)
+        test = Piece(piece.type, to_rot, piece.x + ox, piece.y - oy, piece.fy, matrix)
         if not collides(state.board, test):
             state.piece = test
             state.lock_timer = 0

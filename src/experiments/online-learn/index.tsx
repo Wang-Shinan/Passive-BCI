@@ -55,7 +55,7 @@ export function OnlineLearnPage() {
         const status = await modelServiceStatus(ac.signal)
         if (ac.signal.aborted) return
         if (!status.running) {
-          setNotice('选好任务头再点启动。不会自动拉起评分头。')
+          setNotice('选好任务头再点启动。不会自动拉起三类头。')
           return
         }
         modelRuntimeHub.setEnabled(true)
@@ -85,6 +85,7 @@ export function OnlineLearnPage() {
     prediction != null &&
     classNames.length > 0 &&
     performance.now() - prediction.received_at_ms < 8000
+  const smrFrozen = (liveTask ?? task) === 'smr_control'
 
   useEffect(() => {
     const next = runtime.latestPrediction
@@ -137,6 +138,10 @@ export function OnlineLearnPage() {
   }, [runtime.lastFeedbackAck])
 
   const labelCurrent = (index: number) => {
+    if ((liveTask ?? task) === 'smr_control') {
+      setNotice('SMR 头冻结，不接受在线标签。请切回三类头或方块操作头。')
+      return
+    }
     const current = modelRuntimeHub.latestObservation(8000)
     const names = current?.class_names ?? classNames
     if (!current || index < 0 || index >= names.length) {
@@ -221,8 +226,7 @@ export function OnlineLearnPage() {
           </Link>
           <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">基模在线学习</h1>
           <p className="muted mt-1 max-w-2xl text-sm">
-            采集开流后把 2 秒原始窗送给本地 REVE。冻结编码器，只更新线性头。任务头可切换；标注按钮跟当前
-            class_names 走，数字键 1…N。
+            采集开流后把 2 秒原始窗送给本地 REVE。三类任务头可冻结编码器、只更新线性头。SMR 头冻结，本页不会在线微调。
           </p>
         </div>
         <div className="flex flex-col items-end gap-3">
@@ -239,7 +243,7 @@ export function OnlineLearnPage() {
 
       <Panel title="模型连接" className="mb-4">
         <p className="muted mt-0 mb-3 text-sm">
-          选任务头再启动。已在跑的服务会直接连上，不会改成评分头。评分、SMR、方块操作是三套独立的线性头。
+          选任务头再启动。已在跑的服务会直接连上，不会改成三类头。三类、SMR、方块操作是三套独立的线性头。SMR 头冻结。
         </p>
         {runtime.serviceHello?.service === 'ncc-dev-mock' ? (
           <p className="mb-3 text-sm" style={{ color: 'var(--warn)' }}>
@@ -264,7 +268,7 @@ export function OnlineLearnPage() {
           title="当前窗口"
           actions={
             <span className="muted text-xs">
-              {canLabel ? '可标注' : '等待 2 秒窗'}
+              {smrFrozen ? 'SMR 头冻结' : canLabel ? '可标注' : '等待 2 秒窗'}
               {ageMs != null ? ` · ${Math.round(ageMs)} ms 前` : ''}
             </span>
           }
@@ -326,7 +330,7 @@ export function OnlineLearnPage() {
                   key={`${name}-${index}`}
                   type="button"
                   className="btn btn-primary"
-                  disabled={!canLabel}
+                  disabled={!canLabel || smrFrozen}
                   onClick={() => labelCurrent(index)}
                 >
                   {key ? `${key} · ${name}` : name}
@@ -334,6 +338,11 @@ export function OnlineLearnPage() {
               )
             })}
           </div>
+          {smrFrozen ? (
+            <p className="mb-0 mt-3 text-sm" style={{ color: 'var(--warn)' }}>
+              当前是冻结的 SMR 头，标签不会更新线性头。三类任务头仍可在线学习。
+            </p>
+          ) : null}
           {notice ? <p className="muted mb-0 mt-3 text-sm">{notice}</p> : null}
         </Panel>
 

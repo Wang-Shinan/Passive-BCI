@@ -36,10 +36,10 @@ import {
   type PlanId,
   type SessionState,
 } from './engine'
-import { canLabelSmrHead, labelIndexForTarget } from './labels'
 import { loadSmrProfile, proficientSummary, saveSmrProfile } from './profile'
 import {
   BalancedNorm,
+  REVE_CURSOR_GAIN,
   SMR_TICK_SEC,
   SMR_WINDOW_SEC,
   alphaPower,
@@ -50,12 +50,22 @@ import {
   outcomeForHit,
   resetCursor,
   resolveLaplacianMontage,
+  reveCursorAxes,
   smrFeatures,
   stepCursor,
   type CursorState,
   type LaplacianMontage,
 } from './smrControl'
 import './smrAdapt.css'
+
+type CursorDrive = 'reve' | 'features'
+
+const CURSOR_DRIVE_KEY = 'passive-bci.smr-adapt-cursor-drive'
+
+function loadCursorDrive(): CursorDrive {
+  if (typeof window === 'undefined') return 'reve'
+  return window.localStorage.getItem(CURSOR_DRIVE_KEY) === 'features' ? 'features' : 'reve'
+}
 
 type Welford = { n: number; mean: number; m2: number }
 
@@ -88,8 +98,8 @@ export function SmrAdaptPage() {
   )
   const [cursor, setCursor] = useState<CursorState>(resetCursor)
   const [notice, setNotice] = useState('')
-  const [labeled, setLabeled] = useState(0)
   const [horizFlipped, setHorizFlipped] = useState(false)
+  const [cursorDrive, setCursorDrive] = useState<CursorDrive>(loadCursorDrive)
   const loggerRef = useRef(new SessionLogger('smr-adapt', subjectId))
   const sessionRef = useRef(session)
   const cursorRef = useRef(cursor)
@@ -97,16 +107,21 @@ export function SmrAdaptPage() {
   const vertNorm = useRef(new BalancedNorm())
   const warmupH = useRef<Welford>({ n: 0, mean: 0, m2: 0 })
   const warmupV = useRef<Welford>({ n: 0, mean: 0, m2: 0 })
-  const labeledIds = useRef(new Set<string>())
+  const cursorDriveRef = useRef(cursorDrive)
   const runtime = useModelRuntime()
   const eeg = useLiveEeg()
 
   sessionRef.current = session
   cursorRef.current = cursor
+  cursorDriveRef.current = cursorDrive
 
   useEffect(() => {
     loggerRef.current.setSubjectId(subjectId)
   }, [subjectId])
+
+  useEffect(() => {
+    window.localStorage.setItem(CURSOR_DRIVE_KEY, cursorDrive)
+  }, [cursorDrive])
 
   useEffect(() => {
     const ac = new AbortController()
@@ -117,13 +132,14 @@ export function SmrAdaptPage() {
         if (status.running && status.task === 'smr_control') {
           modelRuntimeHub.setEnabled(true)
           modelRuntimeHub.connect()
-          return
+          if (status.owned || cursorDrive !== 'reve') return
         }
+        if (cursorDrive !== 'reve') return
         setNotice('正在启动 REVE SMR 头（首次加载权重可能要一两分钟）…')
         const result = await ensureModelService({
           backend: 'reve',
           task: 'smr_control',
-          force: Boolean(status.running && status.task && status.task !== 'smr_control'),
+          force: Boolean(status.running && (!status.owned || status.task !== 'smr_control')),
           signal: ac.signal,
         })
         if (ac.signal.aborted) return
@@ -137,16 +153,13 @@ export function SmrAdaptPage() {
       }
     })()
     return () => ac.abort()
-  }, [])
+  }, [cursorDrive])
 
   const montage = useMemo(
     () => resolveLaplacianMontage(eeg.meta.channelNames),
     [eeg.meta.channelNames],
   )
   const live = eeg.live
-  const classNames = runtime.latestPrediction?.class_names ?? runtime.serviceHello?.class_names
-  const canLabel = runtime.status === 'ready' && canLabelSmrHead(classNames)
-
   const trial = currentTrial(session)
   const running = session.phase !== 'idle' && session.phase !== 'done'
   const scores = useMemo(() => scoresByTask(session.trials), [session.trials])
@@ -162,8 +175,6 @@ export function SmrAdaptPage() {
     vertNorm.current = new BalancedNorm()
     warmupH.current = { n: 0, mean: 0, m2: 0 }
     warmupV.current = { n: 0, mean: 0, m2: 0 }
-    labeledIds.current.clear()
-    setLabeled(0)
     setHorizFlipped(false)
     const seed = randomSeed()
     loggerRef.current.clear()
@@ -186,13 +197,16 @@ export function SmrAdaptPage() {
       seed: next.seed,
       trials: next.trials.length,
       live,
+      cursorDrive,
       montage: montage
         ? { c3: montage.neighborNamesC3, c4: montage.neighborNamesC4 }
         : null,
     })
     setNotice(
       live
-        ? `实时 EEG 控制光标；REVE 在线更新 SMR 头。${notes.filter(Boolean).join(' ')}`
+        ? cursorDrive === 'features'
+          ? `C3/C4 mu 驱动光标。${notes.filter(Boolean).join(' ')}`
+          : `REVE 驱动光标；SMR 头冻结，不在线微调。${notes.filter(Boolean).join(' ')}`
         : notes.join(' '),
     )
   }
@@ -255,7 +269,13 @@ export function SmrAdaptPage() {
 
       let zH: number
       let zV: number
-      if (live && montage) {
+      const useReve = cursorDriveRef.current === 'reve'
+      const pred = useReve && live ? modelRuntimeHub.latestObservation(2500) : null
+      if (pred && pred.probabilities.length === pred.class_names.length) {
+        const axes = reveCursorAxes(pred.class_names, pred.probabilities)
+        zH = axes.zH * REVE_CURSOR_GAIN
+        zV = axes.zV * REVE_CURSOR_GAIN
+      } else if (live && montage) {
         const { buffers, writeHead, filled, sampleRate } = liveEegHub.ring
         const n = Math.round(sampleRate * SMR_WINDOW_SEC)
         const c3 = copyRecentSamples(buffers[montage.c3]!, writeHead, filled, n)
@@ -306,58 +326,6 @@ export function SmrAdaptPage() {
     return () => window.clearInterval(id)
   }, [running, live, montage, subjectId, persist])
 
-  useEffect(() => {
-    const imagery = session.phase === 'cue' || session.phase === 'feedback'
-    if (!imagery || !trial || !canLabel || !live) return
-    const obs = modelRuntimeHub.latestObservation(2500)
-    if (!obs || labeledIds.current.has(obs.observation_id)) return
-    const label = labelIndexForTarget(obs.class_names, trial.target)
-    if (label == null) return
-    const className = obs.class_names[label] ?? trial.target
-    const feedbackId = modelRuntimeHub.submitFeedback({
-      observationId: obs.observation_id,
-      label,
-      metadata: {
-        experiment: 'smr-adapt',
-        subjectId,
-        target: trial.target,
-        task: trial.task,
-        phase: session.phase,
-        className,
-      },
-    })
-    if (!feedbackId) return
-    labeledIds.current.add(obs.observation_id)
-    setLabeled((n) => n + 1)
-    loggerRef.current.log('smr_window', {
-      observationId: obs.observation_id,
-      windowId: obs.window_id,
-      feedbackId,
-      label,
-      className,
-      classNames: obs.class_names,
-      pred: obs.class_name,
-      predId: obs.class_id,
-      confidence: obs.confidence,
-      probabilities: obs.probabilities,
-      onlineUpdateStep: obs.online_update_step,
-      target: trial.target,
-      task: trial.task,
-      trialIndex: trial.index,
-      phase: session.phase,
-      windowSec: runtime.windowSec,
-    })
-    loggerRef.current.log('foundation_label', {
-      observationId: obs.observation_id,
-      label,
-      className,
-      target: trial.target,
-      task: trial.task,
-      trialIndex: trial.index,
-      phase: session.phase,
-    })
-  }, [session.phase, trial, canLabel, live, subjectId, runtime.latestPrediction?.observation_id, runtime.windowSec])
-
   const flash =
     session.phase === 'post' && trial?.outcome === 'hit'
       ? 'smr-flash-hit'
@@ -374,9 +342,7 @@ export function SmrAdaptPage() {
           </Link>
           <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">SMR 个体化适配</h1>
           <p className="muted mt-1 max-w-2xl text-sm">
-            Stieger 式连续光标：左手左、右手右、双手上、休息下。点「开始适配」会同时开录
-            EEG，线索期和反馈期按目标给 REVE smr_control 头打标签（在线更新），事件写入
-            events.jsonl 供离线再训。
+            Stieger 式连续光标：左手左、右手右、双手上、休息下。光标可选 REVE 四分类或原来的 C3/C4 mu。SMR 头冻结，不在线微调。
           </p>
         </div>
         <div className="flex flex-col items-end gap-3">
@@ -427,7 +393,11 @@ export function SmrAdaptPage() {
             ) : null}
           </div>
           <p className="muted mb-0 mt-3 text-sm">
-            {trial ? instructionFor(trial.task) : '选择计划后开始。黄条是目标，粉球由 C3/C4 alpha 推动。'}
+            {trial
+              ? instructionFor(trial.task)
+              : cursorDrive === 'features'
+                ? '选择计划后开始。黄条是目标，粉球由 C3/C4 alpha 推动。'
+                : '选择计划后开始。黄条是目标，粉球由 REVE 四分类推动。'}
           </p>
         </Panel>
 
@@ -455,11 +425,34 @@ export function SmrAdaptPage() {
               ))}
             </div>
             <p className="muted mt-0 text-sm">{PLANS[planId].hint}</p>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="muted text-sm">光标驱动</span>
+              {(
+                [
+                  ['reve', 'REVE 四分类'],
+                  ['features', 'C3/C4 mu'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="btn"
+                  onClick={() => setCursorDrive(id)}
+                  style={
+                    cursorDrive === id
+                      ? { borderColor: 'var(--accent)', color: 'var(--accent)' }
+                      : undefined
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <button type="button" className="btn btn-primary" disabled={running} onClick={begin}>
               {session.phase === 'done' ? '再做一轮' : '开始适配'}
             </button>
             {notice ? <p className="muted mb-0 mt-3 text-sm">{notice}</p> : null}
-            {!montage && live ? (
+            {!montage && live && cursorDrive === 'features' ? (
               <p className="mb-0 mt-3 text-sm" style={{ color: 'var(--danger)' }}>
                 当前导联没有 C3/C4，无法计算 Stieger 控制律。
               </p>
@@ -501,18 +494,16 @@ export function SmrAdaptPage() {
         </div>
       </div>
 
-      <Panel title="基模在线 + 离线落盘" className="mb-4">
+      <Panel title="基模连接 + 离线落盘" className="mb-4">
         <p className="muted mt-0 text-sm">
-          光标仍用 C3/C4 mu。REVE 是独立的 smr_control
-          头，线索/反馈期按目标在线更新，同时把每个 2 秒窗记进当前会话。
+          {cursorDrive === 'features'
+            ? '光标按原来的 C3/C4 Laplacian mu 走（左右极性可按类均值翻转）。SMR 头冻结，本页不向 REVE 打标签。'
+            : '光标由已拟合的 REVE 四分类头驱动（左← 右→ 双手↑ 休息↓）。没有预测时回退 C3/C4 mu。SMR 头冻结，不在线微调。'}
         </p>
         <p className="text-sm">
           当前预测 <strong>{runtime.latestPrediction?.class_name ?? '—'}</strong>
           {' · '}
-          步数 <strong>{runtime.latestPrediction?.online_update_step ?? 0}</strong>
-          {' · '}
-          本局已标 <strong>{labeled}</strong>
-          {canLabel ? '' : ' · 还不是 SMR 四类头'}
+          策略 <strong>{runtime.serviceHello?.strategy ?? '—'}</strong>
         </p>
         {saved ? (
           <p className="muted text-sm">
@@ -521,14 +512,16 @@ export function SmrAdaptPage() {
         ) : null}
         <p className="mb-0 text-sm">
           离线再训：<code>npm run model-service:reve:smr:fit</code>，会读
-          recordings/*smr-adapt* 里的 trial / smr_window。评分头请去{' '}
+          recordings/*smr-adapt* 里的 trial。三类任务头请去{' '}
           <Link to="/online-learn">基模在线学习</Link>。
         </p>
       </Panel>
 
       <Panel title="模型连接">
         <p className="muted mt-0 mb-3 text-sm">
-          本页会拉起 smr_control。开始适配后自动录制；结束后自动停录并保留 bin。
+          {cursorDrive === 'reve'
+            ? '当前会拉起冻结的 smr_control（strategy=none）。开始适配后自动录制；结束后自动停录并保留 bin。'
+            : '特征驱动不自动拉起 REVE。需要 REVE 光标时再在下面启动 smr_control。开始适配后自动录制。'}
         </p>
         <ModelServicePanel embedded reveTask="smr_control" />
       </Panel>
