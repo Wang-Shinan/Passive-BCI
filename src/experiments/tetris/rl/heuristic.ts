@@ -8,12 +8,6 @@ import { instantResolveAnim } from './instantResolve'
 
 const NOP_RNG = () => 0.5
 
-function lockCandidate(moved: GameState): GameState {
-  const rng = mulberry32(1)
-  const dropped = hardDrop(cloneState(moved), rng).state
-  return instantResolveAnim(dropped, rng).state
-}
-
 function cloneState(state: GameState): GameState {
   return {
     ...state,
@@ -21,6 +15,12 @@ function cloneState(state: GameState): GameState {
     piece: state.piece ? { ...state.piece } : null,
     bag: [...state.bag],
   }
+}
+
+function lockCandidate(moved: GameState): GameState {
+  const rng = mulberry32(1)
+  const dropped = hardDrop(cloneState(moved), rng).state
+  return instantResolveAnim(dropped, rng).state
 }
 
 function tryRotate(state: GameState, times: number): GameState | null {
@@ -70,19 +70,39 @@ function leafScore(state: GameState, lines0: number): number {
   return score
 }
 
-function lockCandidate(moved: GameState): GameState {
-  const dropped = hardDrop(cloneState(moved), SEARCH_RNG).state
-  return instantResolveAnim(dropped, SEARCH_RNG).state
+export function simulateLock(state: GameState): GameState {
+  if (!state.piece || state.gameOver || state.anim) return state
+  return lockCandidate(state)
+}
+
+export function scoreLock(state: GameState, lines0: number): number {
+  return leafScore(lockCandidate(state), lines0)
+}
+
+export function scoreBoard(state: GameState, lines0: number): number {
+  return leafScore(state, lines0)
 }
 
 export function bestPlacementActions(state: GameState): RlAction[] {
   if (!state.piece || state.gameOver || state.anim) return []
   const startX = state.piece.x
+  const best = bestPlacement(state)
+  if (!best) return ['hardDrop']
+  return planFor(best.rotSteps, best.x, startX)
+}
+
+export interface PlacementChoice {
+  rotSteps: number
+  x: number
+  rot: number
+  score: number
+}
+
+export function enumeratePlacements(state: GameState): PlacementChoice[] {
+  if (!state.piece || state.gameOver || state.anim) return []
   const rotations = state.piece.type === 'O' ? 1 : 4
   const lines0 = state.lines
-  let bestPlan: RlAction[] = ['hardDrop']
-  let bestScore = -Infinity
-
+  const out: PlacementChoice[] = []
   for (let rot = 0; rot < rotations; rot++) {
     const rotated = tryRotate(state, rot)
     if (!rotated?.piece) continue
@@ -91,14 +111,90 @@ export function bestPlacementActions(state: GameState): RlAction[] {
       if (!moved?.piece) continue
       if (collides(moved.board, moved.piece)) continue
       const locked = lockCandidate(moved)
-      const score = leafScore(locked, lines0)
-      if (score > bestScore) {
-        bestScore = score
-        bestPlan = planFor(rot, x, startX)
-      }
+      out.push({
+        rotSteps: rot,
+        x: moved.piece.x,
+        rot: moved.piece.rot,
+        score: leafScore(locked, lines0),
+      })
     }
   }
-  return bestPlan
+  return out
+}
+
+export function bestPlacement(state: GameState): PlacementChoice | null {
+  const all = enumeratePlacements(state)
+  if (all.length === 0) return null
+  return all.reduce((best, item) => (item.score > best.score ? item : best))
+}
+
+export interface BfsLock {
+  x: number
+  y: number
+  rot: number
+  score: number
+}
+
+function poseKey(state: GameState): string {
+  const p = state.piece
+  if (!p) return ''
+  return `${p.x}|${p.y}|${p.rot}`
+}
+
+function bfsNeighbors(state: GameState): GameState[] {
+  if (!state.piece) return []
+  const key = poseKey(state)
+  const nextStates = [
+    move(state, -1, NOP_RNG).state,
+    move(state, 1, NOP_RNG).state,
+    rotate(state, 1, NOP_RNG).state,
+    rotate(state, -1, NOP_RNG).state,
+  ]
+  return nextStates.filter((next) => next.piece && poseKey(next) !== key)
+}
+
+/** Interleaved left/right/rotate BFS from the live piece. Each pose hard-drops for a score. */
+export function bfsLockScores(state: GameState): BfsLock[] {
+  if (!state.piece || state.gameOver || state.anim) return []
+  const lines0 = state.lines
+  const queue: GameState[] = [cloneState(state)]
+  const seen = new Set([poseKey(state)])
+  const out: BfsLock[] = []
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!
+    if (!cur.piece) continue
+    const locked = lockCandidate(cur)
+    out.push({
+      x: cur.piece.x,
+      y: cur.piece.y,
+      rot: cur.piece.rot,
+      score: leafScore(locked, lines0),
+    })
+    for (const next of bfsNeighbors(cur)) {
+      const key = poseKey(next)
+      if (seen.has(key)) continue
+      seen.add(key)
+      queue.push(next)
+    }
+  }
+  return out
+}
+
+export function peakScoreByRotation(locks: BfsLock[]): Map<number, number> {
+  const peaks = new Map<number, number>()
+  for (const lock of locks) {
+    const prev = peaks.get(lock.rot)
+    if (prev == null || lock.score > prev) peaks.set(lock.rot, lock.score)
+  }
+  return peaks
+}
+
+export function shorterRotateAction(from: number, to: number): RlAction {
+  const cw = (to - from + 4) % 4
+  const ccw = (from - to + 4) % 4
+  if (ccw > 0 && ccw < cw) return 'rotateCCW'
+  return 'rotateCW'
 }
 
 function pieceKey(state: GameState): string | null {

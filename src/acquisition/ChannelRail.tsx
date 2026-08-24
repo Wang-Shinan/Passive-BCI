@@ -1,6 +1,6 @@
 /** OmniBCI-style left channel rail + per-channel settings dialog. */
 
-import { CHANNEL_COLORS } from './WaveformCanvas'
+import { CHANNEL_COLORS } from './waveformPalette'
 import {
   VALID_GAINS,
   type ChannelConfig,

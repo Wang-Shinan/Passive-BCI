@@ -43,8 +43,11 @@ export interface NeuracleBatch {
 
 export interface NeuracleClientOptions {
   url?: string
+  /** Empty → bridge probes 127.0.0.1 then this PC's LAN IPs */
   host?: string
-  port?: number
+  /** Empty / 0 → auto-detect Collect listen port */
+  port?: number | null
+  /** 0 / omit → start at 1000 Hz, then adopt META */
   sourceSfreq?: number
   /** null → all forwarded (≈64); named list → subset; [] → EEG-typed only */
   eegChannelNames?: string[] | null
@@ -87,9 +90,14 @@ export class NeuracleWsClient {
     ws.onopen = () => {
       const payload: Record<string, unknown> = {
         type: 'subscribe',
-        host: this.opts.host ?? '127.0.0.1',
-        port: this.opts.port ?? 8712,
-        source_sfreq: this.opts.sourceSfreq ?? 250,
+      }
+      const host = (this.opts.host ?? '').trim()
+      if (host) payload.host = host
+      if (this.opts.port != null && Number(this.opts.port) > 0) {
+        payload.port = Number(this.opts.port)
+      }
+      if (this.opts.sourceSfreq != null && this.opts.sourceSfreq > 0) {
+        payload.source_sfreq = this.opts.sourceSfreq
       }
       // null/undefined → all forwarded channels; [] kept for compatibility
       if (this.opts.eegChannelNames === null) {

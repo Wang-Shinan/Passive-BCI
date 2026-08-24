@@ -9,6 +9,10 @@ import { JumpExperiment } from './experiments/jump'
 import { DrawGuessExperiment } from './experiments/draw-guess'
 import { DinoExperiment } from './experiments/dino'
 import { SchulteExperiment } from './experiments/schulte'
+import { OnlineLearnPage } from './experiments/online-learn'
+import { SmrAdaptPage } from './experiments/smr-adapt'
+import { TetrisAdaptPage } from './experiments/tetris-adapt'
+import { RecordingsPage } from './recordings/RecordingsPage'
 
 export default function App() {
   return (
@@ -16,6 +20,10 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/acquisition" element={<AcquisitionDebugPage />} />
+        <Route path="/recordings" element={<RecordingsPage />} />
+        <Route path="/online-learn" element={<OnlineLearnPage />} />
+        <Route path="/smr-adapt" element={<SmrAdaptPage />} />
+        <Route path="/tetris-adapt" element={<TetrisAdaptPage />} />
         <Route path="/rl-graph" element={<RlGraphExperiment />} />
         <Route path="/tetris" element={<TetrisExperiment />} />
         <Route path="/card-cit" element={<CardCitExperiment />} />

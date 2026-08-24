@@ -1,21 +1,32 @@
 /**
  * Omni live catch-up: ingest has priority over painting.
- * When estimated backlog exceeds 0.2 s, skip waveform/PSD redraw.
  *
- * Live delay is instantaneous: how overdue the next batch is, plus
- * the lateness of the last interval. It is not a session-long sample
- * clock difference (that would accumulate fs error).
+ * Catch-up is only real JS backlog (queued samples / serial bytes).
+ * Collect/Neuracle packet gaps and device-clock pipeline delay are
+ * display metrics — they must not toggle catch-up, or the overlay
+ * flickers every time a 100 ms TCP packet lands.
  */
 
 import { sampleClock } from '../lib/eeg/sampleClock'
 
-export const LIVE_CATCHUP_THRESHOLD_S = 0.2
+export const LIVE_CATCHUP_THRESHOLD_S = 0.35
+export const LIVE_CATCHUP_CLEAR_S = 0.08
 export const LIVE_LAG_WARN_MS = 80
-export const LIVE_LAG_BAD_MS = LIVE_CATCHUP_THRESHOLD_S * 1000
+export const LIVE_LAG_BAD_MS = 200
 /** Omni serial drain budget per turn (seconds → ms). */
-export const INGEST_DRAIN_BUDGET_MS = 6
-/** Omni plot timer: 12.5 FPS, leaves time for draining. */
+export const INGEST_DRAIN_BUDGET_MS = 8
+/** Bridge bursts: spend more of the turn emptying the queue. */
+export const BRIDGE_DRAIN_BUDGET_MS = 24
+/** Fallback plot timer (FFT / low channel counts). */
 export const PLOT_INTERVAL_MS = 80
+
+/** Slow down painting when many traces would otherwise stall ingest. */
+export function plotIntervalMs(visibleChannels: number): number {
+  if (visibleChannels >= 48) return 120
+  if (visibleChannels >= 24) return 90
+  if (visibleChannels >= 12) return 70
+  return 50
+}
 
 let queuedBytes = 0
 let pendingSamples = 0
@@ -27,6 +38,7 @@ let lastBatchAt = 0
 let lastExpectedMs = 0
 let lastExtraMs = 0
 let jitterEwma = 0
+let catchingUp = false
 
 export function setCatchupClock(fs: number, frameBytes = 48): void {
   sampleRate = Math.max(1, fs)
@@ -88,11 +100,10 @@ export function liveJitterMs(): number {
 }
 
 export function isCatchingUp(): boolean {
-  return (
-    liveLagSec() > LIVE_CATCHUP_THRESHOLD_S ||
-    liveClockLagMs() > LIVE_LAG_BAD_MS ||
-    sampleClock.pipelineDelayMs() > LIVE_LAG_BAD_MS
-  )
+  const backlog = liveLagSec()
+  if (catchingUp) catchingUp = backlog > LIVE_CATCHUP_CLEAR_S
+  else catchingUp = backlog > LIVE_CATCHUP_THRESHOLD_S
+  return catchingUp
 }
 
 export function lagWarnLevel(clockMs: number, backlogSec: number): 0 | 1 | 2 {
@@ -115,5 +126,6 @@ export function resetCatchup(): void {
   lastExpectedMs = 0
   lastExtraMs = 0
   jitterEwma = 0
+  catchingUp = false
   sampleClock.reset()
 }

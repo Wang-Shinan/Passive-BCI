@@ -4,7 +4,7 @@ import { SessionLogger } from '../../lib/logger'
 import { sessionHub } from '../../lib/session/sessionHub'
 import { mulberry32 } from '../../lib/rng'
 import { ManualSignalSource } from '../../lib/signal/manual'
-import { ExportButtons } from '../../lib/ui/ExportButtons'
+import { ExportButtons, loadStoredSubjectId } from '../../lib/ui/ExportButtons'
 import { LineChart } from '../../lib/ui/LineChart'
 import { ColumnResizer } from '../../lib/ui/ColumnResizer'
 import { Panel } from '../../lib/ui/Panel'
@@ -15,8 +15,10 @@ import {
   COLS,
   advanceBoardAnim,
   advanceFall,
+  collides,
   createGame,
   hardDrop,
+  holdOrLock,
   move,
   rotate,
   softDropBurst,
@@ -33,21 +35,45 @@ import {
 } from './gravity'
 import { FeatureMonitorPanel, SignalModeControls, useStressControl } from '../../lib/features'
 import { ModelServicePanel } from '../../lib/model-runtime/ModelServicePanel'
+import { ensureModelService, modelServiceStatus } from '../../lib/model-runtime/modelServiceApi'
+import { TETRIS_LIVE_STEP_SEC, reveLiveHopMatches } from '../../lib/model-runtime/reveTasks'
+import { modelRuntimeHub } from '../../lib/model-runtime/modelRuntimeHub'
 import { useModelRuntime } from '../../lib/model-runtime/useModelRuntime'
+import { TemporalFilterControls, useTemporalFilter } from '../../lib/model-runtime/TemporalFilterControls'
+import { predictionFromDecision, type TemporalDecision } from '../../lib/model-runtime/temporalEvidence'
 import { RlAgentPanel } from './RlAgentPanel'
 import { StressPanel } from './StressPanel'
 import {
+  applyTeacherFollow,
+  clampFollowMoves,
+  clampFollowSteps,
+  describeCollabDecision,
+  executeMiInCollab,
+  followPieceKey,
+  noteFollowHumanMove,
+  collabTeacherDecision,
+  FOLLOW_LOCK_DELAY_MS,
+  FOLLOW_MOVES_DEFAULT,
+  FOLLOW_STEPS_DEFAULT,
+} from './collab'
+import {
   applyMiControlAction,
   describeMiControlAction,
+  isSmrControlPrediction,
+  miControlActionForClassName,
   miControlActionForPrediction,
 } from './miControl'
 import { RL_DECISION_INTERVAL_MS } from './rl/contracts'
 import { HeuristicPlanner } from './rl/heuristic'
-import { describeRlAction, rlStep } from './rl/step'
+import { describeRlAction, applyRlAction, rlStep } from './rl/step'
 import { useStressBroadcast } from './useStressBroadcast'
 
 const MI_CONTROL_KEY = 'passive-bci.tetris-mi-control'
 const RL_CONTROL_KEY = 'passive-bci.tetris-rl-control'
+const COLLAB_CONTROL_KEY = 'passive-bci.tetris-collab-control'
+const FOLLOW_CONTROL_KEY = 'passive-bci.tetris-follow-control'
+const FOLLOW_MOVES_KEY = 'passive-bci.tetris-follow-moves'
+const FOLLOW_STEPS_KEY = 'passive-bci.tetris-follow-steps'
 const RIGHT_COL_KEY = 'passive-bci.tetris-right-col'
 const RIGHT_COL_DEFAULT = 320
 const RIGHT_COL_MIN = 260
@@ -62,6 +88,26 @@ function loadMiControlEnabled(): boolean {
 function loadRlControlEnabled(): boolean {
   if (typeof localStorage === 'undefined') return false
   return localStorage.getItem(RL_CONTROL_KEY) === 'true'
+}
+
+function loadCollabControlEnabled(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  return localStorage.getItem(COLLAB_CONTROL_KEY) === 'true'
+}
+
+function loadFollowControlEnabled(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  return localStorage.getItem(FOLLOW_CONTROL_KEY) === 'true'
+}
+
+function loadFollowMoves(): number {
+  if (typeof localStorage === 'undefined') return FOLLOW_MOVES_DEFAULT
+  return clampFollowMoves(Number(localStorage.getItem(FOLLOW_MOVES_KEY)))
+}
+
+function loadFollowSteps(): number {
+  if (typeof localStorage === 'undefined') return FOLLOW_STEPS_DEFAULT
+  return clampFollowSteps(Number(localStorage.getItem(FOLLOW_STEPS_KEY)))
 }
 
 function clampRightCol(value: number): number {
@@ -81,7 +127,7 @@ interface TracePoint {
 }
 
 export function TetrisExperiment() {
-  const [subjectId, setSubjectId] = useState('S01')
+  const [subjectId, setSubjectId] = useState(() => loadStoredSubjectId('S01'))
   const [seed] = useState(() => (Math.random() * 0xffffffff) >>> 0)
   const seedRef = useRef(seed)
   const rngRef = useRef(mulberry32(seed))
@@ -111,11 +157,34 @@ export function TetrisExperiment() {
   })
   useStressBroadcast(stress, { mode, takeManualControl, setManualStressQuiet })
   const modelRuntime = useModelRuntime()
-  const [miControlEnabled, setMiControlEnabled] = useState(loadMiControlEnabled)
+  const [miControlEnabled, setMiControlEnabled] = useState(
+    () => loadMiControlEnabled() || loadCollabControlEnabled() || loadFollowControlEnabled(),
+  )
   const lastMiObservationRef = useRef<string | null>(null)
   const [lastMiAction, setLastMiAction] = useState<string>('—')
+  const [smrEnsureError, setSmrEnsureError] = useState('')
+  const [smrEnsuring, setSmrEnsuring] = useState(false)
+  const { config: temporalConfig, setConfig: setTemporalConfig, filterRef: temporalFilterRef } =
+    useTemporalFilter(TETRIS_LIVE_STEP_SEC)
+  const [smrDecision, setSmrDecision] = useState<TemporalDecision | null>(null)
   const teacherRef = useRef(new HeuristicPlanner())
-  const [rlEnabled, setRlEnabled] = useState(loadRlControlEnabled)
+  const [rlEnabled, setRlEnabled] = useState(
+    () => loadRlControlEnabled() && !loadCollabControlEnabled() && !loadFollowControlEnabled(),
+  )
+  const [collabEnabled, setCollabEnabled] = useState(
+    () => loadCollabControlEnabled() && !loadFollowControlEnabled(),
+  )
+  const [followEnabled, setFollowEnabled] = useState(loadFollowControlEnabled)
+  const [followMoves, setFollowMoves] = useState(loadFollowMoves)
+  const [followSteps, setFollowSteps] = useState(loadFollowSteps)
+  const [followHumanCount, setFollowHumanCount] = useState(0)
+  const followMovesRef = useRef(followMoves)
+  const followStepsRef = useRef(followSteps)
+  const followHumanCountRef = useRef(0)
+  const followPieceKeyRef = useRef<string | null>(null)
+  followMovesRef.current = followMoves
+  followStepsRef.current = followSteps
+  followHumanCountRef.current = followHumanCount
   const [lastRlAction, setLastRlAction] = useState('—')
   const [rlLatencyMs, setRlLatencyMs] = useState<number | null>(null)
   const rlDecisionAccRef = useRef(0)
@@ -225,23 +294,117 @@ export function TetrisExperiment() {
     if (!miControlEnabled) {
       lastMiObservationRef.current = null
       setLastMiAction('—')
+      temporalFilterRef.current.reset()
+      setSmrDecision(null)
     }
   }, [miControlEnabled])
+
+  const enableSmrControl = async (enabled: boolean) => {
+    setMiControlEnabled(enabled)
+    if (!enabled) {
+      setCollabEnabled(false)
+      return
+    }
+    setRlEnabled(false)
+    setSmrEnsuring(true)
+    setSmrEnsureError('')
+    try {
+      const status = await modelServiceStatus()
+      const force = Boolean(
+        status.running &&
+          (!status.owned ||
+            status.task !== 'smr_control' ||
+            !reveLiveHopMatches(status.stepSec, TETRIS_LIVE_STEP_SEC)),
+      )
+      await ensureModelService({
+        backend: 'reve',
+        task: 'smr_control',
+        stepSec: TETRIS_LIVE_STEP_SEC,
+        force,
+      })
+      modelRuntimeHub.setEnabled(true)
+      modelRuntimeHub.connect()
+    } catch (error) {
+      setSmrEnsureError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSmrEnsuring(false)
+    }
+  }
+
+  const enableCollab = async (enabled: boolean) => {
+    setCollabEnabled(enabled)
+    if (!enabled) return
+    setRlEnabled(false)
+    setFollowEnabled(false)
+    teacherRef.current.reset()
+    if (!miControlEnabled) await enableSmrControl(true)
+  }
+
+  const enableFollow = async (enabled: boolean) => {
+    setFollowEnabled(enabled)
+    if (!enabled) return
+    setRlEnabled(false)
+    setCollabEnabled(false)
+    teacherRef.current.reset()
+    if (!miControlEnabled) await enableSmrControl(true)
+  }
 
   useEffect(() => {
     localStorage.setItem(RL_CONTROL_KEY, String(rlEnabled))
     if (rlEnabled) {
       setMiControlEnabled(false)
+      setCollabEnabled(false)
+      setFollowEnabled(false)
       teacherRef.current.reset()
-    } else {
+    } else if (!collabEnabled && !followEnabled) {
       setLastRlAction('—')
       setRlLatencyMs(null)
     }
   }, [rlEnabled])
 
   useEffect(() => {
-    controlRef.current = rlEnabled ? 'teacher' : miControlEnabled ? 'mi' : 'human'
-  }, [rlEnabled, miControlEnabled])
+    localStorage.setItem(COLLAB_CONTROL_KEY, String(collabEnabled))
+    if (collabEnabled) teacherRef.current.reset()
+    else if (!rlEnabled && !followEnabled) {
+      setLastRlAction('—')
+      setRlLatencyMs(null)
+    }
+  }, [collabEnabled])
+
+  useEffect(() => {
+    localStorage.setItem(FOLLOW_CONTROL_KEY, String(followEnabled))
+    followHumanCountRef.current = 0
+    followPieceKeyRef.current = null
+    setFollowHumanCount(0)
+    if (followEnabled) teacherRef.current.reset()
+    else if (!rlEnabled && !collabEnabled) {
+      setLastRlAction('—')
+      setRlLatencyMs(null)
+    }
+  }, [followEnabled])
+
+  useEffect(() => {
+    localStorage.setItem(FOLLOW_MOVES_KEY, String(followMoves))
+    followHumanCountRef.current = 0
+    followPieceKeyRef.current = null
+    setFollowHumanCount(0)
+  }, [followMoves])
+
+  useEffect(() => {
+    localStorage.setItem(FOLLOW_STEPS_KEY, String(followSteps))
+  }, [followSteps])
+
+  useEffect(() => {
+    controlRef.current = followEnabled
+      ? 'follow'
+      : collabEnabled
+        ? 'collab'
+        : rlEnabled
+          ? 'teacher'
+          : miControlEnabled
+            ? 'mi'
+            : 'human'
+  }, [rlEnabled, collabEnabled, followEnabled, miControlEnabled])
 
   useEffect(() => {
     return () => {
@@ -270,23 +433,77 @@ export function TetrisExperiment() {
     }
   }, [])
 
+  const runFollowBurst = useCallback((afterMove: GameState) => {
+    if (!afterMove.piece || afterMove.gameOver || afterMove.paused || afterMove.anim) return
+    const t0 = performance.now()
+    const burst = applyTeacherFollow(afterMove, followStepsRef.current, rngRef.current)
+    const latencyMs = performance.now() - t0
+    setRlLatencyMs(latencyMs)
+    setLastRlAction(
+      burst.actions.length > 0 ? burst.actions.map(describeRlAction).join(' → ') : '跟手 · 无后续',
+    )
+    applyResult(burst.state, burst.events)
+    followPieceKeyRef.current = followPieceKey(burst.state)
+    loggerRef.current.log('action', {
+      source: 'follow',
+      action: burst.actions.join(',') || 'noop',
+      steps: burst.actions.length,
+      human_moves: followMovesRef.current,
+      budget: followStepsRef.current,
+      latency_ms: latencyMs,
+    })
+  }, [applyResult])
+
+  const noteHumanFollowSlide = useCallback((afterMove: GameState) => {
+    const turn = noteFollowHumanMove({
+      pieceKey: followPieceKey(afterMove),
+      prevPieceKey: followPieceKeyRef.current,
+      humanCount: followHumanCountRef.current,
+      humanMoves: followMovesRef.current,
+    })
+    followPieceKeyRef.current = turn.pieceKey
+    followHumanCountRef.current = turn.humanCount
+    setFollowHumanCount(turn.humanCount)
+    if (turn.teacherNow) runFollowBurst(afterMove)
+    else {
+      setLastRlAction(`跟手 · 人 ${turn.humanCount}/${followMovesRef.current}`)
+    }
+  }, [runFollowBurst])
+
   useEffect(() => {
     if (!miControlEnabled || rlEnabled) return
     const prediction = modelRuntime.latestPrediction
     if (!prediction || prediction.observation_id === lastMiObservationRef.current) return
 
-    const action = miControlActionForPrediction(prediction)
+    const decision = temporalFilterRef.current.observePrediction(prediction)
+    const smoothed = predictionFromDecision(prediction, decision)
+    setSmrDecision(decision)
+    const predicted = miControlActionForPrediction(smoothed)
+    const action = collabEnabled ? executeMiInCollab(predicted) : predicted
+    const filterNote =
+      collabEnabled && predicted && predicted !== action ? ' · 协作忽略旋转' : ''
+    const rawNote =
+      decision.className !== decision.rawClassName ? ` · raw ${decision.rawClassName}` : ''
     setLastMiAction(
-      `${describeMiControlAction(action)} · ${prediction.class_name} ${(prediction.confidence * 100).toFixed(0)}%`,
+      `${describeMiControlAction(predicted)}${filterNote} · ${decision.className} ${(decision.confidence * 100).toFixed(0)}%${rawNote}`,
     )
     lastMiObservationRef.current = prediction.observation_id
 
     loggerRef.current.log('action', {
-      source: 'mi',
+      source: isSmrControlPrediction(prediction)
+        ? followEnabled
+          ? 'follow'
+          : collabEnabled
+            ? 'collab'
+            : 'smr'
+        : 'mi',
       action: action === 'rotate' ? 'rotateCW' : (action ?? 'unknown'),
-      class_name: prediction.class_name,
+      intended: predicted === 'rotate' ? 'rotateCW' : (predicted ?? 'unknown'),
+      class_name: decision.className,
+      raw_class_name: decision.rawClassName,
+      filter_mode: temporalConfig.mode,
       observation_id: prediction.observation_id,
-      confidence: prediction.confidence,
+      confidence: decision.confidence,
     })
 
     if (!action || action === 'none') return
@@ -294,41 +511,62 @@ export function TetrisExperiment() {
     const s = stateRef.current
     if (s.gameOver || s.paused || s.anim) return
 
+    const beforeX = s.piece?.x
     const result = applyMiControlAction(s, action, rngRef.current)
     if (!result) return
     applyResult(result.state, result.events)
-  }, [miControlEnabled, rlEnabled, modelRuntime.latestPrediction, applyResult])
+    if (
+      followEnabled &&
+      (action === 'left' || action === 'right') &&
+      result.state.piece &&
+      result.state.piece.x !== beforeX
+    ) {
+      noteHumanFollowSlide(result.state)
+    }
+  }, [miControlEnabled, rlEnabled, collabEnabled, followEnabled, modelRuntime.latestPrediction, applyResult, noteHumanFollowSlide, temporalConfig.mode])
 
   const runRlDecision = useCallback(() => {
-    if (!rlEnabled || rlBusyRef.current) return
+    if ((!rlEnabled && !collabEnabled) || rlBusyRef.current) return
     const s = stateRef.current
     if (s.gameOver || s.paused || s.anim) return
 
     rlBusyRef.current = true
     try {
       const t0 = performance.now()
-      const action = teacherRef.current.act(s)
+      const decision = collabEnabled
+        ? collabTeacherDecision(s, { gravity: gravityRef.current.smoothed })
+        : null
+      const intended = decision ? decision.action : teacherRef.current.act(s)
+      const action = intended
       const latencyMs = performance.now() - t0
       setRlLatencyMs(latencyMs)
-      setLastRlAction(describeRlAction(action))
+      setLastRlAction(
+        decision ? describeCollabDecision(decision, describeRlAction) : describeRlAction(action),
+      )
 
       const latest = stateRef.current
       if (latest.gameOver || latest.paused || latest.anim) return
 
-      const stepped = rlStep(latest, action, rngRef.current, {
-        cellsPerSec: gravityRef.current.smoothed,
-        instantAnim: false,
-      })
+      const stepped = collabEnabled
+        ? applyRlAction(latest, action, rngRef.current)
+        : rlStep(latest, action, rngRef.current, {
+            cellsPerSec: gravityRef.current.smoothed,
+            instantAnim: false,
+          })
       applyResult(stepped.state, stepped.events)
       loggerRef.current.log('action', {
-        source: 'teacher',
+        source: collabEnabled ? 'collab' : 'teacher',
         action,
+        target_rot: decision?.targetRot ?? null,
+        expected: decision?.expected ?? null,
+        lock_now: decision?.lockNow ?? null,
+        reachable: decision?.reachable ?? null,
         latency_ms: latencyMs,
       })
     } finally {
       rlBusyRef.current = false
     }
-  }, [applyResult, rlEnabled])
+  }, [applyResult, rlEnabled, collabEnabled])
 
   // Smooth game loop — update every frame
   useEffect(() => {
@@ -371,30 +609,35 @@ export function TetrisExperiment() {
       }
 
       const s = stateRef.current
-      const rlActive = rlEnabled
+      const teacherDrive = rlEnabled || collabEnabled
       if (!s.gameOver && !s.paused) {
         if (s.anim) {
           const result = advanceBoardAnim(s, rngRef.current, dt)
           applyResult(result.state, result.events)
-        } else if (s.piece && !rlActive) {
-          const speed = softDropHeldRef.current
-            ? Math.max(gState.smoothed, 22)
-            : gState.smoothed
-          const result = softDropHeldRef.current
-            ? softDropBurst(s, rngRef.current, dtSec, speed)
-            : advanceFall(s, rngRef.current, dtSec, speed, false)
-          applyResult(result.state, result.events)
+        } else if (s.piece && !rlEnabled) {
+          if (followEnabled && collides(s.board, s.piece, 0, 1)) {
+            const result = holdOrLock(s, rngRef.current, dt, FOLLOW_LOCK_DELAY_MS)
+            applyResult(result.state, result.events)
+          } else {
+            const speed = softDropHeldRef.current
+              ? Math.max(gState.smoothed, 22)
+              : gState.smoothed
+            const result = softDropHeldRef.current
+              ? softDropBurst(s, rngRef.current, dtSec, speed)
+              : advanceFall(s, rngRef.current, dtSec, speed, false)
+            applyResult(result.state, result.events)
+          }
         }
       }
 
-      if (rlActive) {
+      if (teacherDrive) {
         rlDecisionAccRef.current += dt
         if (rlDecisionAccRef.current >= RL_DECISION_INTERVAL_MS) {
           rlDecisionAccRef.current = 0
-          void runRlDecision()
+          runRlDecision()
         }
         const after = stateRef.current
-        if (after.gameOver && !rlAutoRestartRef.current) {
+        if (rlEnabled && after.gameOver && !rlAutoRestartRef.current) {
           rlAutoRestartRef.current = window.setTimeout(() => {
             rlAutoRestartRef.current = null
             restart()
@@ -406,7 +649,7 @@ export function TetrisExperiment() {
     }
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
-  }, [applyResult, rlEnabled, runRlDecision])
+  }, [applyResult, rlEnabled, collabEnabled, followEnabled, runRlDecision])
 
   // Keyboard controls
   useEffect(() => {
@@ -441,6 +684,8 @@ export function TetrisExperiment() {
         return
       }
       if (s.gameOver || s.paused || s.anim) return
+      if (collabEnabled && ['ArrowUp', 'x', 'X', 'z', 'Z'].includes(e.key)) return
+      if (followEnabled && e.repeat && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return
 
       let result
       let action: string | null = null
@@ -463,6 +708,15 @@ export function TetrisExperiment() {
 
       loggerRef.current.log('action', { source: 'keyboard', action })
       applyResult(result.state, result.events)
+      if (
+        followEnabled &&
+        (action === 'left' || action === 'right') &&
+        result.state.piece &&
+        s.piece &&
+        result.state.piece.x !== s.piece.x
+      ) {
+        noteHumanFollowSlide(result.state)
+      }
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
@@ -475,7 +729,7 @@ export function TetrisExperiment() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [applyResult, rlEnabled])
+  }, [applyResult, rlEnabled, collabEnabled, followEnabled, noteHumanFollowSlide])
 
   const restart = () => {
     const nextSeed = (Math.random() * 0xffffffff) >>> 0
@@ -490,6 +744,9 @@ export function TetrisExperiment() {
     softDropHeldRef.current = false
     rlDecisionAccRef.current = 0
     teacherRef.current.reset()
+    followHumanCountRef.current = 0
+    followPieceKeyRef.current = null
+    setFollowHumanCount(0)
     if (rlAutoRestartRef.current) {
       window.clearTimeout(rlAutoRestartRef.current)
       rlAutoRestartRef.current = null
@@ -504,6 +761,17 @@ export function TetrisExperiment() {
     loggerRef.current.log('restart', { seed: nextSeed })
   }
 
+  const smrPrediction =
+    modelRuntime.latestPrediction && isSmrControlPrediction(modelRuntime.latestPrediction)
+      ? modelRuntime.latestPrediction
+      : null
+  const smrHeadWrong =
+    miControlEnabled &&
+    modelRuntime.status === 'ready' &&
+    Boolean(modelRuntime.serviceHello) &&
+    !smrPrediction &&
+    modelRuntime.serviceHello?.task !== 'smr_control'
+
   return (
     <div className="mx-auto max-w-7xl px-4 py-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -513,15 +781,24 @@ export function TetrisExperiment() {
           </Link>
           <h1 className="m-0 mt-1 text-2xl font-semibold">实验二 · 压力自适应俄罗斯方块</h1>
           <p className="muted m-0 mt-1 text-sm">
+            <Link to="/tetris-adapt" className="text-[var(--accent)] hover:underline">
+              去适配实验
+            </Link>
+            {' · '}
             ←→ 移动 · ↑/X 顺时针 · Z 逆时针 · ↓ 软降 · 空格硬降 · P 暂停 · R 重开
-            {miControlEnabled ? ' · MI：左手← 右手→ 脚↻ 舌静止' : ''}
-            {rlEnabled ? ' · RL Agent 代打中' : ''}
+            {miControlEnabled && !collabEnabled ? ' · SMR：左手← 右手→ 双手↻ 休息静止' : ''}
+            {collabEnabled ? ' · 协作：脑控←→ · I 无井不竖' : ''}
+            {followEnabled ? ` · 跟手：人 ${followMoves} 左右 / 教师 ${followSteps} 左右 · 旋转不计` : ''}
+            {rlEnabled ? ' · 启发式教师代打中' : ''}
           </p>
         </div>
         <ExportButtons
           logger={loggerRef.current}
           subjectId={subjectId}
           onSubjectChange={setSubjectId}
+          experiment="tetris"
+          getSeed={() => seedRef.current}
+          recordControl
         />
       </div>
 
@@ -662,29 +939,90 @@ export function TetrisExperiment() {
           <RlAgentPanel
             enabled={rlEnabled}
             onEnabledChange={setRlEnabled}
+            collabEnabled={collabEnabled}
+            onCollabChange={(value) => void enableCollab(value)}
+            followEnabled={followEnabled}
+            onFollowChange={(value) => void enableFollow(value)}
+            followMoves={followMoves}
+            onFollowMovesChange={(value) => setFollowMoves(clampFollowMoves(value))}
+            followSteps={followSteps}
+            onFollowStepsChange={(value) => setFollowSteps(clampFollowSteps(value))}
+            followHumanCount={followHumanCount}
             lastAction={lastRlAction}
             latencyMs={rlLatencyMs}
           />
 
-          <Panel title="MI 分类控制">
+          <Panel title="SMR 控制">
             <label className="acq-check mb-3 flex items-center gap-2">
               <input
                 type="checkbox"
                 checked={miControlEnabled}
-                disabled={rlEnabled}
-                onChange={(event) => setMiControlEnabled(event.target.checked)}
+                disabled={rlEnabled || smrEnsuring}
+                onChange={(event) => void enableSmrControl(event.target.checked)}
               />
-              启用模型分类控制（与键盘并行；RL 启用时不可用）
+              用 SMR 头操控方块（与键盘并行{collabEnabled ? '；协作时只左右' : followEnabled ? '；跟手旋转不占次数' : ''}）
             </label>
             <p className="muted m-0 mb-3 text-sm">
-              左手 → 左移 · 右手 → 右移 · 脚 → 顺时针旋转 · 舌 → 静止。
+              左手 → 左移 · 右手 → 右移 · 双手 → 顺时针旋转 · 休息 → 静止。勾选后拉起已拟合、冻结的
+              smr_control，每 0.1 秒送来一帧重叠窗；默认对 logits 做时间滤波后再动手，不在线微调
+              {collabEnabled
+                ? '。协作模式下手脑旋转会被忽略；I 只在已有深井时才竖放，空盘保持横放。'
+                : followEnabled
+                  ? '。跟手：人左右 m 次后教师走 n 步；旋转不占次数。'
+                  : '。'}
             </p>
+            {smrEnsureError ? (
+              <p className="mb-3 text-sm" style={{ color: 'var(--danger)' }}>
+                {smrEnsureError}
+              </p>
+            ) : null}
+            {smrHeadWrong ? (
+              <p className="mb-3 text-sm" style={{ color: 'var(--warn)' }}>
+                当前不是 SMR 头（{modelRuntime.serviceHello?.task ?? modelRuntime.latestPrediction?.task ?? '未知'}）。
+                <button
+                  type="button"
+                  className="btn ml-2"
+                  disabled={smrEnsuring}
+                  onClick={() => void enableSmrControl(true)}
+                >
+                  切换到 smr_control
+                </button>
+              </p>
+            ) : null}
+            <div className="mb-3">
+              <TemporalFilterControls config={temporalConfig} onChange={setTemporalConfig} compact />
+            </div>
             <div className="rounded-xl border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-sm">
-              <div className="muted text-xs">最近 MI 动作</div>
+              <div className="muted text-xs">最近 SMR 动作</div>
               <div className="font-mono text-xs">{lastMiAction}</div>
+              {(smrDecision ?? smrPrediction) ? (
+                <div className="mt-2 space-y-1">
+                  {(smrDecision?.classNames ?? smrPrediction!.class_names).map((name, index) => {
+                    const value =
+                      smrDecision?.probabilities[index] ?? smrPrediction!.probabilities[index] ?? 0
+                    return (
+                      <div key={`${name}-${index}`}>
+                        <div className="mb-0.5 flex justify-between text-xs">
+                          <span>{describeMiControlAction(miControlActionForClassName(name))}</span>
+                          <span className="muted">{(value * 100).toFixed(0)}%</span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full" style={{ background: 'var(--panel-2)' }}>
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${Math.max(0, Math.min(100, value * 100))}%`,
+                              background: 'var(--accent)',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null}
             </div>
             <div className="mt-4">
-              <ModelServicePanel embedded />
+              <ModelServicePanel embedded reveTask="smr_control" liveStepSec={TETRIS_LIVE_STEP_SEC} />
             </div>
           </Panel>
 

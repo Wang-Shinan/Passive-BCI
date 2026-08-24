@@ -132,6 +132,7 @@ export function useFeatureMonitor(opts: {
           windowSec: WINDOW_SEC,
           enabledFeatures: enabled,
           channelMask: liveEegHub.featureChannelMask(),
+          channelNames: liveEegHub.meta.channelNames,
         })
         if (!snap) return
         sawLiveRef.current = true

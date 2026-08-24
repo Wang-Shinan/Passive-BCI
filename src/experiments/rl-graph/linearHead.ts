@@ -20,7 +20,7 @@ export const DEFAULT_LINEAR_HEAD_FEATURES = [
   'rms',
 ]
 
-export const LINEAR_HEAD_CLASSES = ['差', '中', '好'] as const
+export const LINEAR_HEAD_CLASSES = ['任务一', '任务二', '任务三'] as const
 export const LINEAR_HEAD_RATINGS = [-1, 0, 1] as const
 
 const N_CLASS = 3

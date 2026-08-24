@@ -22,7 +22,7 @@ export interface Piece {
   matrix: Matrix
 }
 
-const SHAPES: Record<PieceType, Matrix[]> = {
+export const SHAPES: Record<PieceType, Matrix[]> = {
   I: [
     [
       [0, 0, 0, 0],
@@ -833,6 +833,31 @@ export function advanceFall(
     },
     events: [],
   }
+}
+
+/**
+ * Grounded pieces wait `lockDelayMs` before locking. Moves/rotates already
+ * reset `lockTimer`. Used by follow-mode so a teacher slide onto the stack
+ * does not freeze the human out on the next frame.
+ */
+export function holdOrLock(
+  state: GameState,
+  rng: () => number,
+  dtMs: number,
+  lockDelayMs: number,
+): StepResult {
+  if (!state.piece || state.gameOver || state.paused || state.anim) {
+    return { state, events: [] }
+  }
+  if (!collides(state.board, state.piece, 0, 1)) {
+    if (state.lockTimer === 0) return { state, events: [] }
+    return { state: { ...state, lockTimer: 0 }, events: [] }
+  }
+  const lockTimer = state.lockTimer + Math.max(0, dtMs)
+  if (lockTimer >= lockDelayMs) {
+    return lockPiece({ ...state, piece: { ...state.piece, fy: 0 }, lockTimer: 0 }, rng)
+  }
+  return { state: { ...state, lockTimer }, events: [] }
 }
 
 /** @deprecated Use advanceFall for smooth gravity. */

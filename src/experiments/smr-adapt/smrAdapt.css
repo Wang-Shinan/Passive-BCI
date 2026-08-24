@@ -1,0 +1,83 @@
+.smr-arena {
+  position: relative;
+  width: min(100%, 440px);
+  aspect-ratio: 1;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid #2a3550;
+  background:
+    radial-gradient(circle at 50% 50%, #182038 0%, #0e1424 70%);
+  user-select: none;
+}
+
+.smr-target {
+  position: absolute;
+  background: #e8b84a;
+  box-shadow: 0 0 16px #e8b84a66;
+}
+
+.smr-target.is-left,
+.smr-target.is-right {
+  top: 18%;
+  height: 64%;
+  width: 14px;
+}
+
+.smr-target.is-left {
+  left: 0;
+}
+
+.smr-target.is-right {
+  right: 0;
+}
+
+.smr-target.is-up,
+.smr-target.is-down {
+  left: 18%;
+  width: 64%;
+  height: 14px;
+}
+
+.smr-target.is-up {
+  top: 0;
+}
+
+.smr-target.is-down {
+  bottom: 0;
+}
+
+.smr-cursor {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  background: #f472b6;
+  box-shadow: 0 0 14px #f472b6aa;
+  pointer-events: none;
+}
+
+.smr-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  background: color-mix(in srgb, #0e1424 45%, transparent);
+}
+
+.smr-overlay p {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.smr-flash-hit {
+  box-shadow: inset 0 0 0 2px #38d39f;
+}
+
+.smr-flash-miss {
+  box-shadow: inset 0 0 0 2px #ff5d6c;
+}

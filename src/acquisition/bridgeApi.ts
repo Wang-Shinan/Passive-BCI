@@ -13,6 +13,29 @@ export interface BridgeEnsureResult {
   message?: string
 }
 
+export interface NeuracleProbeResult {
+  ok: boolean
+  listening: boolean
+  collect: boolean
+  port: number
+  message?: string
+}
+
+export async function probeNeuracleForward(): Promise<NeuracleProbeResult> {
+  const res = await fetch('/api/bridge/neuracle/probe')
+  try {
+    return (await res.json()) as NeuracleProbeResult
+  } catch {
+    return {
+      ok: false,
+      listening: false,
+      collect: false,
+      port: 0,
+      message: '无法探测 Collect 转发端口。',
+    }
+  }
+}
+
 export async function ensureBridge(name: BridgeName): Promise<BridgeEnsureResult> {
   const res = await fetch(`/api/bridge/${name}/ensure`, { method: 'POST' })
   let body: BridgeEnsureResult

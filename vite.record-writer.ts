@@ -9,6 +9,10 @@
  *
  *   POST /api/record/start
  *   GET  /api/record/active
+ *   GET  /api/record/list
+ *   GET  /api/record/library/:stem | /preview | /zip
+ *   POST /api/record/library/:stem/meta
+ *   DELETE /api/record/library/:stem
  *   POST /api/record/:id/chunk | events | context | meta | finish | abort
  */
 
@@ -23,6 +27,16 @@ import {
   type WriteStream,
 } from 'node:fs'
 import { join } from 'node:path'
+import {
+  STEM_RE as LIBRARY_STEM_RE,
+  listSessionSummaries,
+  patchSessionManifest,
+  previewSession,
+  summarizeSessionDir,
+  zipSessionDir,
+  type LiveOverlay,
+} from './vite.record-library.ts'
+import { onDevProcessExit } from './vite.process-hooks.ts'
 
 const RECORD_DIR = 'recordings'
 const ID_RE = /^[a-zA-Z0-9_-]{8,64}$/
@@ -59,6 +73,7 @@ type SessionManifest = {
   eeg: Record<string, unknown> | null
   experiment: string | null
   subjectId: string | null
+  notes?: string
   game: Record<string, unknown> | null
   clock: Record<string, unknown> | null
   bytes?: number
@@ -138,6 +153,20 @@ export function recordWriterPlugin(): Plugin {
     return join(projectRoot, RECORD_DIR)
   }
 
+  function liveOverlays(): Map<string, LiveOverlay> {
+    const map = new Map<string, LiveOverlay>()
+    for (const session of sessions.values()) {
+      map.set(session.stem, {
+        id: session.id,
+        stem: session.stem,
+        bytes: session.bytes,
+        experiment: session.manifest.experiment,
+        subjectId: session.manifest.subjectId,
+      })
+    }
+    return map
+  }
+
   async function closeSession(session: RecordSession, unlink: boolean) {
     sessions.delete(session.id)
     await session.queue.catch(() => undefined)
@@ -155,14 +184,57 @@ export function recordWriterPlugin(): Plugin {
     }
   }
 
+  /** HMR / 未点停止会留下幽灵会话，下一轮采集会被 429 打回浏览器内存。 */
+  async function evictOldestIfNeeded() {
+    if (sessions.size < MAX_SESSIONS) return
+    const oldest = sessions.values().next().value as RecordSession | undefined
+    if (!oldest) return
+    const keep = oldest.bytes > 0
+    if (keep) {
+      oldest.manifest.stoppedAt = new Date().toISOString()
+      oldest.manifest.status = 'complete'
+      oldest.manifest.bytes = oldest.bytes
+      writeManifest(oldest)
+      writeEegSidecar(oldest, {
+        stoppedAt: oldest.manifest.stoppedAt,
+        status: 'complete',
+      })
+    }
+    console.log(
+      `\x1b[32m[record]\x1b[0m evict ${oldest.stem} (${keep ? 'keep' : 'drop empty'})`,
+    )
+    await closeSession(oldest, !keep)
+  }
+
   function closeAll() {
     for (const session of [...sessions.values()]) {
       void closeSession(session, false)
     }
   }
 
+  let lastPaintLine = ''
+
   const middleware: Connect.NextHandleFunction = (req, res, next) => {
     const url = req.url?.split('?')[0] ?? ''
+    if (url === '/api/debug/paint') {
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        res.end()
+        return
+      }
+      if (req.method === 'GET') {
+        sendJson(res, 200, { ok: true, line: lastPaintLine || null })
+        return
+      }
+      if (req.method === 'POST') {
+        req.resume()
+        res.statusCode = 204
+        res.end()
+        return
+      }
+    }
     if (!url.startsWith('/api/record')) {
       next()
       return
@@ -171,7 +243,7 @@ export function recordWriterPlugin(): Plugin {
     if (req.method === 'OPTIONS') {
       res.statusCode = 204
       res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
       res.end()
       return
@@ -194,11 +266,115 @@ export function recordWriterPlugin(): Plugin {
             dir: session.dirPath,
             rel: `${RECORD_DIR}/${session.stem}`,
             bytes: session.bytes,
+            startedAt: session.manifest.startedAt,
+            experiment: session.manifest.experiment,
+            subjectId: session.manifest.subjectId,
+            status: session.manifest.status,
           })
           return
         }
 
+        if (url === '/api/record/list' && req.method === 'GET') {
+          sendJson(res, 200, { ok: true, sessions: listSessionSummaries(recordingsDir(), liveOverlays()) })
+          return
+        }
+
+        const library = url.match(/^\/api\/record\/library\/([^/]+)(?:\/(meta|zip|preview))?$/)
+        if (library) {
+          const stem = decodeURIComponent(library[1] ?? '')
+          const action = library[2] ?? 'get'
+          if (!LIBRARY_STEM_RE.test(stem)) {
+            sendJson(res, 400, { ok: false, message: 'invalid stem' })
+            return
+          }
+          const live = [...sessions.values()].find((s) => s.stem === stem)
+
+          if (action === 'get' && req.method === 'GET') {
+            const summary = summarizeSessionDir(recordingsDir(), stem, liveOverlays())
+            if (!summary) {
+              sendJson(res, 404, { ok: false, message: '会话不存在' })
+              return
+            }
+            sendJson(res, 200, { ok: true, session: summary })
+            return
+          }
+
+          if (action === 'preview' && req.method === 'GET') {
+            const preview = previewSession(recordingsDir(), stem, 24, liveOverlays())
+            if (!preview) {
+              sendJson(res, 404, { ok: false, message: '会话不存在' })
+              return
+            }
+            sendJson(res, 200, { ok: true, ...preview })
+            return
+          }
+
+          if (action === 'zip' && req.method === 'GET') {
+            if (live) {
+              sendJson(res, 409, { ok: false, message: '录制进行中，请先结束本局再下载' })
+              return
+            }
+            const zip = zipSessionDir(recordingsDir(), stem)
+            if (!zip) {
+              sendJson(res, 404, { ok: false, message: '会话不存在或无可打包文件' })
+              return
+            }
+            res.statusCode = 200
+            res.setHeader('Content-Type', 'application/zip')
+            res.setHeader('Content-Disposition', `attachment; filename="${stem}.zip"`)
+            res.setHeader('Content-Length', String(zip.length))
+            res.setHeader('Cache-Control', 'no-store')
+            res.end(zip)
+            return
+          }
+
+          if (action === 'meta' && req.method === 'POST') {
+            let patch: { notes?: string; subjectId?: string; experiment?: string } = {}
+            try {
+              const raw = JSON.parse((await readBody(req)).toString('utf8')) as Record<string, unknown>
+              if (typeof raw.notes === 'string') patch.notes = raw.notes.slice(0, 4000)
+              if (typeof raw.subjectId === 'string') patch.subjectId = raw.subjectId.slice(0, 64)
+              if (typeof raw.experiment === 'string') patch.experiment = raw.experiment.slice(0, 64)
+            } catch {
+              sendJson(res, 400, { ok: false, message: 'invalid json' })
+              return
+            }
+            if (live) {
+              if (patch.notes !== undefined) live.manifest.notes = patch.notes
+              if (patch.subjectId !== undefined) live.manifest.subjectId = patch.subjectId
+              if (patch.experiment !== undefined) live.manifest.experiment = patch.experiment
+              writeManifest(live)
+            }
+            const summary = patchSessionManifest(recordingsDir(), stem, patch)
+            if (!summary) {
+              sendJson(res, 404, { ok: false, message: '会话不存在' })
+              return
+            }
+            sendJson(res, 200, { ok: true, session: summary })
+            return
+          }
+
+          if (action === 'get' && req.method === 'DELETE') {
+            if (live) {
+              sendJson(res, 409, { ok: false, message: '录制进行中，无法删除' })
+              return
+            }
+            const dirPath = join(recordingsDir(), stem)
+            if (!existsSync(dirPath)) {
+              sendJson(res, 404, { ok: false, message: '会话不存在' })
+              return
+            }
+            rmSync(dirPath, { recursive: true, force: true })
+            sendJson(res, 200, { ok: true })
+            return
+          }
+
+          sendJson(res, 405, { ok: false, message: 'method not allowed' })
+          return
+        }
+
         if (url === '/api/record/start' && req.method === 'POST') {
+          await evictOldestIfNeeded()
           if (sessions.size >= MAX_SESSIONS) {
             sendJson(res, 429, { ok: false, message: '已有录制进行中' })
             return
@@ -251,6 +427,7 @@ export function recordWriterPlugin(): Plugin {
               eeg: eegMeta,
               experiment: null,
               subjectId: null,
+              notes: '',
               game: null,
               clock: {
                 browser: 'performance.now',
@@ -336,6 +513,7 @@ export function recordWriterPlugin(): Plugin {
             const raw = JSON.parse((await readBody(req)).toString('utf8')) as Record<string, unknown>
             if (typeof raw.experiment === 'string') session.manifest.experiment = raw.experiment
             if (typeof raw.subjectId === 'string') session.manifest.subjectId = raw.subjectId
+            if (typeof raw.notes === 'string') session.manifest.notes = raw.notes.slice(0, 4000)
             const game = session.manifest.game ? { ...session.manifest.game } : {}
             if (typeof raw.game === 'string') game.name = raw.game
             if (typeof raw.seed === 'number' && Number.isFinite(raw.seed)) game.seed = raw.seed
@@ -440,7 +618,7 @@ export function recordWriterPlugin(): Plugin {
       mkdirSync(join(projectRoot, RECORD_DIR), { recursive: true })
       server.middlewares.use(middleware)
       server.httpServer?.once('close', closeAll)
-      process.once('exit', closeAll)
+      onDevProcessExit('record-writer', closeAll)
       console.log(
         `\x1b[32m[record]\x1b[0m ready — 会话写入 ${join(projectRoot, RECORD_DIR)}/<stem>/`,
       )

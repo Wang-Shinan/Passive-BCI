@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { WaveformSnapshot } from './WaveformCanvas'
-import { CHANNEL_COLORS } from './WaveformCanvas'
+import { CHANNEL_COLORS } from './waveformPalette'
 import { copyLatestChannel } from './analysis/impedance'
 import { smoothPsdDb, welchPsd } from './analysis/welch'
 import { PLOT_INTERVAL_MS, isCatchingUp } from './liveCatchup'

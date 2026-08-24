@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react'
+import {
+  ensureModelService,
+  modelServiceStatus,
+  stopModelService,
+  type ModelServiceBackend,
+  type ModelServiceEnsureResult,
+} from './modelServiceApi'
 import { modelRuntimeHub, modelUrlPresets } from './modelRuntimeHub'
+import { REVE_TASKS, liveStepSecForReveTask, reveTaskOption, type ReveTaskId } from './reveTasks'
 import { useModelRuntime } from './useModelRuntime'
 
 function latency(value: number | null): string {
@@ -20,7 +28,161 @@ function formatLogTime(atMs: number): string {
   return d.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-export function ModelServicePanel({ embedded = false }: { embedded?: boolean }) {
+function reveLaunchLabel(task: string | undefined, force: boolean): string {
+  const short = reveTaskOption(task)?.short ?? 'REVE'
+  if (force) return task ? `切换/强制启动${short}` : '强制启动 REVE'
+  return task ? `启动 ${short}` : '启动 REVE'
+}
+
+function ModelServiceLaunchBar({
+  reveTask,
+  liveStepSec,
+  onReveTaskChange,
+}: {
+  reveTask?: string
+  liveStepSec?: number
+  onReveTaskChange?: (task: ReveTaskId) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [proc, setProc] = useState<ModelServiceEnsureResult | null>(null)
+  const [launchError, setLaunchError] = useState('')
+
+  const refresh = async (signal?: AbortSignal) => {
+    try {
+      setProc(await modelServiceStatus(signal))
+    } catch (error) {
+      if (signal?.aborted) return
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      setLaunchError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  useEffect(() => {
+    const ac = new AbortController()
+    void refresh(ac.signal)
+    const id = window.setInterval(() => {
+      void refresh()
+    }, 1000)
+    return () => {
+      ac.abort()
+      window.clearInterval(id)
+    }
+  }, [])
+
+  const afterReady = () => {
+    modelRuntimeHub.setEnabled(true)
+    modelRuntimeHub.connect()
+  }
+
+  const launch = async (backend: ModelServiceBackend, force: boolean) => {
+    setBusy(true)
+    setLaunchError('')
+    try {
+      const result = await ensureModelService({
+        backend,
+        force,
+        task: backend === 'reve' ? reveTask : undefined,
+        stepSec: backend === 'reve' ? (liveStepSec ?? liveStepSecForReveTask(reveTask)) : undefined,
+      })
+      setProc(result)
+      afterReady()
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : String(error))
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const stop = async () => {
+    setBusy(true)
+    setLaunchError('')
+    try {
+      setProc(await stopModelService())
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const occupied = Boolean(proc?.running && !proc.owned)
+  const wrongTask = Boolean(
+    reveTask && proc?.backend === 'reve' && proc.task && proc.task !== reveTask,
+  )
+  const canStop = Boolean(proc?.owned && proc.running) && !busy
+  const starting = busy || Boolean(proc?.starting)
+
+  return (
+    <div className="mb-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {onReveTaskChange ? (
+          <label className="acq-field" style={{ minWidth: 220 }}>
+            任务头
+            <select
+              className="input"
+              value={reveTask ?? 'passive_rating'}
+              disabled={starting}
+              onChange={(event) => onReveTaskChange(event.target.value as ReveTaskId)}
+            >
+              {REVE_TASKS.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={starting}
+          onClick={() => void launch('reve', occupied || wrongTask)}
+        >
+          {starting ? '正在启动…' : reveLaunchLabel(reveTask, occupied || wrongTask)}
+        </button>
+        <button type="button" className="btn" disabled={starting} onClick={() => void launch('mock', occupied)}>
+          启动 Mock
+        </button>
+        <button type="button" className="btn" disabled={!canStop} onClick={() => void stop()}>
+          停止
+        </button>
+        <span className="muted text-sm">
+          {starting
+            ? `加载中${proc?.backend ? ` · ${proc.backend}` : ''}（REVE 首次可能要一两分钟）`
+            : proc?.message || '开发服务可一键拉起本地模型'}
+        </span>
+      </div>
+      {reveTask === 'smr_control' ? (
+        <p className="m-0 text-xs" style={{ color: 'var(--warn)' }}>
+          SMR 头冻结，不在线微调。光标仍可由 REVE 驱动。
+        </p>
+      ) : null}
+      {launchError ? (
+        <p className="m-0 text-sm" style={{ color: 'var(--danger)' }}>
+          {launchError}
+        </p>
+      ) : null}
+      {starting && proc?.logTail ? (
+        <pre className="m-0 max-h-28 overflow-auto rounded-lg border border-[var(--border)] bg-[#0a0f18] p-2 text-xs text-[#94a3b8]">
+          {proc.logTail.trim()}
+        </pre>
+      ) : null}
+    </div>
+  )
+}
+
+export function ModelServicePanel({
+  embedded = false,
+  reveTask,
+  liveStepSec,
+  onReveTaskChange,
+}: {
+  embedded?: boolean
+  reveTask?: string
+  liveStepSec?: number
+  onReveTaskChange?: (task: ReveTaskId) => void
+}) {
   const state = useModelRuntime()
   const [url, setUrl] = useState(state.url)
   const [debugOpen, setDebugOpen] = useState(true)
@@ -32,6 +194,11 @@ export function ModelServicePanel({ embedded = false }: { embedded?: boolean }) 
 
   const body = (
     <>
+      <ModelServiceLaunchBar
+        reveTask={reveTask}
+        liveStepSec={liveStepSec}
+        onReveTaskChange={onReveTaskChange}
+      />
       <div className={`${embedded ? 'flex flex-wrap' : 'acq-bar'} gap-2`} style={{ marginBottom: 8 }}>
         <label className="acq-check">
           <input
@@ -103,6 +270,9 @@ export function ModelServicePanel({ embedded = false }: { embedded?: boolean }) 
           版本 <strong>{prediction?.model_revision ?? state.serviceHello?.model_revision ?? '—'}</strong>
         </span>
         <span>
+          切窗 <strong>{state.windowSec}s / {state.stepSec}s</strong>
+        </span>
+        <span>
           窗口 <strong>{state.sentWindows}</strong>
         </span>
         <span>
@@ -122,6 +292,11 @@ export function ModelServicePanel({ embedded = false }: { embedded?: boolean }) 
               : '—'}
           </strong>
         </span>
+        {state.serviceHello?.follow?.advertised?.[0] ? (
+          <span>
+            TCP 跟随 <strong>{state.serviceHello.follow.advertised.join(' · ')}</strong>
+          </span>
+        ) : null}
       </div>
 
       {state.lastError ? (
@@ -162,10 +337,9 @@ export function ModelServicePanel({ embedded = false }: { embedded?: boolean }) 
             : '暂无日志。勾选启用后点「重新连接」或切换 URL 预设。'}
         </pre>
         <p className="muted m-0 mt-2 text-xs">
-          若 Vite 代理失败，试「直连 8768」。50M 真模型需{' '}
-          <code>MODEL_PACKAGE=... npm run model-service</code>；dev mock 用{' '}
-          <code>MODEL_DEVICE_PROFILE=bcigo32|neuracle59</code>。Neuracle/BCIGo 通道布局须与包体
-          input_contract 一致，否则只有 hello、无 prediction。
+          点「启动 REVE」即可，无需另开终端（需 <code>npm run dev</code>）。代理失败时试「直连 8768」。hello
+          会把切窗改成 2s。SMR 头冻结（strategy=none），三类头仍可在线更新。50M 真模型仍用{' '}
+          <code>MODEL_PACKAGE=...</code> 在终端启动。
         </p>
       </details>
     </>

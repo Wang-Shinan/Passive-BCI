@@ -2,7 +2,7 @@
 
 浏览器无法直连设备 Wi‑Fi TCP，本桥接使用官方 [bcigo-sdk](https://pypi.org/project/bcigo-sdk/)，经 mDNS 发现或手动 `host:port` 拉 EEG，再转到本机 WebSocket（与 Neuracle 桥同一套 JSON+float32 协议）。
 
-默认 **32 导 10–20**：FP1…TP10 + IO（参考）。
+默认 **32 导**。设备缓冲是 EDF 硬件顺序（第 16 列 Fp1，第 29 列 IO）；桥接会重排成从前到后的 10–20 顺序再送给网页：Fp1…O2，IO 在最后。
 
 ## 用法
 

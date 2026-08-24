@@ -12,6 +12,7 @@ import type { BcigoWsClient } from './bcigo/client'
 import type { NeuracleWsClient } from './neuracle/client'
 import {
   INGEST_DRAIN_BUDGET_MS,
+  BRIDGE_DRAIN_BUDGET_MS,
   addPendingSamples,
   addQueuedBytes,
   noteLiveSamples,
@@ -112,13 +113,6 @@ export function cancelConfigAckWait(): void {
   ackScanner.clear()
 }
 
-function hubPushFiltered(raw: Float32Array): void {
-  if (acqRuntime.impedanceActive) return
-  if (raw.length) acqRuntime.filter.setChannelCount(raw.length)
-  acqRuntime.filter.processSample(raw, true)
-  liveEegHub.pushFrame(raw)
-}
-
 function copyBytes(chunk: Uint8Array): Uint8Array {
   const out = new Uint8Array(chunk.byteLength)
   out.set(chunk)
@@ -136,7 +130,9 @@ function scheduleDrain(): void {
 }
 
 function drainIngest(): void {
-  const deadline = performance.now() + INGEST_DRAIN_BUDGET_MS
+  const budget =
+    bridgeQ.length > 2 ? BRIDGE_DRAIN_BUDGET_MS : INGEST_DRAIN_BUDGET_MS
+  const deadline = performance.now() + budget
   while (performance.now() < deadline) {
     if (serialQ.length) {
       const chunk = serialQ.shift()!
@@ -221,9 +217,8 @@ function deliverBridge(batch: BridgeBatch): void {
     return
   }
   if (!acqRuntime.streaming) return
-  const n = batch.channels
-  for (let s = 0; s < batch.samples; s++) {
-    hubPushFiltered(batch.values.subarray(s * n, s * n + n))
+  if (!acqRuntime.impedanceActive) {
+    liveEegHub.pushInterleaved(batch.values, batch.samples, batch.channels)
   }
   if (acqRuntime.recorder.recording && !acqRuntime.impedanceActive) {
     const bytes = new Uint8Array(

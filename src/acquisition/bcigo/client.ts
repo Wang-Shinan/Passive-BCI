@@ -1,16 +1,21 @@
 /** Browser client for bridges/bcigo/ws_bridge.py (BrainCo / 强脑) */
 
+/** Hardware / EDF column order after stripping sample_index. */
+export const BCIGO_HARDWARE_CHANNEL_NAMES = [
+  'P8', 'P7', 'T8', 'T7', 'F8', 'F7', 'O2', 'O1',
+  'P4', 'P3', 'C4', 'C3', 'F4', 'F3', 'Fp2', 'Fp1',
+  'TP10', 'TP9', 'FT10', 'FT9', 'CP6', 'CP5', 'FC6', 'FC5',
+  'CP2', 'CP1', 'FC2', 'FC1', 'IO', 'Pz', 'Cz', 'Fz',
+] as const
+
+/** Front-to-back 10–20 order the bridge emits after remapping hardware columns. */
 export const BCIGO_CHANNEL_NAMES = [
-  'FP1', 'FP2', 'F3', 'F4', 'F7', 'F8', 'Fz',
-  'C3', 'C4', 'Cz',
-  'P3', 'P4', 'P7', 'P8', 'Pz',
-  'O1', 'O2',
-  'T7', 'T8',
-  'FC1', 'FC2', 'FC5', 'FC6',
-  'CP1', 'CP2', 'CP5', 'CP6',
-  'FT9', 'FT10',
-  'TP9', 'TP10',
-  'IO',
+  'Fp1', 'Fp2', 'F7', 'F3', 'Fz', 'F4', 'F8',
+  'FT9', 'FC5', 'FC1', 'FC2', 'FC6', 'FT10',
+  'T7', 'C3', 'Cz', 'C4', 'T8',
+  'TP9', 'CP5', 'CP1', 'CP2', 'CP6', 'TP10',
+  'P7', 'P3', 'Pz', 'P4', 'P8',
+  'O1', 'O2', 'IO',
 ] as const
 
 export type BcigoStatus = 'idle' | 'connecting' | 'live' | 'error' | 'closed'

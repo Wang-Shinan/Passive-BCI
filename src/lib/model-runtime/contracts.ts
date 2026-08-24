@@ -40,6 +40,13 @@ export type ModelServiceHello = {
   class_names?: string[]
   model_revision?: string
   strategy?: string
+  window_sec?: number
+  step_sec?: number
+  follow?: {
+    transport?: string
+    bind?: string
+    advertised?: string[]
+  }
 }
 
 export type ModelPrediction = {
@@ -53,6 +60,8 @@ export type ModelPrediction = {
   class_name: string
   class_names: string[]
   probabilities: number[]
+  /** Raw class logits when the service sends them; otherwise recovered from softmax. */
+  logits?: number[]
   confidence: number
   model_revision: string
   online_update_step: number
@@ -133,10 +142,16 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
     value.online && typeof value.online === 'object'
       ? (value.online as Record<string, unknown>)
       : null
+  const input =
+    value.input && typeof value.input === 'object'
+      ? (value.input as Record<string, unknown>)
+      : null
   const classNamesRaw = value.class_names ?? model?.class_names
   const classNames = Array.isArray(classNamesRaw)
     ? classNamesRaw.filter((name): name is string => typeof name === 'string')
     : undefined
+  const windowSec = finiteNumber(input?.window_sec) ? Number(input.window_sec) : undefined
+  const stepSec = finiteNumber(input?.step_sec) ? Number(input.step_sec) : undefined
   return {
     type: 'hello',
     schema_version: finiteNumber(value.schema_version) ? value.schema_version : 0,
@@ -157,6 +172,22 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
     strategy:
       (typeof value.strategy === 'string' ? value.strategy : undefined) ??
       (typeof online?.strategy === 'string' ? online.strategy : undefined),
+    window_sec: windowSec && windowSec > 0 ? windowSec : undefined,
+    step_sec: stepSec && stepSec > 0 ? stepSec : undefined,
+    follow: parseFollow(value.follow),
+  }
+}
+
+function parseFollow(raw: unknown): ModelServiceHello['follow'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const value = raw as Record<string, unknown>
+  const advertised = Array.isArray(value.advertised)
+    ? value.advertised.filter((item): item is string => typeof item === 'string')
+    : undefined
+  return {
+    transport: typeof value.transport === 'string' ? value.transport : undefined,
+    bind: typeof value.bind === 'string' ? value.bind : undefined,
+    advertised,
   }
 }
 
@@ -226,6 +257,14 @@ export function parseServerMessage(raw: string): ModelServerMessage {
     throw new Error('模型 prediction 消息不符合协议')
   }
 
+  const logitsRaw = value.logits
+  const logits =
+    Array.isArray(logitsRaw) &&
+    logitsRaw.length === classNames.length &&
+    logitsRaw.every(finiteNumber)
+      ? (logitsRaw as number[])
+      : undefined
+
   return {
     type: 'prediction',
     schema_version: finiteNumber(value.schema_version) ? value.schema_version : 0,
@@ -237,6 +276,7 @@ export function parseServerMessage(raw: string): ModelServerMessage {
     class_name: value.class_name,
     class_names: classNames as string[],
     probabilities: probabilities as number[],
+    logits,
     confidence: value.confidence,
     model_revision: String(value.model_revision ?? 'base'),
     online_update_step: finiteNumber(value.online_update_step)

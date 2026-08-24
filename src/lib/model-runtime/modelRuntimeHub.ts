@@ -6,6 +6,7 @@ import {
   describeModelSource,
   describeWaitingModelSource,
   matchModelSourceProfile,
+  projectRawBatchToProfile,
 } from './sourceProfiles'
 import {
   createProtocolId,
@@ -19,6 +20,7 @@ import {
   type ModelWindowPacket,
 } from './contracts'
 import { ModelWindowAssembler } from './windowAssembler'
+import { modelServiceStatus } from './modelServiceApi'
 
 const ENABLED_KEY = 'passive-bci.model-service-enabled'
 const URL_KEY = 'passive-bci.model-service-url'
@@ -26,6 +28,8 @@ const MAX_PENDING = 2
 const MAX_IN_FLIGHT = 2
 const MAX_SOURCE_BATCHES = 8
 const LATENCY_HISTORY = 120
+const DEFAULT_WINDOW_SEC = 4
+const DEFAULT_STEP_SEC = 0.5
 
 const MAX_DEBUG_LOG = 80
 
@@ -59,6 +63,8 @@ export type ModelRuntimeSnapshot = {
   socketReadyState: number | null
   lastCloseCode: number | null
   lastCloseReason: string
+  windowSec: number
+  stepSec: number
   debugLog: ModelDebugEntry[]
 }
 
@@ -123,6 +129,7 @@ class ModelRuntimeHub {
   private sentWindowKeys = new Set<string>()
   private latencies: number[] = []
   private debugLog: ModelDebugEntry[] = []
+  private connectSeq = 0
   private snapshotValue: ModelRuntimeSnapshot = {
     enabled: loadEnabled(),
     status: loadEnabled() ? 'closed' : 'disabled',
@@ -144,6 +151,8 @@ class ModelRuntimeHub {
     socketReadyState: null,
     lastCloseCode: null,
     lastCloseReason: '',
+    windowSec: DEFAULT_WINDOW_SEC,
+    stepSec: DEFAULT_STEP_SEC,
     debugLog: [],
   }
 
@@ -202,8 +211,51 @@ class ModelRuntimeHub {
     this.logDebug('info', '已发送 hello 探测')
   }
 
+  private usesDevStatusProbe(): boolean {
+    return this.snapshotValue.url.includes('/ws/model')
+  }
+
+  private async serviceIsListening(): Promise<boolean> {
+    try {
+      const status = await modelServiceStatus()
+      return status.running === true
+    } catch {
+      return false
+    }
+  }
+
   connect(): void {
+    void this.connectAsync()
+  }
+
+  private async connectAsync(): Promise<void> {
     if (!this.snapshotValue.enabled) return
+    const seq = ++this.connectSeq
+    if (this.usesDevStatusProbe()) {
+      this.patch({
+        status: 'connecting',
+        lastError: '',
+        serviceHello: null,
+        socketReadyState: WebSocket.CONNECTING,
+      })
+      const running = await this.serviceIsListening()
+      if (seq !== this.connectSeq || !this.snapshotValue.enabled) return
+      if (!running) {
+        this.disconnectSocket()
+        this.logDebug('warn', '跳过 WebSocket', '模型服务未在 :8768 监听')
+        this.patch({
+          status: 'closed',
+          lastError: '模型服务未在 :8768 监听。请先点「启动 REVE」。',
+          socketReadyState: null,
+        })
+        return
+      }
+    }
+    if (seq !== this.connectSeq || !this.snapshotValue.enabled) return
+    this.openSocket()
+  }
+
+  private openSocket(): void {
     this.disconnectSocket()
     this.patch({
       status: 'connecting',
@@ -293,13 +345,18 @@ class ModelRuntimeHub {
     this.sourceDraining = false
     this.inFlight.clear()
     this.sentWindowKeys.clear()
-    this.assembler.reset()
+    this.assembler = new ModelWindowAssembler({
+      windowSec: DEFAULT_WINDOW_SEC,
+      stepSec: DEFAULT_STEP_SEC,
+    })
     this.patch({
       status,
       pendingWindows: 0,
       inFlightWindows: 0,
       sourceCompatible: false,
       sourceDetail: waitingSourceDetail(),
+      windowSec: DEFAULT_WINDOW_SEC,
+      stepSec: DEFAULT_STEP_SEC,
       socketReadyState: null,
     })
   }
@@ -353,8 +410,8 @@ class ModelRuntimeHub {
       this.sourceDraining = false
       return
     }
-    const profile = matchModelSourceProfile(batch)
-    if (!profile) {
+    const matched = matchModelSourceProfile(batch)
+    if (!matched) {
       this.pending = []
       this.sentWindowKeys.clear()
       this.assembler.reset()
@@ -366,12 +423,13 @@ class ModelRuntimeHub {
             : `模型旁路暂不接收 ${batch.device}`,
       })
     } else {
+      const projected = projectRawBatchToProfile(batch, matched)
       this.patch({
         sourceCompatible: true,
-        sourceDetail: describeModelSource(profile, batch),
+        sourceDetail: describeModelSource(matched.profile, projected, batch.channels),
       })
       try {
-        for (const packet of this.assembler.push(batch)) this.enqueue(packet)
+        for (const packet of this.assembler.push(projected)) this.enqueue(packet)
       } catch (error) {
         this.patch({
           sourceCompatible: false,
@@ -434,10 +492,11 @@ class ModelRuntimeHub {
     try {
       const message = parseServerMessage(raw)
       if (message.type === 'hello') {
+        this.applyInputContract(message)
         this.logDebug(
           'info',
           'hello 就绪',
-          `${message.model_name ?? 'unknown'} · ${message.class_names?.length ?? '?'} classes`,
+          `${message.model_name ?? 'unknown'} · ${message.window_sec ?? this.snapshotValue.windowSec}s · ${message.class_names?.length ?? '?'} classes`,
         )
         this.patch({
           status: 'ready',
@@ -501,6 +560,31 @@ class ModelRuntimeHub {
         lastError: message,
       })
     }
+  }
+
+  private applyInputContract(hello: ModelServiceHello): void {
+    const windowSec = hello.window_sec ?? DEFAULT_WINDOW_SEC
+    const stepSec = hello.step_sec ?? DEFAULT_STEP_SEC
+    if (!(windowSec > 0) || !(stepSec > 0) || stepSec > windowSec) {
+      this.logDebug('warn', 'hello 切窗参数非法，保持当前窗', `${windowSec}/${stepSec}`)
+      return
+    }
+    if (
+      this.assembler.windowSec === windowSec &&
+      this.assembler.stepSec === stepSec
+    ) {
+      this.patch({ windowSec, stepSec })
+      return
+    }
+    this.assembler = new ModelWindowAssembler({ windowSec, stepSec })
+    this.pending = []
+    this.sentWindowKeys.clear()
+    this.patch({
+      windowSec,
+      stepSec,
+      pendingWindows: 0,
+    })
+    this.logDebug('info', `切窗已改为 ${windowSec}s`, `步长 ${stepSec}s`)
   }
 
   private logDebug(level: ModelDebugLevel, message: string, detail?: string): void {
