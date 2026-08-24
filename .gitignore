@@ -58,8 +58,8 @@ tetris-rl/runs/
 .Python
 pip-log.txt
 
-# Local streamed EEG recordings (Vite /api/record)
-recordings/
+# Local streamed EEG recordings (Vite /api/record). Root only — do not ignore src/recordings/.
+/recordings/
 
 # EEG / experiment dumps (browser downloads, EDF, arrays)
 *.bin
