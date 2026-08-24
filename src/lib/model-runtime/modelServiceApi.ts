@@ -6,6 +6,7 @@ export type ModelServiceEnsureResult = {
   ok: boolean
   backend: ModelServiceBackend | null
   task?: string | null
+  stepSec?: number | null
   port: number
   running: boolean
   owned: boolean
@@ -36,6 +37,7 @@ export async function modelServiceStatus(
 export async function ensureModelService(options?: {
   backend?: ModelServiceBackend
   task?: string
+  stepSec?: number
   force?: boolean
   signal?: AbortSignal
 }): Promise<ModelServiceEnsureResult> {
@@ -45,6 +47,7 @@ export async function ensureModelService(options?: {
     body: JSON.stringify({
       backend: options?.backend ?? 'reve',
       task: options?.task,
+      stepSec: options?.stepSec,
       force: options?.force === true,
     }),
     signal: options?.signal,

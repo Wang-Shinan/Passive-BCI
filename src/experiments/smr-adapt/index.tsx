@@ -6,10 +6,14 @@ import { useLiveEeg } from '../../lib/eeg/useLiveEeg'
 import { SessionLogger } from '../../lib/logger'
 import {
   ModelServicePanel,
+  TemporalFilterControls,
   ensureModelService,
+  liveStepSecForReveTask,
   modelRuntimeHub,
   modelServiceStatus,
+  reveLiveHopMatches,
   useModelRuntime,
+  useTemporalFilter,
 } from '../../lib/model-runtime'
 import { randomSeed } from '../../lib/rng'
 import {
@@ -100,6 +104,8 @@ export function SmrAdaptPage() {
   const [notice, setNotice] = useState('')
   const [horizFlipped, setHorizFlipped] = useState(false)
   const [cursorDrive, setCursorDrive] = useState<CursorDrive>(loadCursorDrive)
+  const { config: temporalConfig, setConfig: setTemporalConfig, filterRef: temporalFilterRef } =
+    useTemporalFilter(liveStepSecForReveTask('smr_control'))
   const loggerRef = useRef(new SessionLogger('smr-adapt', subjectId))
   const sessionRef = useRef(session)
   const cursorRef = useRef(cursor)
@@ -130,16 +136,25 @@ export function SmrAdaptPage() {
         const status = await modelServiceStatus(ac.signal)
         if (ac.signal.aborted) return
         if (status.running && status.task === 'smr_control') {
-          modelRuntimeHub.setEnabled(true)
-          modelRuntimeHub.connect()
-          if (status.owned || cursorDrive !== 'reve') return
+          const hopOk = reveLiveHopMatches(status.stepSec, liveStepSecForReveTask('smr_control'))
+          if (hopOk) {
+            modelRuntimeHub.setEnabled(true)
+            modelRuntimeHub.connect()
+            if (status.owned || cursorDrive !== 'reve') return
+          }
         }
         if (cursorDrive !== 'reve') return
         setNotice('正在启动 REVE SMR 头（首次加载权重可能要一两分钟）…')
         const result = await ensureModelService({
           backend: 'reve',
           task: 'smr_control',
-          force: Boolean(status.running && (!status.owned || status.task !== 'smr_control')),
+          stepSec: liveStepSecForReveTask('smr_control'),
+          force: Boolean(
+            status.running &&
+              (!status.owned ||
+                status.task !== 'smr_control' ||
+                !reveLiveHopMatches(status.stepSec, liveStepSecForReveTask('smr_control'))),
+          ),
           signal: ac.signal,
         })
         if (ac.signal.aborted) return
@@ -175,6 +190,7 @@ export function SmrAdaptPage() {
     vertNorm.current = new BalancedNorm()
     warmupH.current = { n: 0, mean: 0, m2: 0 }
     warmupV.current = { n: 0, mean: 0, m2: 0 }
+    temporalFilterRef.current.reset()
     setHorizFlipped(false)
     const seed = randomSeed()
     loggerRef.current.clear()
@@ -272,7 +288,8 @@ export function SmrAdaptPage() {
       const useReve = cursorDriveRef.current === 'reve'
       const pred = useReve && live ? modelRuntimeHub.latestObservation(2500) : null
       if (pred && pred.probabilities.length === pred.class_names.length) {
-        const axes = reveCursorAxes(pred.class_names, pred.probabilities)
+        const decision = temporalFilterRef.current.observePrediction(pred)
+        const axes = reveCursorAxes(decision.classNames, decision.probabilities)
         zH = axes.zH * REVE_CURSOR_GAIN
         zV = axes.zV * REVE_CURSOR_GAIN
       } else if (live && montage) {
@@ -448,6 +465,11 @@ export function SmrAdaptPage() {
                 </button>
               ))}
             </div>
+            {cursorDrive === 'reve' ? (
+              <div className="mb-3">
+                <TemporalFilterControls config={temporalConfig} onChange={setTemporalConfig} compact />
+              </div>
+            ) : null}
             <button type="button" className="btn btn-primary" disabled={running} onClick={begin}>
               {session.phase === 'done' ? '再做一轮' : '开始适配'}
             </button>

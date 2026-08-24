@@ -5,7 +5,7 @@ Passive BCI 负责采集与切窗；推理和在线适配留在独立的 [NCC-OI
 ## 边界
 
 - 浏览器只发送 **原始 EEG 窗口**（`uV`，`layout=CT`）
-- 窗长由服务端 hello 的 `input.window_sec` 决定：50M / mock 为 4 秒，本地 REVE 为 **2 秒**
+- 窗长由服务端 hello 的 `input.window_sec` 决定：50M / mock 为 4 秒，本地 REVE 为 **2 秒**。在线步长：俄罗斯方块页的 `smr_control` 与 `tetris_action` 为 **0.1 秒**（10 Hz）；`/smr-adapt` 仍为 0.5 秒。离线 export/fit 切窗不重叠（hop=窗长），不要用在线 0.1s hop。
 - 不要把浏览器 FFT / 频域特征当作模型输入
 - 当前 MI 四分类头仅用于链路验收；只有服务明确返回 `output_semantics: "ordinal_rating_3"` 时，RL 实验才允许用预测当作三类奖励
 
@@ -68,7 +68,7 @@ npm run model-service:reve:smr
 npm run model-service:reve:smr:fit
 ```
 
-`smr_control` 默认合并 S02 livehead LoRA（`checkpoints/adapters/smr_control_s02_4class_reve_livehead_lora/best.pt`，含当日 LP 头）。个人线性头写到 `recordings/.reve-heads/smr_control_s02_4class_livehead.pt`。退回 Stieger 四分类 mi5init：`$env:MODEL_REVE_LORA=".../stieger2021_4class_reve_lora_r16_mi5init/best.pt"`。旧的左右手二分类适配器和 `smr_control_stieger_lora.pt` 不会自动加载。不要把左右/休息标签写进 `passive_rating`（任务一/任务二/任务三）。不要 LoRA 时加 `--no-lora` 或 `$env:MODEL_REVE_NO_LORA="1"`。退回二分类：`$env:MODEL_REVE_LORA=".../stieger2021_lr_reve_lora_r16_mi5init/best.pt"`。
+`smr_control` 默认合并 S02 0821 LoRA（`checkpoints/adapters/smr_control_s02_4class_reve_0821_livehead_lora/best.pt`），配对本地 811 线性头 `recordings/.reve-heads/smr_control_s02_4class_livehead.pt`（`encoder_id` 必须等于该 LoRA 目录名）。无 0821 时回退上一版 S02 livehead LoRA。退回 Stieger 四分类 mi5init：`$env:MODEL_REVE_LORA=".../stieger2021_4class_reve_lora_r16_mi5init/best.pt"`。旧的左右手二分类适配器和 `smr_control_stieger_lora.pt` 不会自动加载。不要把左右/休息标签写进 `passive_rating`（任务一/任务二/任务三）。不要 LoRA 时加 `--no-lora` 或 `$env:MODEL_REVE_NO_LORA="1"`。退回二分类：`$env:MODEL_REVE_LORA=".../stieger2021_lr_reve_lora_r16_mi5init/best.pt"`。
 
 也可在终端手动启动三类头：
 

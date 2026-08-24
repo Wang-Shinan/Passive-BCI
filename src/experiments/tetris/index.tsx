@@ -36,8 +36,11 @@ import {
 import { FeatureMonitorPanel, SignalModeControls, useStressControl } from '../../lib/features'
 import { ModelServicePanel } from '../../lib/model-runtime/ModelServicePanel'
 import { ensureModelService, modelServiceStatus } from '../../lib/model-runtime/modelServiceApi'
+import { TETRIS_LIVE_STEP_SEC, reveLiveHopMatches } from '../../lib/model-runtime/reveTasks'
 import { modelRuntimeHub } from '../../lib/model-runtime/modelRuntimeHub'
 import { useModelRuntime } from '../../lib/model-runtime/useModelRuntime'
+import { TemporalFilterControls, useTemporalFilter } from '../../lib/model-runtime/TemporalFilterControls'
+import { predictionFromDecision, type TemporalDecision } from '../../lib/model-runtime/temporalEvidence'
 import { RlAgentPanel } from './RlAgentPanel'
 import { StressPanel } from './StressPanel'
 import {
@@ -161,6 +164,9 @@ export function TetrisExperiment() {
   const [lastMiAction, setLastMiAction] = useState<string>('—')
   const [smrEnsureError, setSmrEnsureError] = useState('')
   const [smrEnsuring, setSmrEnsuring] = useState(false)
+  const { config: temporalConfig, setConfig: setTemporalConfig, filterRef: temporalFilterRef } =
+    useTemporalFilter(TETRIS_LIVE_STEP_SEC)
+  const [smrDecision, setSmrDecision] = useState<TemporalDecision | null>(null)
   const teacherRef = useRef(new HeuristicPlanner())
   const [rlEnabled, setRlEnabled] = useState(
     () => loadRlControlEnabled() && !loadCollabControlEnabled() && !loadFollowControlEnabled(),
@@ -288,6 +294,8 @@ export function TetrisExperiment() {
     if (!miControlEnabled) {
       lastMiObservationRef.current = null
       setLastMiAction('—')
+      temporalFilterRef.current.reset()
+      setSmrDecision(null)
     }
   }, [miControlEnabled])
 
@@ -302,8 +310,18 @@ export function TetrisExperiment() {
     setSmrEnsureError('')
     try {
       const status = await modelServiceStatus()
-      const force = Boolean(status.running && (!status.owned || status.task !== 'smr_control'))
-      await ensureModelService({ backend: 'reve', task: 'smr_control', force })
+      const force = Boolean(
+        status.running &&
+          (!status.owned ||
+            status.task !== 'smr_control' ||
+            !reveLiveHopMatches(status.stepSec, TETRIS_LIVE_STEP_SEC)),
+      )
+      await ensureModelService({
+        backend: 'reve',
+        task: 'smr_control',
+        stepSec: TETRIS_LIVE_STEP_SEC,
+        force,
+      })
       modelRuntimeHub.setEnabled(true)
       modelRuntimeHub.connect()
     } catch (error) {
@@ -457,12 +475,17 @@ export function TetrisExperiment() {
     const prediction = modelRuntime.latestPrediction
     if (!prediction || prediction.observation_id === lastMiObservationRef.current) return
 
-    const predicted = miControlActionForPrediction(prediction)
+    const decision = temporalFilterRef.current.observePrediction(prediction)
+    const smoothed = predictionFromDecision(prediction, decision)
+    setSmrDecision(decision)
+    const predicted = miControlActionForPrediction(smoothed)
     const action = collabEnabled ? executeMiInCollab(predicted) : predicted
     const filterNote =
       collabEnabled && predicted && predicted !== action ? ' · 协作忽略旋转' : ''
+    const rawNote =
+      decision.className !== decision.rawClassName ? ` · raw ${decision.rawClassName}` : ''
     setLastMiAction(
-      `${describeMiControlAction(predicted)}${filterNote} · ${prediction.class_name} ${(prediction.confidence * 100).toFixed(0)}%`,
+      `${describeMiControlAction(predicted)}${filterNote} · ${decision.className} ${(decision.confidence * 100).toFixed(0)}%${rawNote}`,
     )
     lastMiObservationRef.current = prediction.observation_id
 
@@ -476,9 +499,11 @@ export function TetrisExperiment() {
         : 'mi',
       action: action === 'rotate' ? 'rotateCW' : (action ?? 'unknown'),
       intended: predicted === 'rotate' ? 'rotateCW' : (predicted ?? 'unknown'),
-      class_name: prediction.class_name,
+      class_name: decision.className,
+      raw_class_name: decision.rawClassName,
+      filter_mode: temporalConfig.mode,
       observation_id: prediction.observation_id,
-      confidence: prediction.confidence,
+      confidence: decision.confidence,
     })
 
     if (!action || action === 'none') return
@@ -498,7 +523,7 @@ export function TetrisExperiment() {
     ) {
       noteHumanFollowSlide(result.state)
     }
-  }, [miControlEnabled, rlEnabled, collabEnabled, followEnabled, modelRuntime.latestPrediction, applyResult, noteHumanFollowSlide])
+  }, [miControlEnabled, rlEnabled, collabEnabled, followEnabled, modelRuntime.latestPrediction, applyResult, noteHumanFollowSlide, temporalConfig.mode])
 
   const runRlDecision = useCallback(() => {
     if ((!rlEnabled && !collabEnabled) || rlBusyRef.current) return
@@ -756,6 +781,10 @@ export function TetrisExperiment() {
           </Link>
           <h1 className="m-0 mt-1 text-2xl font-semibold">实验二 · 压力自适应俄罗斯方块</h1>
           <p className="muted m-0 mt-1 text-sm">
+            <Link to="/tetris-adapt" className="text-[var(--accent)] hover:underline">
+              去适配实验
+            </Link>
+            {' · '}
             ←→ 移动 · ↑/X 顺时针 · Z 逆时针 · ↓ 软降 · 空格硬降 · P 暂停 · R 重开
             {miControlEnabled && !collabEnabled ? ' · SMR：左手← 右手→ 双手↻ 休息静止' : ''}
             {collabEnabled ? ' · 协作：脑控←→ · I 无井不竖' : ''}
@@ -935,7 +964,7 @@ export function TetrisExperiment() {
             </label>
             <p className="muted m-0 mb-3 text-sm">
               左手 → 左移 · 右手 → 右移 · 双手 → 顺时针旋转 · 休息 → 静止。勾选后拉起已拟合、冻结的
-              smr_control，每 0.5 秒按当前预测动一次，不在线微调
+              smr_control，每 0.1 秒送来一帧重叠窗；默认对 logits 做时间滤波后再动手，不在线微调
               {collabEnabled
                 ? '。协作模式下手脑旋转会被忽略；I 只在已有深井时才竖放，空盘保持横放。'
                 : followEnabled
@@ -960,13 +989,17 @@ export function TetrisExperiment() {
                 </button>
               </p>
             ) : null}
+            <div className="mb-3">
+              <TemporalFilterControls config={temporalConfig} onChange={setTemporalConfig} compact />
+            </div>
             <div className="rounded-xl border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-sm">
               <div className="muted text-xs">最近 SMR 动作</div>
               <div className="font-mono text-xs">{lastMiAction}</div>
-              {smrPrediction ? (
+              {(smrDecision ?? smrPrediction) ? (
                 <div className="mt-2 space-y-1">
-                  {smrPrediction.class_names.map((name, index) => {
-                    const value = smrPrediction.probabilities[index] ?? 0
+                  {(smrDecision?.classNames ?? smrPrediction!.class_names).map((name, index) => {
+                    const value =
+                      smrDecision?.probabilities[index] ?? smrPrediction!.probabilities[index] ?? 0
                     return (
                       <div key={`${name}-${index}`}>
                         <div className="mb-0.5 flex justify-between text-xs">
@@ -989,7 +1022,7 @@ export function TetrisExperiment() {
               ) : null}
             </div>
             <div className="mt-4">
-              <ModelServicePanel embedded reveTask="smr_control" />
+              <ModelServicePanel embedded reveTask="smr_control" liveStepSec={TETRIS_LIVE_STEP_SEC} />
             </div>
           </Panel>
 

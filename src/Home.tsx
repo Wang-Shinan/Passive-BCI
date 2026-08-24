@@ -26,6 +26,14 @@ const TOOLS = [
     accent: '#c084fc',
   },
   {
+    path: '/tetris-adapt',
+    title: '方块 SMR 适配',
+    blurb:
+      '完整 10 列井里先练左移、右移、旋转、下落，再在宽 5 / 宽 7 窄井上用红色落点对齐教师绿影。SMR 四分类驱动，头冻结，只录 EEG。',
+    tag: 'Tetris 井 · SMR 冻结',
+    accent: '#34d399',
+  },
+  {
     path: '/online-learn',
     title: '基模在线学习',
     blurb:

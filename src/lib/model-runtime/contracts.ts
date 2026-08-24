@@ -60,6 +60,8 @@ export type ModelPrediction = {
   class_name: string
   class_names: string[]
   probabilities: number[]
+  /** Raw class logits when the service sends them; otherwise recovered from softmax. */
+  logits?: number[]
   confidence: number
   model_revision: string
   online_update_step: number
@@ -255,6 +257,14 @@ export function parseServerMessage(raw: string): ModelServerMessage {
     throw new Error('模型 prediction 消息不符合协议')
   }
 
+  const logitsRaw = value.logits
+  const logits =
+    Array.isArray(logitsRaw) &&
+    logitsRaw.length === classNames.length &&
+    logitsRaw.every(finiteNumber)
+      ? (logitsRaw as number[])
+      : undefined
+
   return {
     type: 'prediction',
     schema_version: finiteNumber(value.schema_version) ? value.schema_version : 0,
@@ -266,6 +276,7 @@ export function parseServerMessage(raw: string): ModelServerMessage {
     class_name: value.class_name,
     class_names: classNames as string[],
     probabilities: probabilities as number[],
+    logits,
     confidence: value.confidence,
     model_revision: String(value.model_revision ?? 'base'),
     online_update_step: finiteNumber(value.online_update_step)

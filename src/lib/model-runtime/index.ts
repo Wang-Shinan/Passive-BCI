@@ -16,13 +16,34 @@ export {
 export type { ModelServiceBackend, ModelServiceEnsureResult } from './modelServiceApi'
 export {
   REVE_TASKS,
+  REVE_DEFAULT_LIVE_STEP_SEC,
+  REVE_WINDOW_SEC,
+  TETRIS_LIVE_STEP_SEC,
   classBarColor,
   defaultReveStrategy,
   isReveTaskId,
   labelHotkey,
+  liveStepSecForReveTask,
   loadOnlineLearnTask,
+  reveLiveHopMatches,
   rewardForClass,
   reveTaskOption,
   saveOnlineLearnTask,
 } from './reveTasks'
 export type { ReveTaskId, ReveTaskOption } from './reveTasks'
+export {
+  DEFAULT_TEMPORAL_FILTER,
+  TemporalEvidenceFilter,
+  filterSequenceAccuracy,
+  horizonWindows,
+  loadTemporalFilterConfig,
+  predictionFromDecision,
+  rollingMeanLogitAccuracy,
+  saveTemporalFilterConfig,
+} from './temporalEvidence'
+export type {
+  TemporalDecision,
+  TemporalFilterConfig,
+  TemporalFilterMode,
+} from './temporalEvidence'
+export { TemporalFilterControls, useTemporalFilter } from './TemporalFilterControls'

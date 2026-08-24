@@ -7,7 +7,7 @@ import {
   type ModelServiceEnsureResult,
 } from './modelServiceApi'
 import { modelRuntimeHub, modelUrlPresets } from './modelRuntimeHub'
-import { REVE_TASKS, reveTaskOption, type ReveTaskId } from './reveTasks'
+import { REVE_TASKS, liveStepSecForReveTask, reveTaskOption, type ReveTaskId } from './reveTasks'
 import { useModelRuntime } from './useModelRuntime'
 
 function latency(value: number | null): string {
@@ -36,9 +36,11 @@ function reveLaunchLabel(task: string | undefined, force: boolean): string {
 
 function ModelServiceLaunchBar({
   reveTask,
+  liveStepSec,
   onReveTaskChange,
 }: {
   reveTask?: string
+  liveStepSec?: number
   onReveTaskChange?: (task: ReveTaskId) => void
 }) {
   const [busy, setBusy] = useState(false)
@@ -80,6 +82,7 @@ function ModelServiceLaunchBar({
         backend,
         force,
         task: backend === 'reve' ? reveTask : undefined,
+        stepSec: backend === 'reve' ? (liveStepSec ?? liveStepSecForReveTask(reveTask)) : undefined,
       })
       setProc(result)
       afterReady()
@@ -172,10 +175,12 @@ function ModelServiceLaunchBar({
 export function ModelServicePanel({
   embedded = false,
   reveTask,
+  liveStepSec,
   onReveTaskChange,
 }: {
   embedded?: boolean
   reveTask?: string
+  liveStepSec?: number
   onReveTaskChange?: (task: ReveTaskId) => void
 }) {
   const state = useModelRuntime()
@@ -189,7 +194,11 @@ export function ModelServicePanel({
 
   const body = (
     <>
-      <ModelServiceLaunchBar reveTask={reveTask} onReveTaskChange={onReveTaskChange} />
+      <ModelServiceLaunchBar
+        reveTask={reveTask}
+        liveStepSec={liveStepSec}
+        onReveTaskChange={onReveTaskChange}
+      />
       <div className={`${embedded ? 'flex flex-wrap' : 'acq-bar'} gap-2`} style={{ marginBottom: 8 }}>
         <label className="acq-check">
           <input

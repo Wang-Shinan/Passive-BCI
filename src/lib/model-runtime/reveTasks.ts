@@ -1,5 +1,10 @@
 export type ReveTaskId = 'passive_rating' | 'smr_control' | 'tetris_action'
 
+export const REVE_WINDOW_SEC = 2
+export const REVE_DEFAULT_LIVE_STEP_SEC = 0.5
+/** Tetris pages + tetris_action live decode hop. Offline export/fit must not reuse this. */
+export const TETRIS_LIVE_STEP_SEC = 0.1
+
 export type ReveTaskOption = {
   id: ReveTaskId
   label: string
@@ -62,6 +67,14 @@ export function rewardForClass(semantics: string | undefined, classId: number): 
 
 export function defaultReveStrategy(task: string | null | undefined): 'none' | 'supervised-head' {
   return task === 'smr_control' ? 'none' : 'supervised-head'
+}
+
+export function liveStepSecForReveTask(task: string | null | undefined): number {
+  return task === 'tetris_action' ? TETRIS_LIVE_STEP_SEC : REVE_DEFAULT_LIVE_STEP_SEC
+}
+
+export function reveLiveHopMatches(actual: number | null | undefined, wanted: number): boolean {
+  return typeof actual === 'number' && Number.isFinite(actual) && Math.abs(actual - wanted) < 1e-6
 }
 
 export function classBarColor(index: number, _count: number): string {

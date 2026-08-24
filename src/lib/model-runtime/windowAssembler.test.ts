@@ -116,4 +116,20 @@ describe('ModelWindowAssembler', () => {
     expect(emitted[0]!.header.start_time_sec).toBe(0)
     expect(emitted[0]!.header.end_time_sec).toBe(2)
   })
+
+  it('emits at 10 Hz when step is 0.1s', () => {
+    const assembler = new ModelWindowAssembler({ windowSec: 1, stepSec: 0.1 })
+    const values: number[] = []
+    for (let sample = 1; sample <= 10; sample++) values.push(sample, sample * 10)
+    const first = assembler.push(batch(values, { sampleRate: 10, samples: 10 }))
+    expect(first).toHaveLength(1)
+    expect(first[0]!.header.samples).toBe(10)
+    expect(first[0]!.header.end_time_sec).toBe(1)
+    const second = assembler.push(
+      batch([11, 110], { sampleRate: 10, samples: 1, packetCount: 2 }),
+    )
+    expect(second).toHaveLength(1)
+    expect(second[0]!.header.start_time_sec).toBeCloseTo(0.1)
+    expect(second[0]!.header.end_time_sec).toBeCloseTo(1.1)
+  })
 })

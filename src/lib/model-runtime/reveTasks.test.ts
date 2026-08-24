@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classBarColor, defaultReveStrategy, isReveTaskId, labelHotkey, rewardForClass } from './reveTasks'
+import { classBarColor, defaultReveStrategy, isReveTaskId, labelHotkey, liveStepSecForReveTask, reveLiveHopMatches, rewardForClass, TETRIS_LIVE_STEP_SEC } from './reveTasks'
 
 describe('reve task catalog', () => {
   it('accepts known task ids only', () => {
@@ -12,6 +12,15 @@ describe('reve task catalog', () => {
     expect(defaultReveStrategy('smr_control')).toBe('none')
     expect(defaultReveStrategy('passive_rating')).toBe('supervised-head')
     expect(defaultReveStrategy('tetris_action')).toBe('supervised-head')
+  })
+
+  it('uses 0.1s live hop for Tetris decode and 0.5s for SMR-adapt', () => {
+    expect(liveStepSecForReveTask('tetris_action')).toBe(TETRIS_LIVE_STEP_SEC)
+    expect(liveStepSecForReveTask('smr_control')).toBe(0.5)
+    expect(liveStepSecForReveTask('passive_rating')).toBe(0.5)
+    expect(reveLiveHopMatches(0.1, TETRIS_LIVE_STEP_SEC)).toBe(true)
+    expect(reveLiveHopMatches(0.5, TETRIS_LIVE_STEP_SEC)).toBe(false)
+    expect(reveLiveHopMatches(undefined, TETRIS_LIVE_STEP_SEC)).toBe(false)
   })
 
   it('only attaches ordinal rewards to the rating head', () => {

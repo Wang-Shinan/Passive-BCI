@@ -22,7 +22,7 @@ export interface Piece {
   matrix: Matrix
 }
 
-const SHAPES: Record<PieceType, Matrix[]> = {
+export const SHAPES: Record<PieceType, Matrix[]> = {
   I: [
     [
       [0, 0, 0, 0],

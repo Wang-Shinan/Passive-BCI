@@ -24,6 +24,7 @@ interface ManagedService {
   owned: boolean
   backend: ModelServiceBackend | null
   task: string | null
+  stepSec: number | null
   lastError: string
   logBuf: string
   starting: Promise<EnsureResult> | null
@@ -39,6 +40,7 @@ export interface EnsureResult {
   alreadyRunning: boolean
   starting: boolean
   task?: string | null
+  stepSec?: number | null
   message?: string
   logTail?: string
 }
@@ -215,6 +217,20 @@ function parseReveTask(value: unknown): string {
   return 'passive_rating'
 }
 
+function defaultLiveStepSec(task: string): number {
+  return task === 'tetris_action' ? 0.1 : 0.5
+}
+
+function parseStepSec(value: unknown, task: string): number {
+  const raw = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  if (Number.isFinite(raw) && raw > 0) return raw
+  return defaultLiveStepSec(task)
+}
+
+function hopMatches(actual: number | null | undefined, wanted: number): boolean {
+  return typeof actual === 'number' && Number.isFinite(actual) && Math.abs(actual - wanted) < 1e-6
+}
+
 export function modelServiceManagerPlugin(): Plugin {
   const state = persistentDevStore(
     'model-service-manager',
@@ -223,6 +239,7 @@ export function modelServiceManagerPlugin(): Plugin {
       owned: false,
       backend: null,
       task: null,
+      stepSec: null,
       lastError: '',
       logBuf: '',
       starting: null,
@@ -235,7 +252,8 @@ export function modelServiceManagerPlugin(): Plugin {
     return {
       ok: extra.ok ?? true,
       backend: extra.backend ?? state.backend,
-    task: extra.task ?? state.task,
+      task: extra.task ?? state.task,
+      stepSec: extra.stepSec ?? state.stepSec,
       port: PORT,
       running: extra.running ?? false,
       owned: extra.owned ?? (state.owned && alive),
@@ -274,12 +292,14 @@ export function modelServiceManagerPlugin(): Plugin {
     state.owned = false
     state.backend = null
     state.task = null
+    state.stepSec = null
   }
 
   async function ensure(
     backend: ModelServiceBackend,
     force: boolean,
     task: string,
+    stepSec: number,
   ): Promise<EnsureResult> {
     if (state.starting) return state.starting
 
@@ -288,12 +308,14 @@ export function modelServiceManagerPlugin(): Plugin {
       const alive = Boolean(state.child && state.child.exitCode === null && !state.child.killed)
 
       const wantedTask = backend === 'reve' ? task : null
+      const hopOk = backend !== 'reve' || hopMatches(state.stepSec, stepSec)
       if (
         listening &&
         alive &&
         state.owned &&
         state.backend === backend &&
         state.task === wantedTask &&
+        hopOk &&
         !force
       ) {
         return snapshot({
@@ -333,13 +355,17 @@ export function modelServiceManagerPlugin(): Plugin {
       state.logBuf = ''
       state.backend = backend
       state.task = wantedTask
+      state.stepSec = backend === 'reve' ? stepSec : null
       console.log(
-        `\x1b[36m[model-service]\x1b[0m starting ${backend}${wantedTask ? `/${wantedTask}` : ''}: node scripts/run-model-service.mjs`,
+        `\x1b[36m[model-service]\x1b[0m starting ${backend}${wantedTask ? `/${wantedTask}` : ''}${
+          backend === 'reve' ? ` hop=${stepSec}s` : ''
+        }: node scripts/run-model-service.mjs`,
       )
 
       const spawnArgs = [scriptPath, '--backend', backend]
       if (backend === 'reve') {
         spawnArgs.push('--task', task)
+        spawnArgs.push('--step-sec', String(stepSec))
         if (task === 'smr_control') spawnArgs.push('--strategy', 'none')
       }
       const child = spawn(process.execPath, spawnArgs, {
@@ -394,7 +420,7 @@ export function modelServiceManagerPlugin(): Plugin {
             backend,
             message:
               backend === 'reve'
-                ? `已启动本地 REVE（${task}，pid ${child.pid}，2s 窗）`
+                ? `已启动本地 REVE（${task}，pid ${child.pid}，2s 窗 / ${stepSec}s 步）`
                 : `已启动 dev mock（pid ${child.pid}）`,
           })
         }
@@ -475,6 +501,7 @@ export function modelServiceManagerPlugin(): Plugin {
             parseBackend(body.backend),
             body.force === true,
             parseReveTask(body.task),
+            parseStepSec(body.stepSec ?? body.step_sec, parseReveTask(body.task)),
           )
           sendJson(res, result.ok ? 200 : 409, result)
           return

@@ -82,6 +82,10 @@ function defaultStrategy(task) {
   return task === 'smr_control' ? 'none' : 'supervised-head'
 }
 
+function defaultStepSec(task) {
+  return task === 'tetris_action' ? '0.1' : undefined
+}
+
 function main() {
   const ncc = findNcc()
   if (!ncc) {
@@ -95,6 +99,7 @@ function main() {
   const pkg = process.env.MODEL_PACKAGE
   const backend = (argValue('--backend') || process.env.MODEL_BACKEND || '').trim().toLowerCase()
   const task = argValue('--task') || process.env.MODEL_REVE_TASK || 'passive_rating'
+  const stepSec = argValue('--step-sec') || process.env.MODEL_STEP_SEC || defaultStepSec(task)
   const stateFile = argValue('--state-file') || process.env.MODEL_STATE_FILE || defaultStateFile(task)
   const strategy =
     argValue('--strategy') ||
@@ -128,6 +133,7 @@ function main() {
           strategy,
           '--task',
           task,
+          ...(stepSec ? ['--step-sec', String(stepSec)] : []),
           ...(stateFile ? ['--state-file', stateFile] : []),
           ...(process.env.MODEL_REVE_LORA ? ['--lora-checkpoint', process.env.MODEL_REVE_LORA] : []),
           ...(process.env.MODEL_REVE_NO_LORA === '1' ? ['--no-lora'] : []),
@@ -150,7 +156,9 @@ function main() {
   if (pkg) {
     console.log(`[model-service] runtime package=${pkg}`)
   } else if (backend === 'reve') {
-    console.log(`[model-service] backend=reve，启动本地 REVE（2s 窗，task=${task}，strategy=${strategy}）…`)
+    console.log(
+      `[model-service] backend=reve，启动本地 REVE（2s 窗${stepSec ? ` / ${stepSec}s 步` : ''}，task=${task}，strategy=${strategy}）…`,
+    )
     if (stateFile) console.log(`[model-service] state-file=${stateFile}`)
   } else {
     console.log(`[model-service] 启动 dev mock（hello ${profile} 窗长；接受 neuracle59 / bcigo32）…`)

@@ -1,5 +1,6 @@
 /**
- * Export SMR recordings as NCC EEGHDF5 (2s uV CT windows).
+ * Export SMR recordings as NCC EEGHDF5 (2s non-overlapping uV CT windows).
+ * Live Tetris decode hop (0.1s) must not be passed here.
  *
  *   npm run model-service:reve:smr:export
  */

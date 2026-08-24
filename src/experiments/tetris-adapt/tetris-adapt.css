@@ -1,0 +1,75 @@
+.ta-well {
+  position: relative;
+  width: fit-content;
+  flex-shrink: 0;
+  margin: 0 auto;
+  user-select: none;
+}
+
+.ta-well-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid var(--border, #2a3550);
+  background: #080d1a;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
+}
+
+.ta-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  background: color-mix(in srgb, #0e1424 45%, transparent);
+}
+
+.ta-overlay p {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.ta-flash-hit .ta-well-frame,
+.ta-flash-hit.ta-well .ta-well-frame {
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45), inset 0 0 0 2px #38d39f;
+}
+
+.ta-flash-miss .ta-well-frame,
+.ta-flash-miss.ta-well .ta-well-frame {
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45), inset 0 0 0 2px #ff5d6c;
+}
+
+.ta-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ta-legend i {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border-radius: 2px;
+}
+
+.ta-legend .is-red {
+  border: 2px solid #f87171;
+  background: #f8717128;
+}
+
+.ta-legend .is-green {
+  border: 2px dashed #4ade80;
+  background: #4ade8020;
+}
+
+.ta-legend .is-gold {
+  border: 2px dashed #e8b84a;
+  background: #e8b84a28;
+}
