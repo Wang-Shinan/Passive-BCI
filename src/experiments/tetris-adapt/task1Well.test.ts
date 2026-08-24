@@ -3,6 +3,7 @@ import { COLS } from '../tetris/engine'
 import {
   applyTask1Action,
   extremeLegalX,
+  spawnFeetTrial,
   spawnTask1Trial,
   task1Hit,
   tickTask1Gravity,
@@ -97,5 +98,17 @@ describe('Task 1 Tetris-well hit conditions', () => {
     expect(extremeLegalX(state.game.board, piece, -1)).toBe(state.targetX)
     const right = spawnTask1Trial('LR', 'right', 2)
     expect(extremeLegalX(right.game.board, right.game.piece!, 1)).toBe(right.targetX)
+  })
+
+  it('feet collection shows a hard-drop landing and ignores control actions', () => {
+    const state = spawnFeetTrial(44)
+    expect(state.cue).toBe('hardDrop')
+    expect(task1Hit(state)).toBe(false)
+    expect(state.teacher?.y).toBe(state.targetY)
+    const dropped = applyTask1Action(state, 'down')
+    const slid = applyTask1Action(state, 'left')
+    expect(dropped.game.piece?.y).toBe(state.game.piece?.y)
+    expect(slid.game.piece?.x).toBe(state.game.piece?.x)
+    expect(task1Hit(dropped)).toBe(false)
   })
 })

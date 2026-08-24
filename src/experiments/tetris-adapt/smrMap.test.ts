@@ -17,6 +17,7 @@ describe('SMR action mapping', () => {
     expect(smrDirFromClassName('rest')).toBe('down')
     expect(overlapActionFromClassName('both_hand')).toBe('rotate')
     expect(overlapActionFromClassName('rest')).toBe('down')
+    expect(overlapActionFromClassName('feet')).toBeNull()
   })
 
   it('uses the same 4-class REVE axes as smr-adapt', () => {

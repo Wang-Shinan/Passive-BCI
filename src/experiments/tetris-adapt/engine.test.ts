@@ -15,26 +15,29 @@ import {
 } from './engine'
 
 describe('tetris-adapt plans', () => {
-  it('quick is LR20 + UD20 + W5 20 + W7 20', () => {
+  it('quick is LR20 + UD20 + feet20 + W5 20 + W7 20', () => {
     const trials = buildTrials(PLANS.quick, 11)
-    expect(planTrialTotal(PLANS.quick)).toBe(80)
-    expect(trials).toHaveLength(80)
+    expect(planTrialTotal(PLANS.quick)).toBe(100)
+    expect(trials).toHaveLength(100)
     expect(trials.filter((trial) => trial.kind === 'smr' && trial.task === 'LR')).toHaveLength(20)
     expect(trials.filter((trial) => trial.kind === 'smr' && trial.task === 'UD')).toHaveLength(20)
+    expect(trials.filter((trial) => trial.kind === 'collect' && trial.className === 'feet')).toHaveLength(20)
     expect(trials.filter((trial) => trial.kind === 'overlap' && trial.boardWidth === 5)).toHaveLength(20)
     expect(trials.filter((trial) => trial.kind === 'overlap' && trial.boardWidth === 7)).toHaveLength(20)
     expect(trials.slice(0, 20).every((trial) => trial.task === 'LR')).toBe(true)
     expect(trials.slice(20, 40).every((trial) => trial.task === 'UD')).toBe(true)
-    expect(trials.slice(40, 60).every((trial) => trial.boardWidth === 5)).toBe(true)
-    expect(trials.slice(60, 80).every((trial) => trial.boardWidth === 7)).toBe(true)
+    expect(trials.slice(40, 60).every((trial) => trial.kind === 'collect')).toBe(true)
+    expect(trials.slice(60, 80).every((trial) => trial.boardWidth === 5)).toBe(true)
+    expect(trials.slice(80, 100).every((trial) => trial.boardWidth === 7)).toBe(true)
   })
 
   it('standard doubles each block to 40', () => {
     const trials = buildTrials(PLANS.standard, 3)
-    expect(planTrialTotal(PLANS.standard)).toBe(160)
-    expect(trials).toHaveLength(160)
+    expect(planTrialTotal(PLANS.standard)).toBe(200)
+    expect(trials).toHaveLength(200)
     expect(trials.filter((trial) => trial.task === 'LR')).toHaveLength(40)
     expect(trials.filter((trial) => trial.task === 'UD')).toHaveLength(40)
+    expect(trials.filter((trial) => trial.kind === 'collect')).toHaveLength(40)
     expect(trials.filter((trial) => trial.boardWidth === 5)).toHaveLength(40)
     expect(trials.filter((trial) => trial.boardWidth === 7)).toHaveLength(40)
   })
@@ -86,5 +89,33 @@ describe('tetris-adapt plans', () => {
     expect(instructionFor(up)).toContain('旋转')
     expect(instructionFor(down)).toContain('下落')
     expect(instructionFor(null)).not.toMatch(/黄条|粉球|Stieger/)
+    const feet = trials.find((trial) => trial.kind === 'collect')!
+    expect(feet.className).toBe('feet')
+    expect(feet.intendedAction).toBe('hardDrop')
+    expect(feet.control).toBe(false)
+    expect(cueLabel(feet)).toContain('速降')
+    expect(instructionFor(feet)).toMatch(/只采|不控/)
+  })
+
+  it('does not count feet collection toward hit rate', () => {
+    const trials = buildTrials(PLANS.quick, 2).map((trial, index) => ({
+      ...trial,
+      outcome:
+        trial.kind === 'collect'
+          ? ('recorded' as const)
+          : index < 10
+            ? ('hit' as const)
+            : index < 20
+              ? ('timeout' as const)
+              : null,
+    }))
+    const scores = scoresByBlock(trials)
+    expect(scores[0]?.key).toBe('LR')
+    expect(scores[0]?.hits).toBe(10)
+    expect(scores[0]?.timeouts).toBe(10)
+    const feet = scores.find((row) => row.key === 'FEET')
+    expect(feet?.recorded).toBe(20)
+    expect(feet?.rate).toBeNull()
+    expect(overallHitRate(trials)).toBeCloseTo(0.5)
   })
 })

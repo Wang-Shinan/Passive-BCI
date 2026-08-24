@@ -87,7 +87,7 @@ export function AdaptBoard({
     if (task1?.teacher && task1.cue === 'rotate') {
       drawOutlineCells(ctx, occupiedCells(task1.teacher), cell, '#4ade80', true, 0.14)
     }
-    if (task1?.teacher && task1.cue === 'drop') {
+    if (task1?.teacher && (task1.cue === 'drop' || task1.cue === 'hardDrop')) {
       drawOutlineCells(ctx, occupiedCells(task1.teacher), cell, '#4ade80', true, 0.16)
     }
     if (task1?.teacher && (task1.cue === 'left' || task1.cue === 'right')) {

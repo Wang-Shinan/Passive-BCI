@@ -14,7 +14,7 @@ import type { OverlapAction } from './smrMap'
 
 export const TASK1_GRAVITY = 0.4
 
-export type Task1Cue = 'left' | 'right' | 'rotate' | 'drop'
+export type Task1Cue = 'left' | 'right' | 'rotate' | 'drop' | 'hardDrop'
 
 export type Task1State = {
   game: GameState
@@ -167,12 +167,14 @@ export function task1Hit(state: Task1State): boolean {
   if (!piece) return false
   if (state.cue === 'left' || state.cue === 'right') return piece.x === state.targetX
   if (state.cue === 'rotate') return piece.rot === state.targetRot
+  if (state.cue === 'hardDrop') return false
   return piece.y >= state.targetY
 }
 
 export function allowedTask1Action(state: Task1State, action: OverlapAction): boolean {
   if (state.cue === 'left' || state.cue === 'right') return action === 'left' || action === 'right'
   if (state.cue === 'rotate') return action === 'rotate'
+  if (state.cue === 'hardDrop') return false
   return action === 'down'
 }
 
@@ -224,7 +226,13 @@ export function demoTask1Action(state: Task1State): OverlapAction | null {
   if (state.cue === 'left') return 'left'
   if (state.cue === 'right') return 'right'
   if (state.cue === 'rotate') return 'rotate'
+  if (state.cue === 'hardDrop') return null
   return 'down'
+}
+
+export function spawnFeetTrial(seed: number): Task1State {
+  const state = spawnTask1Trial('UD', 'down', seed)
+  return { ...state, cue: 'hardDrop' }
 }
 
 export const TASK1_COLS = COLS

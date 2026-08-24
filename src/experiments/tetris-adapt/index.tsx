@@ -29,6 +29,8 @@ import {
   CUE_SEC,
   ITI_SEC,
   OVERLAP_FEEDBACK_SEC,
+  FEET_CLASS_NAME,
+  FEET_INTENDED_ACTION,
   PLANS,
   POST_SEC,
   advancePhase,
@@ -70,6 +72,7 @@ import {
   idleWell,
   occupiedCells,
   spawnTask1Trial,
+  spawnFeetTrial,
   task1Hit,
   tickTask1Gravity,
   type Task1State,
@@ -237,6 +240,7 @@ export function TetrisAdaptPage() {
       trials: next.trials.length,
       live,
       cursorDrive,
+      collect: { className: FEET_CLASS_NAME, intendedAction: FEET_INTENDED_ACTION, control: false },
       montage: montage
         ? { c3: montage.neighborNamesC3, c4: montage.neighborNamesC4 }
         : null,
@@ -306,6 +310,36 @@ export function TetrisAdaptPage() {
       kind: 'smr',
       task: item.task,
       target: item.target,
+      className: item.className,
+      control: true,
+      cue: nextWell.cue,
+      pieceType: piece?.type,
+      teacher,
+      subject,
+    })
+    return patchTrial(state, item.index, {
+      pieceType: piece?.type,
+      teacher,
+      subject,
+    })
+  }, [])
+
+  const attachCollect = useCallback((state: SessionState, item: TrialRecord): SessionState => {
+    if (item.kind !== 'collect') return state
+    const nextWell = spawnFeetTrial(state.seed + item.index * 997)
+    task1Ref.current = nextWell
+    setTask1(nextWell)
+    setMini(null)
+    miniRef.current = null
+    const piece = nextWell.game.piece
+    const teacher = nextWell.teacher ? poseFromPiece(nextWell.teacher) : undefined
+    const subject = piece ? poseFromPiece(piece) : undefined
+    loggerRef.current.log('piece_spawn', {
+      index: item.index,
+      kind: 'collect',
+      className: item.className ?? FEET_CLASS_NAME,
+      intendedAction: item.intendedAction ?? FEET_INTENDED_ACTION,
+      control: false,
       cue: nextWell.cue,
       pieceType: piece?.type,
       teacher,
@@ -376,12 +410,46 @@ export function TetrisAdaptPage() {
         kind: 'smr',
         task: item.task,
         target: item.target,
+        className: item.className,
+        control: true,
         cue: well.cue,
         pieceType: piece?.type,
         teacher,
         subject,
         outcome,
         hit: outcome === 'hit' ? item.target : null,
+        feedbackSec: elapsed,
+      })
+    },
+    [],
+  )
+
+  const completeCollect = useCallback(
+    (elapsed: number, now: number, well: Task1State) => {
+      const current = sessionRef.current
+      const item = currentTrial(current)
+      if (!item || current.phase !== 'feedback' || item.kind !== 'collect') return
+      const piece = well.game.piece
+      const teacher = well.teacher ? poseFromPiece(well.teacher) : undefined
+      const subject = piece ? poseFromPiece(piece) : undefined
+      const next = finishTrial(current, 'recorded', null, elapsed, now, {
+        pieceType: piece?.type,
+        teacher,
+        subject,
+      })
+      sessionRef.current = next
+      setSession(next)
+      loggerRef.current.log('trial', {
+        index: item.index,
+        kind: 'collect',
+        className: item.className ?? FEET_CLASS_NAME,
+        intendedAction: item.intendedAction ?? FEET_INTENDED_ACTION,
+        control: false,
+        cue: well.cue,
+        pieceType: piece?.type,
+        teacher,
+        subject,
+        outcome: 'recorded',
         feedbackSec: elapsed,
       })
     },
@@ -406,6 +474,16 @@ export function TetrisAdaptPage() {
           loggerRef.current.log('cue', {
             target: nextTrial.target,
             task: nextTrial.task,
+            className: nextTrial.className,
+            control: true,
+            cue: cueLabel(nextTrial),
+          })
+        } else if (nextTrial?.kind === 'collect') {
+          next = attachCollect(next, nextTrial)
+          loggerRef.current.log('cue', {
+            className: nextTrial.className ?? FEET_CLASS_NAME,
+            intendedAction: nextTrial.intendedAction ?? FEET_INTENDED_ACTION,
+            control: false,
             cue: cueLabel(nextTrial),
           })
         } else {
@@ -442,6 +520,15 @@ export function TetrisAdaptPage() {
         return
       }
       if (current.phase !== 'feedback' || !item) return
+
+      if (item.kind === 'collect') {
+        const well = task1Ref.current
+        if (!well) return
+        if (elapsed >= phaseDuration('feedback', item)) {
+          completeCollect(elapsed, now, well)
+        }
+        return
+      }
 
       if (item.kind === 'smr') {
         const well = task1Ref.current
@@ -514,14 +601,14 @@ export function TetrisAdaptPage() {
       if (overlapHit(moved)) completeOverlap('hit', elapsed, now, moved)
     }, Math.round(SMR_TICK_SEC * 1000))
     return () => window.clearInterval(id)
-  }, [running, live, resolveAxes, attachOverlap, attachTask1, completeOverlap, completeTask1])
+  }, [running, live, resolveAxes, attachOverlap, attachTask1, attachCollect, completeOverlap, completeTask1, completeCollect])
 
   useEffect(() => {
     if (!running) return
     const onKey = (event: KeyboardEvent) => {
       const current = sessionRef.current
       const item = currentTrial(current)
-      if (current.phase !== 'feedback' || !item) return
+      if (current.phase !== 'feedback' || !item || item.kind === 'collect') return
       let action: OverlapAction | null = null
       if (event.key === 'ArrowLeft') action = 'left'
       else if (event.key === 'ArrowRight') action = 'right'
@@ -563,7 +650,7 @@ export function TetrisAdaptPage() {
   const flash: 'hit' | 'miss' | null =
     session.phase === 'post' && trial?.outcome === 'hit'
       ? 'hit'
-      : session.phase === 'post' && trial?.outcome
+      : session.phase === 'post' && trial?.outcome && trial.outcome !== 'recorded'
         ? 'miss'
         : null
 
@@ -584,17 +671,19 @@ export function TetrisAdaptPage() {
     trial?.kind === 'overlap' &&
     (session.phase === 'cue' || session.phase === 'feedback' || session.phase === 'post')
   const showTask1 =
-    trial?.kind === 'smr' &&
+    (trial?.kind === 'smr' || trial?.kind === 'collect') &&
     (session.phase === 'cue' || session.phase === 'feedback' || session.phase === 'post')
 
   const boardTitle =
     trial?.kind === 'overlap'
       ? '落点重叠'
-      : trial?.kind === 'smr' && trial.task === 'UD'
-        ? '旋转 / 下落'
-        : trial?.kind === 'smr'
-          ? '左移 / 右移'
-          : '俄罗斯方块'
+      : trial?.kind === 'collect'
+        ? '脚想象 · 速降'
+        : trial?.kind === 'smr' && trial.task === 'UD'
+          ? '旋转 / 下落'
+          : trial?.kind === 'smr'
+            ? '左移 / 右移'
+            : '俄罗斯方块'
 
   const nextType = showTask1 ? task1?.game.next : null
   /** Task 2 uses the same cell px as default 10×20 `/tetris`; never scale down by column count. */
@@ -609,8 +698,8 @@ export function TetrisAdaptPage() {
           </Link>
           <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">方块 SMR 适配</h1>
           <p className="muted mt-1 max-w-2xl text-sm">
-            完整井里先练左移、右移、旋转、下落，再在宽 5 / 宽 7 窄井上把红色落点叠到教师绿影。
-            左手← 右手→ 双手↻ 休息↓。SMR 头冻结，不在线微调。
+            完整井里先练左移、右移、旋转、下落，再采脚想象（速降，只打标签不控方块），然后在宽 5 / 宽 7 窄井上把红色落点叠到教师绿影。
+            左手← 右手→ 双手↻ 休息↓ 双脚速降。SMR 头仍是四分类，脚想象先只录 EEG。
             {' · '}
             <Link to="/tetris" className="hover:text-[var(--text)]">
               去调试/对局页
@@ -660,7 +749,11 @@ export function TetrisAdaptPage() {
               ) : (
                 <span>
                   <i className="is-green" />
-                  {task1.cue === 'rotate' ? '绿影：目标朝向' : '绿影：目标落点'}
+                  {task1.cue === 'rotate'
+                    ? '绿影：目标朝向'
+                    : task1.cue === 'hardDrop'
+                      ? '绿影：速降落点（本轮不控方块）'
+                      : '绿影：目标落点'}
                 </span>
               )}
             </p>
@@ -677,7 +770,13 @@ export function TetrisAdaptPage() {
             actions={
               <span className="muted text-xs">
                 {trial
-                  ? `${trial.kind === 'smr' ? trial.task : `宽 ${trial.boardWidth}`} · ${trial.index + 1}/${session.trials.length}`
+                  ? `${
+                      trial.kind === 'collect'
+                        ? '脚想象'
+                        : trial.kind === 'smr'
+                          ? trial.task
+                          : `宽 ${trial.boardWidth}`
+                    } · ${trial.index + 1}/${session.trials.length}`
                   : session.plan.label}
               </span>
             }
@@ -689,7 +788,9 @@ export function TetrisAdaptPage() {
                   <NextPreview type={nextType} />
                 </div>
                 <div className="muted text-sm">
-                  ←→ 左移/右移 · ↑/X 旋转 · ↓/空格 下落
+                  {trial?.kind === 'collect'
+                    ? '本轮只想象双脚蹬踏，键盘 / SMR 都不控方块。'
+                    : '←→ 左移/右移 · ↑/X 旋转 · ↓/空格 下落'}
                   <button
                     type="button"
                     className="btn ml-2"
@@ -777,10 +878,14 @@ export function TetrisAdaptPage() {
               <ul className="m-0 list-none space-y-2 p-0 text-sm">
                 {scores.map((row) => (
                   <li key={row.key}>
-                    <strong>{row.label}</strong> {(row.rate * 100).toFixed(0)}%
+                    <strong>{row.label}</strong>{' '}
+                    {row.recorded > 0 && row.rate == null
+                      ? `已采 ${row.recorded} 段`
+                      : `${row.rate == null ? '—' : `${(row.rate * 100).toFixed(0)}%`}`}
                     <span className="muted">
-                      {' '}
-                      · {row.hits} 中 / {row.misses} 错 / {row.timeouts} 超时
+                      {row.recorded > 0 && row.rate == null
+                        ? ' · 只打标签，不控方块'
+                        : ` · ${row.hits} 中 / ${row.misses} 错 / ${row.timeouts} 超时`}
                     </span>
                   </li>
                 ))}
@@ -788,7 +893,7 @@ export function TetrisAdaptPage() {
             )}
             <p className="muted mb-0 mt-3 text-sm">
               {hitRate == null
-                ? '左移/右移：贴到目标墙侧为命中。旋转：朝向与绿影一致。下落：落到标记落点。重叠：红绿格子完全重合。'
+                ? '左移/右移：贴到目标墙侧为命中。旋转：朝向与绿影一致。下落：落到标记落点。脚想象：双脚蹬踏对应速降，本轮只录标签。重叠：红绿格子完全重合。'
                 : `总命中率 ${(hitRate * 100).toFixed(0)}%。`}
             </p>
           </Panel>
@@ -799,7 +904,7 @@ export function TetrisAdaptPage() {
         <p className="muted mt-0 text-sm">
           {cursorDrive === 'features'
             ? '按 C3/C4 Laplacian mu 驱动方块。没有特征时演示会自己靠近目标。SMR 头冻结，本页不向 REVE 打标签。'
-            : '由已拟合的 REVE 四分类驱动（左← 右→ 双手↻ 休息↓）。没有预测时回退 C3/C4 mu。SMR 头冻结，不在线微调。'}
+            : '由已拟合的 REVE 四分类驱动（左← 右→ 双手↻ 休息↓）。脚想象（feet → 速降）只写入 events，不进控制。没有预测时回退 C3/C4 mu。SMR 头冻结，不在线微调。'}
         </p>
         <p className="text-sm">
           当前预测 <strong>{runtime.latestPrediction?.class_name ?? '—'}</strong>
@@ -807,7 +912,7 @@ export function TetrisAdaptPage() {
           策略 <strong>{runtime.serviceHello?.strategy ?? '—'}</strong>
         </p>
         <p className="mb-0 text-sm">
-          开流后点开始会自动录 EEG + trial / piece_spawn / overlap_hit。三类任务头请去{' '}
+          开流后点开始会自动录 EEG + trial / piece_spawn / overlap_hit。脚想象试次会打 className=feet、intendedAction=hardDrop。三类任务头请去{' '}
           <Link to="/online-learn">基模在线学习</Link>
           ，SMR 光标练习也可去 <Link to="/smr-adapt">SMR 个体化适配</Link>。
         </p>
