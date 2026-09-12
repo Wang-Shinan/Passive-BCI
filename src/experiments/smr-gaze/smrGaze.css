@@ -1,0 +1,20 @@
+.gaze-page { max-width: 1080px; margin: 0 auto; padding: 32px 24px; }
+.gaze-page h1 { font-size: 1.8rem; margin-bottom: 12px; }
+.gaze-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 20px 0; }
+.gaze-controls input { width: 120px; }
+.gaze-arena { position: relative; height: 360px; overflow: hidden; background: #11151e; border: 1px solid #30394d; border-radius: 16px; color: #edf3ff; }
+.gaze-arena:fullscreen { width: 100vw; height: 100dvh; border: 0; border-radius: 0; cursor: none; }
+.gaze-dot { position: absolute; width: 28px; height: 28px; border-radius: 50%; background: #f3cc62; transform: translate(-50%, -50%); left: 50%; top: 50%; box-shadow: 0 0 0 5px #f3cc621a; }
+.gaze-dot::after { content: ''; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: #11151e; left: 12px; top: 12px; }
+.gaze-dot.is-left { left: 12%; }
+.gaze-dot.is-right { left: 88%; }
+.gaze-dot.is-up { top: 16%; }
+.gaze-dot.is-down { top: 84%; }
+.gaze-dot.is-center { width: 18px; height: 18px; background: #d9e2f0; box-shadow: none; }
+.gaze-dot.is-center::after { left: 7px; top: 7px; }
+.gaze-instruction { position: absolute; top: 24px; left: 50%; transform: translateX(-50%); margin: 0; font-size: 16px; color: #aeb9cf; }
+.gaze-progress { position: absolute; bottom: 18px; left: 24px; font-size: 12px; color: #7e8ba5; }
+.gaze-center { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.gaze-stop { position: absolute; right: 20px; bottom: 16px; opacity: 0.5; cursor: pointer; }
+.gaze-stop:hover, .gaze-stop:focus { opacity: 1; }
+.gaze-results { padding: 20px; border: 1px solid var(--border); border-radius: 12px; }

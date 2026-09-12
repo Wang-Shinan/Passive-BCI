@@ -2,6 +2,13 @@ import { Link } from 'react-router-dom'
 
 const TOOLS = [
   {
+    path: '/smr-gaze',
+    title: '全屏视线方向采集',
+    blurb: '直接望向四方向标靶，从 EEG 眼动伪迹训练视线方向分类器。中央基线、随机均衡试次、整组留出评估，无需眼动仪。',
+    tag: '视线方向 · 采集与训练',
+    accent: '#f3cc62',
+  },
+  {
     path: '/acquisition',
     title: '采集调试',
     blurb:

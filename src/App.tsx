@@ -12,6 +12,7 @@ import { SchulteExperiment } from './experiments/schulte'
 import { OnlineLearnPage } from './experiments/online-learn'
 import { SmrAdaptPage } from './experiments/smr-adapt'
 import { SmrUdPage } from './experiments/smr-ud'
+import { SmrGazePage } from './experiments/smr-gaze'
 import { TetrisAdaptPage } from './experiments/tetris-adapt'
 import { RecordingsPage } from './recordings/RecordingsPage'
 
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/online-learn" element={<OnlineLearnPage />} />
         <Route path="/smr-adapt" element={<SmrAdaptPage />} />
         <Route path="/smr-ud" element={<SmrUdPage />} />
+        <Route path="/smr-gaze" element={<SmrGazePage />} />
         <Route path="/tetris-adapt" element={<TetrisAdaptPage />} />
         <Route path="/rl-graph" element={<RlGraphExperiment />} />
         <Route path="/tetris" element={<TetrisExperiment />} />
