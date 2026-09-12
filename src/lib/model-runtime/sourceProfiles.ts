@@ -1,5 +1,6 @@
 import { BCIGO_CHANNEL_NAMES } from '../../acquisition/bcigo/client'
 import { NEURACLE_59_EEG_CHANNEL_NAMES } from '../../acquisition/neuracle/client'
+import { OMNI_CHANNEL_NAMES } from '../../acquisition/omni/client'
 import type { RawBridgeBatch } from '../../acquisition/runtime'
 
 export type ModelSourceProfile = {
@@ -27,6 +28,12 @@ export const MODEL_SOURCE_PROFILES: readonly ModelSourceProfile[] = [
     device: 'bcigo',
     channelNames: BCIGO_CHANNEL_NAMES,
     label: 'BCIGo 32 导',
+  },
+  {
+    id: 'omni8',
+    device: 'omni',
+    channelNames: OMNI_CHANNEL_NAMES,
+    label: 'OmniBCI 8 导',
   },
 ]
 
@@ -69,8 +76,11 @@ export function matchModelSourceProfile(
   for (const profile of MODEL_SOURCE_PROFILES) {
     if (profile.device !== batch.device) continue
     const indices = channelPickIndices(batch.channelNames, profile.channelNames)
-    if (!indices) continue
-    return { profile, indices }
+    if (indices) return { profile, indices }
+    // V19 API still has 8 hardware columns when the UI overlays montage aliases.
+    if (profile.id === 'omni8' && batch.channels === profile.channelNames.length) {
+      return { profile, indices: profile.channelNames.map((_, i) => i) }
+    }
   }
   return null
 }

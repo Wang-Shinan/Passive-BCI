@@ -21,6 +21,27 @@ export interface NeuracleProbeResult {
   message?: string
 }
 
+export interface OmniProbeResult {
+  ok: boolean
+  listening: boolean
+  port: number
+  message?: string
+}
+
+export async function probeOmniApi(): Promise<OmniProbeResult> {
+  const res = await fetch('/api/bridge/omni/probe')
+  try {
+    return (await res.json()) as OmniProbeResult
+  } catch {
+    return {
+      ok: false,
+      listening: false,
+      port: 8765,
+      message: '无法探测 OmniBCI V19 本机 API。请确认正在 npm run dev。',
+    }
+  }
+}
+
 export async function probeNeuracleForward(): Promise<NeuracleProbeResult> {
   const res = await fetch('/api/bridge/neuracle/probe')
   try {

@@ -3,7 +3,8 @@ import { sessionHub } from '../../lib/session/sessionHub'
 
 /** Stream EEG to disk (Vite /api/record) or coalesced memory as fallback. */
 
-export const RECORD_FLUSH_BYTES = 256 * 1024
+/** 64 ch × 4 B × 1000 Hz ≈ 256 KB/s; 32 KB ≈ 125 ms so live control is not stalled by 1 s dumps. */
+export const RECORD_FLUSH_BYTES = 32 * 1024
 
 export type RecordSinkKind = 'disk' | 'memory'
 

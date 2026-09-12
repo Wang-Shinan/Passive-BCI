@@ -29,7 +29,7 @@ export function LiveEegBadge({ className }: { className?: string }) {
   } else if (stale) {
     label = '已过期'
     color = 'var(--danger)'
-    hint = '流中断。请回采集页检查连接。'
+    hint = '流暂时卡住了，会再等十几秒。真正断流才回采集页。'
   } else if (meta.link === 'error') {
     label = '连接错误'
     color = 'var(--danger)'

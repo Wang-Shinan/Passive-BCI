@@ -58,6 +58,9 @@ tetris-rl/runs/
 .Python
 pip-log.txt
 
+# Unpacked vendor archives (local inspect only)
+.tmp-omnibci/
+
 # Local streamed EEG recordings (Vite /api/record). Root only — do not ignore src/recordings/.
 /recordings/
 

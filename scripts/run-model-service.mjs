@@ -73,7 +73,10 @@ function argValue(flag) {
 
 function defaultStateFile(task) {
   if (task === 'smr_control') {
-    return path.join(passiveRoot, 'recordings', '.reve-heads', 'smr_control_s02_4class_livehead.pt')
+    // Live now: 0825pm joint LoRA + LP head refit on today's BCIGo session.
+    // Previous default (0825pm hop01 LoRA + serving-refit head): recordings/.reve-heads/smr_control_s02_0825pm_4class_livehead.pt
+    // Previous default (0821 LoRA): recordings/.reve-heads/smr_control_s02_4class_livehead.pt
+    return path.join(passiveRoot, 'recordings', '.reve-heads', 'smr_control_s02_0825pm_joint_4class_livehead.pt')
   }
   return undefined
 }

@@ -3,7 +3,9 @@
 export type LiveEegDevice = 'omni' | 'neuracle' | 'bcigo' | 'demo' | null
 export type LiveEegLink = 'idle' | 'connecting' | 'open' | 'streaming' | 'demo' | 'error'
 
-export const LIVE_FRESH_MS = 1500
+export const LIVE_FRESH_MS = 8000
+/** Stay live through a stalled flush / GPU hitch; only show 已过期 after a real gap. */
+export const LIVE_STALE_MS = 15000
 const HUB_SECONDS = 6
 const HIDDEN_CH_KEY = 'passive-bci.hidden-channel-names'
 /** Off by default (EOG / unused on BCIGo 32-ch). */
@@ -77,6 +79,7 @@ class LiveEegHub {
   lastAt = 0
   detail = ''
   channelMask: boolean[] = []
+  private liveLatch = false
   private listeners = new Set<() => void>()
 
   configure(opts: {
@@ -138,6 +141,7 @@ class LiveEegHub {
     this.writeHead = (i + 1) % this.capacity
     this.filled = Math.min(this.capacity, this.filled + 1)
     this.lastAt = performance.now()
+    this.liveLatch = true
   }
 
   pushInterleaved(values: Float32Array, samples: number, channels: number): void {
@@ -163,6 +167,13 @@ class LiveEegHub {
     this.writeHead = head
     this.filled = Math.min(cap, this.filled + samples)
     this.lastAt = performance.now()
+    this.liveLatch = true
+  }
+
+  /** Packet arrived even if the ingest queue has not drained into the ring yet. */
+  noteArrival(): void {
+    this.lastAt = performance.now()
+    if (this.link === 'streaming' || this.link === 'demo') this.liveLatch = true
   }
 
   markConnecting(detail?: string): void {
@@ -193,6 +204,7 @@ class LiveEegHub {
     this.link = 'idle'
     this.device = null
     this.lastAt = 0
+    this.liveLatch = false
     this.writeHead = 0
     this.filled = 0
     for (const buf of this.buffers) buf.fill(0)
@@ -201,9 +213,19 @@ class LiveEegHub {
   }
 
   isFresh(maxAgeMs = LIVE_FRESH_MS): boolean {
-    if (this.link !== 'streaming' && this.link !== 'demo') return false
+    if (this.link !== 'streaming' && this.link !== 'demo') {
+      this.liveLatch = false
+      return false
+    }
     if (!this.lastAt || this.filled < 16) return false
-    return performance.now() - this.lastAt <= maxAgeMs
+    const age = performance.now() - this.lastAt
+    if (age <= maxAgeMs) {
+      this.liveLatch = true
+      return true
+    }
+    if (this.liveLatch && age <= LIVE_STALE_MS) return true
+    this.liveLatch = false
+    return false
   }
 
   get meta(): LiveEegMeta {

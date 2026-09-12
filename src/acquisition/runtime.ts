@@ -10,6 +10,7 @@ import { BinRecorder } from './session/recorder'
 import { WebSerialTransport, type SerialStatus } from './transport/webSerial'
 import type { BcigoWsClient } from './bcigo/client'
 import type { NeuracleWsClient } from './neuracle/client'
+import type { OmniWsClient } from './omni/client'
 import {
   INGEST_DRAIN_BUDGET_MS,
   BRIDGE_DRAIN_BUDGET_MS,
@@ -20,6 +21,7 @@ import {
 } from './liveCatchup'
 
 export type DeviceKind = 'omni' | 'neuracle' | 'bcigo'
+export type OmniLink = 'usb' | 'api'
 export type ConnUi = 'idle' | 'connecting' | 'open' | 'streaming' | 'error' | 'unsupported' | 'demo'
 
 export type BridgeBatch = {
@@ -35,6 +37,9 @@ export type BridgeBatch = {
   deviceEndMs?: number
   deviceStartMs?: number
   deviceTotalSamples?: number
+  sequence?: Uint32Array
+  validFlags?: Uint8Array
+  droppedSamples?: number
 }
 
 export type RawBridgeBatch = BridgeBatch & {
@@ -55,6 +60,8 @@ export const acqRuntime = {
   recorder: new BinRecorder(),
   neuracle: null as NeuracleWsClient | null,
   bcigo: null as BcigoWsClient | null,
+  omni: null as OmniWsClient | null,
+  omniLink: 'api' as OmniLink,
   streaming: false,
   lsb: channelLsbUv(defaultChannelConfig().gains),
   device: 'omni' as DeviceKind,
@@ -232,6 +239,7 @@ function deliverBridge(batch: BridgeBatch): void {
 
 /** Bridge batches while the acquisition page is unmounted. */
 export function ingestBridgeToHub(batch: BridgeBatch): void {
+  liveEegHub.noteArrival()
   bridgeQ.push(batch)
   addPendingSamples(batch.samples)
   scheduleDrain()
@@ -251,6 +259,7 @@ export function beginRawBridgeStream(): void {
 }
 
 function ingestSerialToHub(chunk: Uint8Array): void {
+  liveEegHub.noteArrival()
   const copy = copyBytes(chunk)
   serialQ.push(copy)
   addQueuedBytes(copy.byteLength)
@@ -287,6 +296,14 @@ export function bindPersistentTransport(): void {
 export function setAcquisitionUi(ui: AcquisitionUiSink | null): void {
   acqRuntime.ui = ui
   bindPersistentTransport()
+}
+
+export function omniUsesApi(): boolean {
+  return acqRuntime.device === 'omni' && acqRuntime.omniLink === 'api'
+}
+
+export function omniRecordsAsFrames(): boolean {
+  return acqRuntime.device === 'omni' && acqRuntime.omniLink === 'usb'
 }
 
 export function syncHubLinkFromStatus(status: ConnUi, detail?: string): void {

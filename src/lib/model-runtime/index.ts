@@ -18,6 +18,7 @@ export {
   REVE_TASKS,
   REVE_DEFAULT_LIVE_STEP_SEC,
   REVE_WINDOW_SEC,
+  LIVE_PREDICTION_MAX_AGE_MS,
   TETRIS_LIVE_STEP_SEC,
   classBarColor,
   defaultReveStrategy,

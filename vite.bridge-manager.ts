@@ -512,6 +512,24 @@ export function bridgeManagerPlugin(): Plugin {
 
   const middleware: Connect.NextHandleFunction = (req, res, next) => {
     const url = req.url?.split('?')[0] ?? ''
+    if (url === '/api/bridge/omni/probe' && (req.method === 'GET' || req.method === 'POST')) {
+      void isPortOpen(8765)
+        .then((listening) =>
+          sendJson(res, 200, {
+            ok: listening,
+            listening,
+            port: 8765,
+            message: listening
+              ? 'OmniBCI V19 API 已在 :8765 监听，可以连接。'
+              : '未发现 OmniBCI V19（端口 8765）。请先打开应用并开始测量。',
+          }),
+        )
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err)
+          sendJson(res, 500, { ok: false, listening: false, port: 8765, message })
+        })
+      return
+    }
     if (url === '/api/bridge/neuracle/probe' && (req.method === 'GET' || req.method === 'POST')) {
       void probeNeuracle()
         .then((body) => sendJson(res, 200, body))

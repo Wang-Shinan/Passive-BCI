@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   BinRecorder,
+  RECORD_FLUSH_BYTES,
   formatRecordBytes,
   recordFilename,
   type RecordSink,
@@ -36,6 +37,12 @@ describe('formatRecordBytes', () => {
     expect(formatRecordBytes(512)).toBe('512 B')
     expect(formatRecordBytes(2048)).toBe('2.0 KB')
     expect(formatRecordBytes(2 * 1024 * 1024)).toBe('2.0 MB')
+  })
+})
+
+describe('RECORD_FLUSH_BYTES', () => {
+  it('stays small enough for live control (~125 ms at 64 ch / 1 kHz)', () => {
+    expect(RECORD_FLUSH_BYTES).toBe(32 * 1024)
   })
 })
 

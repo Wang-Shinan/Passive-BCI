@@ -313,6 +313,12 @@ export default defineConfig({
   ],
   server: {
     proxy: {
+      // OmniBCI V19 local API — app owns ws://127.0.0.1:8765
+      '/ws/omni': {
+        target: 'ws://127.0.0.1:8765',
+        ws: true,
+        rewrite: (path) => path.replace(/^\/ws\/omni/, '/v1/stream'),
+      },
       // Neuracle bridge (bridges/neuracle/ws_bridge.py) — JellyFish TCP → WS
       '/ws/neuracle': {
         target: 'ws://127.0.0.1:8766',

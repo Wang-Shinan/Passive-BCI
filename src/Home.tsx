@@ -5,7 +5,7 @@ const TOOLS = [
     path: '/acquisition',
     title: '采集调试',
     blurb:
-      'OmniBCI / 博睿康 / 强脑：实时波形、通道配置与开流。开流后实验页可切「实时 EEG」，并在方块页按局录制。',
+      'OmniBCI V19 应用 API / USB、博睿康、强脑：实时波形、通道配置与开流。开流后实验页可切「实时 EEG」，并在方块页按局录制。',
     tag: 'OmniBCI · 博睿康 · 强脑',
     accent: '#22d3ee',
   },
@@ -16,6 +16,14 @@ const TOOLS = [
       '浏览 recordings/ 里的每一局：被试、实验、时长、事件数、备注，打包 ZIP 下载或删除。',
     tag: 'EEG · events · context',
     accent: '#38d39f',
+  },
+  {
+    path: '/smr-ud',
+    title: 'SMR 上下控制',
+    blurb:
+      '只演示最稳的一轴：双手开合上升、主动放空下降。大光标连续控制，可打靶计分。适合现场接上冻结的 REVE 四分类头。',
+    tag: '演示 · 双手↑ 休息↓',
+    accent: '#e8b84a',
   },
   {
     path: '/smr-adapt',
@@ -133,7 +141,7 @@ export function Home() {
         </h1>
         <p className="muted mt-3 max-w-2xl text-base">
           先在采集调试连接设备并点「开始采集」，再进实验。采俄罗斯方块时在实验页点「开始本局 / 结束本局」，到「会话库」查看和下载。
-          未开流时仍可用手动滑块或「演示数据」。采集支持 OmniBCI、博睿康与强脑 BCIGo。
+          未开流时仍可用手动滑块或「演示数据」。采集支持 OmniBCI V19 应用 API、USB 固件、博睿康与强脑 BCIGo。
         </p>
       </header>
 

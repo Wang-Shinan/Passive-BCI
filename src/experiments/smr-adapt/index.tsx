@@ -9,6 +9,7 @@ import {
   TemporalFilterControls,
   ensureModelService,
   liveStepSecForReveTask,
+  LIVE_PREDICTION_MAX_AGE_MS,
   modelRuntimeHub,
   modelServiceStatus,
   reveLiveHopMatches,
@@ -114,6 +115,7 @@ export function SmrAdaptPage() {
   const warmupH = useRef<Welford>({ n: 0, mean: 0, m2: 0 })
   const warmupV = useRef<Welford>({ n: 0, mean: 0, m2: 0 })
   const cursorDriveRef = useRef(cursorDrive)
+  const sawLiveRef = useRef(false)
   const runtime = useModelRuntime()
   const eeg = useLiveEeg()
 
@@ -175,6 +177,7 @@ export function SmrAdaptPage() {
     [eeg.meta.channelNames],
   )
   const live = eeg.live
+  if (live) sawLiveRef.current = true
   const trial = currentTrial(session)
   const running = session.phase !== 'idle' && session.phase !== 'done'
   const scores = useMemo(() => scoresByTask(session.trials), [session.trials])
@@ -191,6 +194,7 @@ export function SmrAdaptPage() {
     warmupH.current = { n: 0, mean: 0, m2: 0 }
     warmupV.current = { n: 0, mean: 0, m2: 0 }
     temporalFilterRef.current.reset()
+    sawLiveRef.current = live
     setHorizFlipped(false)
     const seed = randomSeed()
     loggerRef.current.clear()
@@ -286,7 +290,7 @@ export function SmrAdaptPage() {
       let zH: number
       let zV: number
       const useReve = cursorDriveRef.current === 'reve'
-      const pred = useReve && live ? modelRuntimeHub.latestObservation(2500) : null
+      const pred = useReve ? modelRuntimeHub.latestObservation(LIVE_PREDICTION_MAX_AGE_MS) : null
       if (pred && pred.probabilities.length === pred.class_names.length) {
         const decision = temporalFilterRef.current.observePrediction(pred)
         const axes = reveCursorAxes(decision.classNames, decision.probabilities)
@@ -316,6 +320,20 @@ export function SmrAdaptPage() {
         pushWelford(warmupV.current, raw.vert)
         zH = horizNorm.current.stats() ? horizNorm.current.z(raw.horiz) : zWelford(warmupH.current, raw.horiz)
         zV = vertNorm.current.stats() ? vertNorm.current.z(raw.vert) : zWelford(warmupV.current, raw.vert)
+      } else if (sawLiveRef.current) {
+        if (elapsed >= FEEDBACK_SEC) {
+          const next = finishTrial(current, 'timeout', null, elapsed, now)
+          setSession(next)
+          loggerRef.current.log('trial', {
+            index: item.index,
+            task: item.task,
+            target: item.target,
+            outcome: 'timeout',
+            hit: null,
+            feedbackSec: elapsed,
+          })
+        }
+        return
       } else {
         const demo = demoControl(item.target)
         zH = demo.zH
@@ -359,7 +377,11 @@ export function SmrAdaptPage() {
           </Link>
           <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">SMR 个体化适配</h1>
           <p className="muted mt-1 max-w-2xl text-sm">
-            Stieger 式连续光标：左手左、右手右、双手上、休息下。光标可选 REVE 四分类或原来的 C3/C4 mu。SMR 头冻结，不在线微调。
+            Stieger 式连续光标：左手左、右手右、双手上、休息下。光标可选 REVE 四分类或原来的 C3/C4 mu。SMR 头冻结，不在线微调。只展示上下可去{' '}
+            <Link to="/smr-ud" style={{ color: 'var(--accent)' }}>
+              SMR 上下控制
+            </Link>
+            。
           </p>
         </div>
         <div className="flex flex-col items-end gap-3">

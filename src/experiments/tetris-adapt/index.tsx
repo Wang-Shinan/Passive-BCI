@@ -7,6 +7,7 @@ import {
   ModelServicePanel,
   TETRIS_LIVE_STEP_SEC,
   TemporalFilterControls,
+  LIVE_PREDICTION_MAX_AGE_MS,
   ensureModelService,
   modelRuntimeHub,
   modelServiceStatus,
@@ -256,7 +257,7 @@ export function TetrisAdaptPage() {
 
   const resolveAxes = useCallback((): { zH: number; zV: number } | null => {
     const useReve = cursorDriveRef.current === 'reve'
-    const pred = useReve && live ? modelRuntimeHub.latestObservation(2500) : null
+    const pred = useReve ? modelRuntimeHub.latestObservation(LIVE_PREDICTION_MAX_AGE_MS) : null
     if (pred) {
       const decision = temporalFilterRef.current.observePrediction(pred)
       return axesFromReve(decision.classNames, decision.probabilities)
@@ -547,7 +548,7 @@ export function TetrisAdaptPage() {
         }
 
         const useReve = cursorDriveRef.current === 'reve'
-        const pred = useReve && live ? modelRuntimeHub.latestObservation(2500) : null
+        const pred = useReve ? modelRuntimeHub.latestObservation(LIVE_PREDICTION_MAX_AGE_MS) : null
         let action: OverlapAction | null = null
         if (pred) {
           if (pred.observation_id === lastObsRef.current) return
@@ -556,7 +557,7 @@ export function TetrisAdaptPage() {
         } else {
           if (now - lastMoveAtRef.current < OVERLAP_MOVE_MS) return
           const axes = resolveAxes()
-          action = axes ? overlapActionFromAxes(axes.zH, axes.zV) : demoTask1Action(fallen)
+          action = axes ? overlapActionFromAxes(axes.zH, axes.zV) : live ? demoTask1Action(fallen) : null
         }
         if (!action) return
         lastMoveAtRef.current = now
@@ -581,7 +582,7 @@ export function TetrisAdaptPage() {
       }
 
       const useReve = cursorDriveRef.current === 'reve'
-      const pred = useReve && live ? modelRuntimeHub.latestObservation(2500) : null
+      const pred = useReve ? modelRuntimeHub.latestObservation(LIVE_PREDICTION_MAX_AGE_MS) : null
       let action: OverlapAction | null = null
       if (pred) {
         if (pred.observation_id === lastObsRef.current) return
@@ -590,7 +591,7 @@ export function TetrisAdaptPage() {
       } else {
         if (now - lastMoveAtRef.current < OVERLAP_MOVE_MS) return
         const axes = resolveAxes()
-        action = axes ? overlapActionFromAxes(axes.zH, axes.zV) : demoOverlapAction(board)
+        action = axes ? overlapActionFromAxes(axes.zH, axes.zV) : live ? demoOverlapAction(board) : null
       }
       if (!action || action === 'down') return
       lastMoveAtRef.current = now

@@ -208,11 +208,17 @@ const LEFT_NAMES = new Set(['left_hand', 'left'])
 const UP_NAMES = new Set(['both_hand', 'both_hands', 'both', 'up'])
 const DOWN_NAMES = new Set(['rest', 'down', 'idle'])
 
-/** Map a 4-class REVE prediction onto the same cursor axes as C3/C4 mu. */
-export function reveCursorAxes(
+export type SmrClassMasses = {
+  left: number
+  right: number
+  up: number
+  down: number
+}
+
+export function smrClassMasses(
   classNames: readonly string[],
   probabilities: readonly number[],
-): { zH: number; zV: number } {
+): SmrClassMasses {
   let left = 0
   let right = 0
   let up = 0
@@ -225,7 +231,16 @@ export function reveCursorAxes(
     else if (UP_NAMES.has(name)) up += value
     else if (DOWN_NAMES.has(name)) down += value
   }
-  return { zH: right - left, zV: up - down }
+  return { left, right, up, down }
+}
+
+/** Map a 4-class REVE prediction onto the same cursor axes as C3/C4 mu. */
+export function reveCursorAxes(
+  classNames: readonly string[],
+  probabilities: readonly number[],
+): { zH: number; zV: number } {
+  const mass = smrClassMasses(classNames, probabilities)
+  return { zH: mass.right - mass.left, zV: mass.up - mass.down }
 }
 
 /** +1 if pos-class mean is higher; -1 if the physiology-signed axis is inverted. */

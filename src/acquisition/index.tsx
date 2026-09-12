@@ -9,6 +9,15 @@ import {
 } from './neuracle/client'
 import { BcigoWsClient, type BcigoHello } from './bcigo/client'
 import {
+  OmniWsClient,
+  OMNI_API_PORT,
+  OMNI_STREAM_FILTERED,
+  OMNI_STREAM_RAW,
+  type OmniHello,
+  type OmniStreamKind,
+} from './omni/client'
+import { sequenceGaps } from './omni/protocol'
+import {
   CMD_START,
   CMD_STOP,
   cmdBulkConfig,
@@ -41,13 +50,14 @@ import { FftCanvas } from './FftCanvas'
 import { ImpedancePanel } from './ImpedancePanel'
 import { FeaturePanel } from './FeaturePanel'
 import { ChannelRail, ChannelSettingsDialog } from './ChannelRail'
-import { ensureBridge, probeNeuracleForward } from './bridgeApi'
+import { ensureBridge, probeNeuracleForward, probeOmniApi } from './bridgeApi'
 import {
   acqRuntime,
   beginRawBridgeStream,
   ingestBridgeToHub,
   setAcquisitionUi,
   waitConfigAck,
+  type OmniLink,
 } from './runtime'
 import {
   formatLagMs,
@@ -82,7 +92,12 @@ import {
   type LiveFeatureSnapshot,
 } from '../lib/features'
 import { ModelServicePanel } from '../lib/model-runtime'
-import { formatRecordBytes, type RecordMeta, type RecordSinkKind } from './session/recorder'
+import {
+  RECORD_FLUSH_BYTES,
+  formatRecordBytes,
+  type RecordMeta,
+  type RecordSinkKind,
+} from './session/recorder'
 
 const RING_SECONDS = 6
 /** Extra ring beyond the visible window so scrolling never wraps inside the plot. */
@@ -98,6 +113,8 @@ const FEATURE_HISTORY = 60
 const LAG_SPARK_BARS = 32
 const CFG_STORAGE_KEY = 'passive-bci.acquisition.channel-config'
 const DEVICE_STORAGE_KEY = 'passive-bci.acquisition.device'
+const OMNI_LINK_STORAGE_KEY = 'passive-bci.acquisition.omni-link'
+const OMNI_STREAM_STORAGE_KEY = 'passive-bci.acquisition.omni-stream'
 
 const EMPTY_STATS = {
   samples: 0,
@@ -130,13 +147,25 @@ function isBridgeDevice(d: DeviceKind): boolean {
   return d === 'neuracle' || d === 'bcigo'
 }
 
-function recordPrefix(d: DeviceKind): string {
-  return d === 'neuracle' ? 'neuracle_eeg' : d === 'bcigo' ? 'bcigo_eeg' : 'omni_ads1299'
+function usesBridgeStream(d: DeviceKind, omniLink: OmniLink): boolean {
+  return isBridgeDevice(d) || (d === 'omni' && omniLink === 'api')
 }
 
-function streamingRecordDetail(d: DeviceKind, sink: RecordSinkKind): string {
+function recordPrefix(d: DeviceKind, omniLink: OmniLink): string {
+  if (d === 'neuracle') return 'neuracle_eeg'
+  if (d === 'bcigo') return 'bcigo_eeg'
+  return omniLink === 'api' ? 'omni_eeg' : 'omni_ads1299'
+}
+
+function streamingRecordDetail(d: DeviceKind, sink: RecordSinkKind, omniLink: OmniLink): string {
   const src =
-    d === 'bcigo' ? '强脑 EEG' : d === 'neuracle' ? '博睿康 EEG' : '原始 48 字节帧'
+    d === 'bcigo'
+      ? '强脑 EEG'
+      : d === 'neuracle'
+        ? '博睿康 EEG'
+        : omniLink === 'api'
+          ? 'OmniBCI V19 μV'
+          : '原始 48 字节帧'
   if (sink === 'disk') {
     return `采集中：${src} 边采边写入 recordings/<会话>/（原始 EEG + 游戏事件）。`
   }
@@ -190,16 +219,51 @@ function bcigoWsUrl(): string {
   return `${proto}//${window.location.host}/ws/bcigo`
 }
 
-function deviceDetail(d: DeviceKind, supported: boolean): string {
+function omniWsUrl(): string {
+  if (typeof window === 'undefined') return `ws://127.0.0.1:${OMNI_API_PORT}/v1/stream`
+  const host = window.location.hostname
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return `ws://127.0.0.1:${OMNI_API_PORT}/v1/stream`
+  }
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${window.location.host}/ws/omni`
+}
+
+function loadOmniLink(): OmniLink {
+  if (acqRuntime.omni) return 'api'
+  if (acqRuntime.transport.connected) return 'usb'
+  try {
+    const v = localStorage.getItem(OMNI_LINK_STORAGE_KEY)
+    if (v === 'usb' || v === 'api') return v
+  } catch {
+    /* ignore */
+  }
+  return acqRuntime.omniLink === 'usb' ? 'usb' : 'api'
+}
+
+function loadOmniStream(): OmniStreamKind {
+  try {
+    const v = localStorage.getItem(OMNI_STREAM_STORAGE_KEY)
+    if (v === OMNI_STREAM_FILTERED || v === OMNI_STREAM_RAW) return v
+  } catch {
+    /* ignore */
+  }
+  return OMNI_STREAM_RAW
+}
+
+function deviceDetail(d: DeviceKind, supported: boolean, omniLink: OmniLink = 'api'): string {
   if (d === 'neuracle') {
     return '连接博睿康 Collect 的 TCP 数据转发（不是实验设置里的 LSL）。开始实验后，在采集界面点「数据转发」→ 选探头 →「开始」。'
   }
   if (d === 'bcigo') {
     return '连接强脑 BCIGo Wi‑Fi（点连接会自动启动本机桥接；基于 bcigo-sdk）。'
   }
+  if (omniLink === 'api') {
+    return '先打开 OmniBCI V19 并开始测量，再点连接。本页订阅本机 ws://127.0.0.1:8765 的 8 导 250 Hz μV 流。'
+  }
   return supported
-    ? '通过 Web Serial 直连 ADS1299（OmniBCI 固件）。'
-    : '当前浏览器不支持 Web Serial，请使用 Chrome / Edge。'
+    ? '通过 Web Serial 直连 ADS1299（OmniBCI 固件）。与 V19 应用不要同时占用 USB。'
+    : '当前浏览器不支持 Web Serial，请使用 Chrome / Edge，或改用 V19 应用 API。'
 }
 
 function loadSavedConfig(): ChannelConfig {
@@ -253,11 +317,17 @@ export function AcquisitionDebugPage() {
       return 'omni'
     }
   })
+  const [omniLink, setOmniLink] = useState<OmniLink>(() => loadOmniLink())
+  const [omniStream, setOmniStream] = useState<OmniStreamKind>(() => loadOmniStream())
+  const [omniProbe, setOmniProbe] = useState('')
   const [status, setStatus] = useState<ConnUi>(() => {
     if (acqRuntime.status !== 'idle') return acqRuntime.status
-    return device === 'omni' ? (supported ? 'idle' : 'unsupported') : 'idle'
+    if (device === 'omni' && loadOmniLink() === 'usb') return supported ? 'idle' : 'unsupported'
+    return 'idle'
   })
-  const [detail, setDetail] = useState(() => liveEegHub.meta.detail || deviceDetail(device, supported))
+  const [detail, setDetail] = useState(
+    () => liveEegHub.meta.detail || deviceDetail(device, supported, loadOmniLink()),
+  )
   const [cfg, setCfg] = useState<ChannelConfig>(() => loadSavedConfig())
   const [montageId, setMontageId] = useState('custom')
   const [eegMode, setEegMode] = useState(1)
@@ -325,6 +395,7 @@ export function AcquisitionDebugPage() {
   const transportRef = useRef(acqRuntime.transport)
   const neuracleRef = useRef<NeuracleWsClient | null>(acqRuntime.neuracle)
   const bcigoRef = useRef<BcigoWsClient | null>(acqRuntime.bcigo)
+  const omniRef = useRef<OmniWsClient | null>(acqRuntime.omni)
   const parserRef = useRef<AdsFrameParser | null>(acqRuntime.parser)
   const filterRef = useRef(acqRuntime.filter)
   const recorderRef = useRef(acqRuntime.recorder)
@@ -350,6 +421,9 @@ export function AcquisitionDebugPage() {
     channels: number
     packetLoss: number
     packetCount: number
+    sequence?: Uint32Array
+    validFlags?: Uint8Array
+    droppedSamples?: number
   }) => void>(() => {})
   const lagValueRef = useRef<HTMLElement>(null)
   const lagSparkRef = useRef<HTMLSpanElement>(null)
@@ -484,6 +558,10 @@ export function AcquisitionDebugPage() {
   )
 
   useEffect(() => {
+    acqRuntime.omniLink = omniLink
+  }, [omniLink])
+
+  useEffect(() => {
     if (device !== 'neuracle') return
     let cancelled = false
     const tick = () => {
@@ -500,8 +578,25 @@ export function AcquisitionDebugPage() {
   }, [device])
 
   useEffect(() => {
+    if (device !== 'omni' || omniLink !== 'api') return
+    let cancelled = false
+    const tick = () => {
+      void probeOmniApi().then((r) => {
+        if (!cancelled && r.message) setOmniProbe(r.message)
+      })
+    }
+    tick()
+    const id = window.setInterval(tick, 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [device, omniLink])
+
+  useEffect(() => {
     neuracleRef.current = acqRuntime.neuracle
     bcigoRef.current = acqRuntime.bcigo
+    omniRef.current = acqRuntime.omni
     if (!acqRuntime.parser) {
       acqRuntime.parser = new AdsFrameParser(() => acqRuntime.lsb)
     }
@@ -621,7 +716,7 @@ export function AcquisitionDebugPage() {
         if (queued > 0) {
           recEl.hidden = false
           recEl.textContent = `落盘积压 ${formatRecordBytes(queued)}`
-          recEl.setAttribute('data-warn', queued > 256 * 1024 ? '2' : '1')
+          recEl.setAttribute('data-warn', queued > RECORD_FLUSH_BYTES * 2 ? '2' : '1')
         } else {
           recEl.hidden = true
         }
@@ -721,6 +816,7 @@ export function AcquisitionDebugPage() {
       await sleep(80)
       await applyHardwareConfig(cfg)
       acqRuntime.device = 'omni'
+      acqRuntime.omniLink = 'usb'
       acqRuntime.status = 'open'
       setCatchupClock(FS, FRAME_BYTES)
       const msg = '串口已打开。可改通道参数后点「开始采集」。'
@@ -782,6 +878,9 @@ export function AcquisitionDebugPage() {
     bcigoRef.current?.disconnect()
     bcigoRef.current = null
     acqRuntime.bcigo = null
+    omniRef.current?.disconnect()
+    omniRef.current = null
+    acqRuntime.omni = null
     acqRuntime.streaming = false
     acqRuntime.status = 'idle'
     liveEegHub.markIdle('已断开。')
@@ -814,13 +913,32 @@ export function AcquisitionDebugPage() {
       setStreamLabels([...cfg.labels])
       setVisible(Array.from({ length: CHANNELS }, () => true))
       setSampleRate(FS)
-      setCatchupClock(FS, FRAME_BYTES)
-      setStatus(supported ? 'idle' : 'unsupported')
-      setDetail(deviceDetail('omni', supported))
+      setCatchupClock(omniLink === 'usb' ? FS : FS, omniLink === 'usb' ? FRAME_BYTES : undefined)
+      setStatus(omniLink === 'usb' && !supported ? 'unsupported' : 'idle')
+      setDetail(deviceDetail('omni', supported, omniLink))
     } else {
       setStatus('idle')
-      setDetail(deviceDetail(next, supported))
+      setDetail(deviceDetail(next, supported, omniLink))
     }
+  }
+
+  const switchOmniLink = async (next: OmniLink) => {
+    if (next === omniLink) return
+    await disconnect()
+    setOmniLink(next)
+    acqRuntime.omniLink = next
+    try {
+      localStorage.setItem(OMNI_LINK_STORAGE_KEY, next)
+    } catch {
+      /* ignore */
+    }
+    resizeBuffers(CHANNELS)
+    setStreamLabels([...cfg.labels])
+    setVisible(Array.from({ length: CHANNELS }, () => true))
+    setSampleRate(FS)
+    setCatchupClock(FS, next === 'usb' ? FRAME_BYTES : undefined)
+    setStatus(next === 'usb' && !supported ? 'unsupported' : 'idle')
+    setDetail(deviceDetail('omni', supported, next))
   }
 
   const neuracleChannelNames = (): string[] | null => {
@@ -837,6 +955,9 @@ export function AcquisitionDebugPage() {
       bcigoRef.current?.disconnect()
       bcigoRef.current = null
       acqRuntime.bcigo = null
+      omniRef.current?.disconnect()
+      omniRef.current = null
+      acqRuntime.omni = null
       acqRuntime.device = 'neuracle'
       resetBuffers(8)
       acqRuntime.status = 'connecting'
@@ -932,12 +1053,138 @@ export function AcquisitionDebugPage() {
     })()
   }
 
+  const connectOmniApi = () => {
+    void (async () => {
+      stopDemo()
+      omniRef.current?.disconnect()
+      neuracleRef.current?.disconnect()
+      neuracleRef.current = null
+      acqRuntime.neuracle = null
+      bcigoRef.current?.disconnect()
+      bcigoRef.current = null
+      acqRuntime.bcigo = null
+      acqRuntime.device = 'omni'
+      acqRuntime.omniLink = 'api'
+      resetBuffers(CHANNELS)
+      acqRuntime.status = 'connecting'
+      liveEegHub.configure({ device: 'omni', sampleRate: FS, channelNames: [...cfg.labels] })
+      liveEegHub.markConnecting('正在连接 OmniBCI V19 本机 API…')
+      setStatus('connecting')
+      setDetail('正在连接 OmniBCI V19 本机 API…')
+      try {
+        const probed = await probeOmniApi()
+        if (probed.message) setOmniProbe(probed.message)
+        if (!probed.listening) {
+          setStatus('error')
+          setDetail(probed.message || '未发现 OmniBCI V19。请先打开应用并开始测量。')
+          liveEegHub.markError(probed.message)
+          return
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        setStatus('error')
+        setDetail(msg)
+        liveEegHub.markError(msg)
+        return
+      }
+
+      const labels = cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!)
+      const client = new OmniWsClient({
+        url: omniWsUrl(),
+        stream: omniStream,
+        onStatus: (s, d) => {
+          if (s === 'connecting') {
+            acqRuntime.status = 'connecting'
+            setStatus('connecting')
+            liveEegHub.markConnecting(d)
+          } else if (s === 'live') {
+            setStatus((cur) => {
+              const next = cur === 'streaming' ? 'streaming' : 'open'
+              acqRuntime.status = next
+              if (next === 'open') liveEegHub.markOpen(d)
+              return next
+            })
+          } else if (s === 'error') {
+            acqRuntime.status = 'error'
+            acqRuntime.streaming = false
+            streamingRef.current = false
+            setStatus('error')
+            liveEegHub.markError(d)
+          } else if (s === 'closed' || s === 'idle') {
+            streamingRef.current = false
+            acqRuntime.streaming = false
+            acqRuntime.status = 'idle'
+            acqRuntime.omni = null
+            setStatus('idle')
+            liveEegHub.markIdle(d ?? '连接已断开')
+          }
+          if (d) setDetail(d)
+        },
+        onHello: (hello: OmniHello) => {
+          const names =
+            hello.channels.length === labels.length ? labels : hello.channels
+          resizeBuffers(names.length, hello.sample_rate)
+          setStreamLabels(names)
+          setStreamTypes([])
+          setSampleRate(hello.sample_rate)
+          setCatchupClock(hello.sample_rate)
+          setVisible(visibleMaskForNames(names))
+          streamingRef.current = false
+          acqRuntime.streaming = false
+          setFeatureLatest(null)
+          setFeatureHistory([])
+          acqRuntime.status = 'open'
+          acqRuntime.device = 'omni'
+          acqRuntime.omniLink = 'api'
+          setStatus('open')
+          const msg = `已连接 OmniBCI V19 · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。若无波形，请在应用里开始测量，再点「开始采集」。`
+          liveEegHub.configure({
+            device: 'omni',
+            sampleRate: hello.sample_rate,
+            channelNames: names,
+            detail: msg,
+          })
+          liveEegHub.markOpen(msg)
+          setDetail(msg)
+        },
+        onBatch: (batch) =>
+          ingestBridgeToHub({
+            values: batch.values,
+            samples: batch.samples,
+            channels: batch.channels,
+            sampleRate: batch.sampleRate,
+            channelNames: batch.channelNames,
+            unit: batch.unit,
+            packetLoss: batch.packetLoss,
+            packetCount: batch.packetCount,
+            arrivalNowMs: performance.now(),
+            sequence: batch.sequence,
+            validFlags: batch.valid,
+          }),
+        onGap: (gap) => {
+          statsRef.current.packetLoss += gap.dropped_samples
+          statsRef.current.seqGaps += gap.dropped_samples
+          setDetail(
+            `OmniBCI 流出现缺口：丢 ${gap.dropped_samples} 样本 / ${gap.dropped_batches} 批。请丢弃当前分析窗。`,
+          )
+        },
+        onError: (message) => setDetail(message),
+      })
+      omniRef.current = client
+      acqRuntime.omni = client
+      client.connect()
+    })()
+  }
+
     const ingestBridgeBatch = (batch: {
     values: Float32Array
     samples: number
     channels: number
     packetLoss: number
     packetCount: number
+    sequence?: Uint32Array
+    validFlags?: Uint8Array
+    droppedSamples?: number
   }) => {
     if (!streamingRef.current) {
       const st = statsRef.current
@@ -958,7 +1205,7 @@ export function AcquisitionDebugPage() {
         rawRingRef.current[c]![head] = batch.values[off + c] ?? 0
         filtRingRef.current[c]![head] = filtered[off + c] ?? 0
       }
-      validRingRef.current[head] = 1
+      validRingRef.current[head] = batch.validFlags ? batch.validFlags[s] ?? 1 : 1
       head = (head + 1) % cap
     }
     writeHeadRef.current = head
@@ -980,8 +1227,19 @@ export function AcquisitionDebugPage() {
     const st = statsRef.current
     st.samples += samples
     if (rateHz) st.rateHz = rateHz
-    st.packetLoss = batch.packetLoss
+    st.packetLoss = batch.packetLoss + (batch.droppedSamples ?? 0)
     st.packetCount = batch.packetCount
+    if (batch.validFlags) {
+      for (let i = 0; i < batch.validFlags.length; i++) {
+        if (!batch.validFlags[i]) st.invalid += 1
+      }
+    }
+    if (batch.sequence && batch.sequence.length) {
+      const gap = sequenceGaps(batch.sequence, lastSeqRef.current)
+      st.seqGaps += gap.gaps
+      st.lastSeq = gap.last
+      lastSeqRef.current = gap.last
+    }
     if (recorderRef.current.recording && !acqRuntime.impedanceActive) {
       const bytes = new Uint8Array(batch.values.buffer, batch.values.byteOffset, batch.values.byteLength)
       recorderRef.current.append(bytes)
@@ -996,6 +1254,9 @@ export function AcquisitionDebugPage() {
       neuracleRef.current?.disconnect()
       neuracleRef.current = null
       acqRuntime.neuracle = null
+      omniRef.current?.disconnect()
+      omniRef.current = null
+      acqRuntime.omni = null
       acqRuntime.device = 'bcigo'
       resetBuffers(32)
       acqRuntime.status = 'connecting'
@@ -1100,7 +1361,7 @@ export function AcquisitionDebugPage() {
   }
 
   const currentRecordMeta = (): RecordMeta => {
-    if (isBridgeDevice(device)) {
+    if (usesBridgeStream(device, omniLink)) {
       const names = streamLabels.length ? [...streamLabels] : [...CHANNEL_NAMES]
       return {
         device,
@@ -1126,7 +1387,7 @@ export function AcquisitionDebugPage() {
 
   const beginRecording = async (): Promise<RecordSinkKind> => {
     const kind = await recorderRef.current.start({
-      filenamePrefix: recordPrefix(device),
+      filenamePrefix: recordPrefix(device, omniLink),
       meta: currentRecordMeta(),
     })
     setRecording(true)
@@ -1148,9 +1409,13 @@ export function AcquisitionDebugPage() {
     if (acqRuntime.impedanceActive) {
       await stopImpedanceMeasure(true)
     }
-    if (device === 'neuracle' || device === 'bcigo') {
+    if (device === 'neuracle' || device === 'bcigo' || (device === 'omni' && omniLink === 'api')) {
       const linked =
-        device === 'neuracle' ? Boolean(neuracleRef.current) : Boolean(bcigoRef.current)
+        device === 'neuracle'
+          ? Boolean(neuracleRef.current)
+          : device === 'bcigo'
+            ? Boolean(bcigoRef.current)
+            : Boolean(omniRef.current)
       if (!linked || (status !== 'open' && status !== 'streaming')) {
         setDetail('请先连接设备。')
         return
@@ -1166,6 +1431,7 @@ export function AcquisitionDebugPage() {
       acqRuntime.streaming = true
       acqRuntime.status = 'streaming'
       acqRuntime.device = device
+      acqRuntime.omniLink = omniLink
       setFeatureLatest(null)
       setFeatureHistory([])
       resetCatchup()
@@ -1173,7 +1439,7 @@ export function AcquisitionDebugPage() {
       statsRef.current = { ...statsRef.current, samples: 0, rateHz: 0 }
       setStats({ ...statsRef.current })
       setStatus('streaming')
-      const streamDetail = streamingRecordDetail(device, recKind)
+      const streamDetail = streamingRecordDetail(device, recKind, omniLink)
       liveEegHub.configure({
         device,
         sampleRate,
@@ -1206,8 +1472,9 @@ export function AcquisitionDebugPage() {
       acqRuntime.streaming = true
       acqRuntime.status = 'streaming'
       acqRuntime.device = 'omni'
+      acqRuntime.omniLink = 'usb'
       setStatus('streaming')
-      const streamDetail = streamingRecordDetail('omni', recKind)
+      const streamDetail = streamingRecordDetail('omni', recKind, 'usb')
       liveEegHub.configure({
         device: 'omni',
         sampleRate: FS,
@@ -1232,20 +1499,22 @@ export function AcquisitionDebugPage() {
     streamingRef.current = false
     acqRuntime.streaming = false
     resetCatchup()
-    if (device === 'omni') {
+    if (device === 'omni' && omniLink === 'usb') {
       try {
         if (transportRef.current.connected) await transportRef.current.write(CMD_STOP)
       } catch {
         /* ignore */
       }
     }
-    // 桥接设备：停止采集但保持连接（对齐 OmniBCI「停止」≠「断开」）
+    // 桥接 / V19 API：停止采集但保持连接（对齐 OmniBCI「停止」≠「断开」）
     const saved = await finishRecording()
     setFeatureLatest(null)
     setFeatureHistory([])
     const stillLinked =
       device === 'omni'
-        ? transportRef.current.connected
+        ? omniLink === 'api'
+          ? Boolean(omniRef.current)
+          : transportRef.current.connected
         : device === 'neuracle'
           ? Boolean(neuracleRef.current)
           : Boolean(bcigoRef.current)
@@ -1344,8 +1613,10 @@ export function AcquisitionDebugPage() {
     updateCfg((c) => ({ ...c, labels: [...preset.names] }))
   }
 
+  const omniUsb = device === 'omni' && omniLink === 'usb'
+  const omniApi = device === 'omni' && omniLink === 'api'
   const channelLabels =
-    isBridgeDevice(device) || status === 'demo'
+    usesBridgeStream(device, omniLink) || status === 'demo'
       ? streamLabels
       : cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!)
 
@@ -1353,7 +1624,7 @@ export function AcquisitionDebugPage() {
     if (channelLabels.length === visible.length) persistHiddenFromMask(channelLabels, visible)
   }, [visible, channelLabels])
 
-  const impedanceHardware = device === 'omni' && status !== 'demo' ? 'omni' : device === 'bcigo' ? 'bcigo' : 'none'
+  const impedanceHardware = omniUsb && status !== 'demo' ? 'omni' : device === 'bcigo' ? 'bcigo' : 'none'
 
   const finalizeBinIfRecording = async () => {
     if (!recorderRef.current.recording) return
@@ -1366,12 +1637,12 @@ export function AcquisitionDebugPage() {
 
   const openImpedanceDialog = () => {
     const enabled =
-      device === 'omni' && status !== 'demo'
+      omniUsb && status !== 'demo'
         ? cfg.enabled
         : channelLabels.map(() => true)
     const selected = channelLabels.map((_, i) => Boolean(enabled[i]) && impedanceSelected[i] !== false)
     setImpedanceSelected(selected)
-    if (device === 'omni') setImpedanceSeriesKohm(impedanceSeriesDefaultKohm(cfg.reference))
+    if (omniUsb) setImpedanceSeriesKohm(impedanceSeriesDefaultKohm(cfg.reference))
     setImpedanceRows(idleImpedanceRows(channelLabels, selected, enabled))
     setImpedanceOpen(true)
     setViewMode('impedance')
@@ -1387,7 +1658,7 @@ export function AcquisitionDebugPage() {
     try {
       if (device === 'bcigo') {
         bcigoRef.current?.stopImpedance()
-      } else if (device === 'omni' && transportRef.current.connected) {
+      } else if (omniUsb && transportRef.current.connected) {
         await transportRef.current.write(CMD_STOP)
         streamingRef.current = false
         acqRuntime.streaming = false
@@ -1407,7 +1678,9 @@ export function AcquisitionDebugPage() {
       setImpedanceMeasuring(false)
       const linked =
         device === 'omni'
-          ? transportRef.current.connected
+          ? omniLink === 'api'
+            ? Boolean(omniRef.current)
+            : transportRef.current.connected
           : device === 'bcigo'
             ? Boolean(bcigoRef.current)
             : Boolean(neuracleRef.current)
@@ -1420,7 +1693,7 @@ export function AcquisitionDebugPage() {
       if (!silent) setImpedanceDetail(msg)
       setDetail(msg)
     } else {
-      const msg = device === 'omni' ? '阻抗检测已停止，LOFF 激励已由 ADS1299 读回确认关闭。' : '已停止阻抗检测'
+      const msg = omniUsb ? '阻抗检测已停止，LOFF 激励已由 ADS1299 读回确认关闭。' : '已停止阻抗检测'
       setImpedanceDetail(msg)
       if (!silent) setDetail(msg)
     }
@@ -1429,12 +1702,16 @@ export function AcquisitionDebugPage() {
   const startImpedanceMeasure = async () => {
     setViewMode('impedance')
     setImpedanceOpen(true)
-    if (device === 'neuracle' || status === 'demo') {
-      setImpedanceDetail('当前设备没有 ADS1299 A9 交流导联脱落，无法测量电极阻抗。')
+    if (device === 'neuracle' || omniApi || status === 'demo') {
+      setImpedanceDetail(
+        omniApi
+          ? 'V19 应用 API 不提供阻抗。请在 OmniBCI 应用里测，或改用 USB 串口链路。'
+          : '当前设备没有 ADS1299 A9 交流导联脱落，无法测量电极阻抗。',
+      )
       return
     }
     const enabled =
-      device === 'omni' ? cfgRef.current.enabled : channelLabels.map(() => true)
+      omniUsb ? cfgRef.current.enabled : channelLabels.map(() => true)
     const selected = impedanceSelectedRef.current
     let mask = 0
     let nSel = 0
@@ -1544,8 +1821,8 @@ export function AcquisitionDebugPage() {
       const fs = sampleRate
       const take = Math.min(filledRef.current, Math.max(fs, fs * 4))
       const selected = impedanceSelectedRef.current
-      const enabled = device === 'omni' ? cfgRef.current.enabled : selected.map(() => true)
-      const series = device === 'omni' ? impedanceSeriesRef.current : 0
+      const enabled = omniUsb ? cfgRef.current.enabled : selected.map(() => true)
+      const series = omniUsb ? impedanceSeriesRef.current : 0
       const rows: ImpedanceRowState[] = []
       for (let ch = 0; ch < n; ch++) {
         const on = selected[ch] !== false && enabled[ch] !== false
@@ -1579,7 +1856,7 @@ export function AcquisitionDebugPage() {
     tick()
     const id = window.setInterval(tick, 500)
     return () => clearInterval(id)
-  }, [impedanceMeasuring, device, sampleRate])
+  }, [impedanceMeasuring, device, sampleRate, omniUsb])
 
   // Keep Omni labels in sync for waveform when editing omni config
   useEffect(() => {
@@ -1607,7 +1884,8 @@ export function AcquisitionDebugPage() {
   const deviceBusy = status === 'connecting' || status === 'streaming'
 
   const connectDevice = () => {
-    if (device === 'omni') void connect()
+    if (omniApi) connectOmniApi()
+    else if (device === 'omni') void connect()
     else if (device === 'neuracle') connectNeuracle()
     else connectBcigo()
   }
@@ -1688,7 +1966,13 @@ export function AcquisitionDebugPage() {
 
       <section className="acq-group">
         <div className="acq-group-title">
-          {device === 'omni' ? '串口控制' : device === 'neuracle' ? 'JellyFish 控制' : 'Wi‑Fi 控制'}
+          {omniApi
+            ? 'OmniBCI V19 控制'
+            : device === 'omni'
+              ? '串口控制'
+              : device === 'neuracle'
+                ? 'JellyFish 控制'
+                : 'Wi‑Fi 控制'}
         </div>
         <div className="acq-bar">
           <label className="acq-field">
@@ -1699,11 +1983,50 @@ export function AcquisitionDebugPage() {
               disabled={deviceBusy}
               onChange={(e) => void switchDevice(e.target.value as DeviceKind)}
             >
-              <option value="omni">OmniBCI USB</option>
+              <option value="omni">OmniBCI</option>
               <option value="neuracle">博睿康 Neuracle</option>
               <option value="bcigo">强脑 BCIGo</option>
             </select>
           </label>
+          {device === 'omni' ? (
+            <label className="acq-field">
+              链路
+              <select
+                className="select"
+                value={omniLink}
+                disabled={deviceBusy}
+                onChange={(e) => void switchOmniLink(e.target.value as OmniLink)}
+              >
+                <option value="api">V19 应用 API</option>
+                <option value="usb">USB 串口</option>
+              </select>
+            </label>
+          ) : null}
+          {omniApi ? (
+            <>
+              <label className="acq-field">
+                流
+                <select
+                  className="select"
+                  value={omniStream}
+                  disabled={deviceBusy || deviceLinked}
+                  onChange={(e) => {
+                    const next = e.target.value as OmniStreamKind
+                    setOmniStream(next)
+                    try {
+                      localStorage.setItem(OMNI_STREAM_STORAGE_KEY, next)
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                >
+                  <option value={OMNI_STREAM_RAW}>raw（推荐）</option>
+                  <option value={OMNI_STREAM_FILTERED}>filtered</option>
+                </select>
+              </label>
+              {omniProbe ? <span className="acq-hint">{omniProbe}</span> : null}
+            </>
+          ) : null}
           {device === 'neuracle' ? (
             <>
               <label className="acq-field">
@@ -1837,10 +2160,10 @@ export function AcquisitionDebugPage() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={deviceBusy || deviceLinked || status === 'demo' || (device === 'omni' && !supported)}
+            disabled={deviceBusy || deviceLinked || status === 'demo' || (omniUsb && !supported)}
             onClick={connectDevice}
           >
-            {device === 'omni' ? '打开串口' : '连接'}
+            {omniUsb ? '打开串口' : '连接'}
           </button>
           <button type="button" className="btn btn-primary" disabled={status !== 'open' && !impedanceMeasuring} onClick={() => void startStream()}>
             开始采集
@@ -1854,16 +2177,18 @@ export function AcquisitionDebugPage() {
             disabled={!deviceLinked || status === 'streaming'}
             onClick={() => void disconnect()}
           >
-            {device === 'omni' ? '断开串口' : '断开'}
+            {omniUsb ? '断开串口' : '断开'}
           </button>
           <button
             type="button"
             className="btn"
             onClick={openImpedanceDialog}
+            disabled={omniApi}
+            title={omniApi ? '请在 OmniBCI 应用中测阻抗' : undefined}
           >
             阻抗检测
           </button>
-          {device === 'omni' ? (
+          {omniUsb ? (
             <>
               <label className="acq-field">
                 参考
@@ -1926,7 +2251,7 @@ export function AcquisitionDebugPage() {
             <input type="checkbox" checked={useNotch} onChange={(e) => setUseNotch(e.target.checked)} />
             50/100 Hz 谐波陷波
           </label>
-          {isBridgeDevice(device) ? (
+          {usesBridgeStream(device, omniLink) ? (
             <>
               <button type="button" className="btn" onClick={() => setVisible(channelLabels.map(() => true))}>
                 全部显示
@@ -2040,7 +2365,7 @@ export function AcquisitionDebugPage() {
                   names={channelLabels}
                   visible={visible}
                   yScaleUv={yScaleUv}
-                  omniCfg={device === 'omni' && status !== 'demo' ? cfg : undefined}
+                  omniCfg={omniUsb && status !== 'demo' ? cfg : undefined}
                   onToggle={(i) =>
                     setVisible((v) => {
                       const n = v.length === channelLabels.length ? [...v] : channelLabels.map(() => true)
@@ -2049,7 +2374,7 @@ export function AcquisitionDebugPage() {
                     })
                   }
                   onOpen={(i) => {
-                    if (device === 'omni' && status !== 'demo') setChannelDialog(i)
+                    if (omniUsb && status !== 'demo') setChannelDialog(i)
                     else {
                       setVisible((v) => {
                         const n = v.length === channelLabels.length ? [...v] : channelLabels.map(() => true)
@@ -2104,7 +2429,7 @@ export function AcquisitionDebugPage() {
                   : idleImpedanceRows(
                       channelLabels,
                       impedanceSelected,
-                      device === 'omni' ? cfg.enabled : channelLabels.map(() => true),
+                      omniUsb ? cfg.enabled : channelLabels.map(() => true),
                     )
               }
               measuring={impedanceMeasuring}
@@ -2129,6 +2454,8 @@ export function AcquisitionDebugPage() {
         <summary>特征监控 / 工作模式（实验页共用勾选）</summary>
         {device === 'omni' ? (
           <div className="acq-bar" style={{ marginBottom: 8 }}>
+            {omniUsb ? (
+              <>
             <label className="acq-field">
               工作模式
               <select
@@ -2162,6 +2489,8 @@ export function AcquisitionDebugPage() {
                 ))}
               </select>
             </label>
+              </>
+            ) : null}
             <label className="acq-field">
               通道名预设
               <select className="select" value={montageId} onChange={(e) => applyMontage(e.target.value)}>
@@ -2247,7 +2576,7 @@ export function AcquisitionDebugPage() {
         <span className="acq-catchup" ref={catchupFlagRef} hidden>
           追帧中
         </span>
-        {device === 'omni' ? (
+        {omniUsb ? (
           <>
             <span>CRC {stats.crcBad}</span>
             <span>gaps {stats.seqGaps}</span>
@@ -2264,6 +2593,7 @@ export function AcquisitionDebugPage() {
         ) : (
           <span>
             包 {stats.packetCount} · loss {stats.packetLoss}
+            {omniApi ? ` · gaps ${stats.seqGaps}` : ''}
           </span>
         )}
       </div>
@@ -2279,7 +2609,7 @@ export function AcquisitionDebugPage() {
               : idleImpedanceRows(
                   channelLabels,
                   impedanceSelected,
-                  device === 'omni' ? cfg.enabled : channelLabels.map(() => true),
+                  omniUsb ? cfg.enabled : channelLabels.map(() => true),
                 )
           }
           measuring={impedanceMeasuring}
@@ -2302,7 +2632,7 @@ export function AcquisitionDebugPage() {
         />
       ) : null}
 
-      {channelDialog != null && device === 'omni' ? (
+      {channelDialog != null && omniUsb ? (
         <ChannelSettingsDialog
           index={channelDialog}
           name={channelLabels[channelDialog] ?? `CH${channelDialog + 1}`}

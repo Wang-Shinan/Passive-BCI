@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BCIGO_CHANNEL_NAMES } from '../../acquisition/bcigo/client'
 import { NEURACLE_59_EEG_CHANNEL_NAMES } from '../../acquisition/neuracle/client'
+import { OMNI_CHANNEL_NAMES } from '../../acquisition/omni/client'
 import {
   describeWaitingModelSource,
   matchModelSourceProfile,
@@ -44,6 +45,30 @@ describe('model source profiles', () => {
         }),
       )?.profile.id,
     ).toBe('bcigo32')
+
+    expect(
+      matchModelSourceProfile(
+        batch({
+          channels: 8,
+          sampleRate: 250,
+          channelNames: [...OMNI_CHANNEL_NAMES],
+          device: 'omni',
+        }),
+      )?.profile.id,
+    ).toBe('omni8')
+  })
+
+  it('matches OmniBCI 8-ch even when montage aliases replace CH1–CH8', () => {
+    expect(
+      matchModelSourceProfile(
+        batch({
+          channels: 8,
+          sampleRate: 250,
+          channelNames: ['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CP4'],
+          device: 'omni',
+        }),
+      )?.profile.id,
+    ).toBe('omni8')
   })
 
   it('drops Neuracle ECG / EOG / Trigger from a 65-ch forward', () => {
@@ -102,5 +127,6 @@ describe('model source profiles', () => {
   it('describes supported waiting sources', () => {
     expect(describeWaitingModelSource()).toContain('BCIGo 32 导')
     expect(describeWaitingModelSource()).toContain('Neuracle 59 导')
+    expect(describeWaitingModelSource()).toContain('OmniBCI 8 导')
   })
 })

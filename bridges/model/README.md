@@ -68,7 +68,7 @@ npm run model-service:reve:smr
 npm run model-service:reve:smr:fit
 ```
 
-`smr_control` 默认合并 S02 0821 LoRA（`checkpoints/adapters/smr_control_s02_4class_reve_0821_livehead_lora/best.pt`），配对本地 811 线性头 `recordings/.reve-heads/smr_control_s02_4class_livehead.pt`（`encoder_id` 必须等于该 LoRA 目录名）。无 0821 时回退上一版 S02 livehead LoRA。退回 Stieger 四分类 mi5init：`$env:MODEL_REVE_LORA=".../stieger2021_4class_reve_lora_r16_mi5init/best.pt"`。旧的左右手二分类适配器和 `smr_control_stieger_lora.pt` 不会自动加载。不要把左右/休息标签写进 `passive_rating`（任务一/任务二/任务三）。不要 LoRA 时加 `--no-lora` 或 `$env:MODEL_REVE_NO_LORA="1"`。退回二分类：`$env:MODEL_REVE_LORA=".../stieger2021_lr_reve_lora_r16_mi5init/best.pt"`。
+`smr_control` 默认合并 S02 **0825pm joint LoRA**（`checkpoints/adapters/smr_control_s02_4class_reve_0825pm_joint_livehead_lora/best.pt`，从 0821 LoRA 初始化，头冻结为 0821 livehead），配对 `recordings/.reve-heads/smr_control_s02_0825pm_joint_4class_livehead.pt`（`encoder_id` 必须等于该 LoRA 目录名）。无 joint 时回退 0825pm hop01 LoRA + serving 重训头。俄罗斯方块页在线步长仍是 0.1 秒。退回 Stieger 四分类 mi5init：`$env:MODEL_REVE_LORA=".../stieger2021_4class_reve_lora_r16_mi5init/best.pt"`。旧的左右手二分类适配器和 `smr_control_stieger_lora.pt` 不会自动加载。不要把左右/休息标签写进 `passive_rating`（任务一/任务二/任务三）。不要 LoRA 时加 `--no-lora` 或 `$env:MODEL_REVE_NO_LORA="1"`。退回二分类：`$env:MODEL_REVE_LORA=".../stieger2021_lr_reve_lora_r16_mi5init/best.pt"`。
 
 也可在终端手动启动三类头：
 

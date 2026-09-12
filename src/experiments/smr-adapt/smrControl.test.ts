@@ -14,6 +14,7 @@ import {
   resetCursor,
   resolveLaplacianMontage,
   reveCursorAxes,
+  smrClassMasses,
   smrFeatures,
   stepCursor,
 } from './smrControl'
@@ -132,6 +133,13 @@ describe('cursor and scoring', () => {
 })
 
 describe('reveCursorAxes', () => {
+  it('exposes class masses for the UD demo bars', () => {
+    const names = ['left_hand', 'right_hand', 'both_hand', 'rest']
+    const mass = smrClassMasses(names, [0.05, 0.05, 0.8, 0.1])
+    expect(mass.up).toBeCloseTo(0.8)
+    expect(mass.down).toBeCloseTo(0.1)
+  })
+
   it('turns 4-class probabilities into left/right/up/down cursor axes', () => {
     const names = ['left_hand', 'right_hand', 'both_hand', 'rest']
     expect(reveCursorAxes(names, [0.8, 0.1, 0.05, 0.05]).zH).toBeCloseTo(-0.7)

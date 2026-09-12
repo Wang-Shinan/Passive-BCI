@@ -1,4 +1,4 @@
-export { liveEegHub, LIVE_FRESH_MS } from './liveHub'
+export { liveEegHub, LIVE_FRESH_MS, LIVE_STALE_MS } from './liveHub'
 export type { LiveEegDevice, LiveEegLink, LiveEegMeta, LiveEegRing } from './liveHub'
 export { useLiveEeg } from './useLiveEeg'
 export type { LiveEegView } from './useLiveEeg'

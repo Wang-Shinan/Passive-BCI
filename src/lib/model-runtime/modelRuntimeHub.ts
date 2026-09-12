@@ -21,11 +21,16 @@ import {
 } from './contracts'
 import { ModelWindowAssembler } from './windowAssembler'
 import { modelServiceStatus } from './modelServiceApi'
+import {
+  collectExpiredInFlight,
+  inFlightTimeoutMs,
+  MAX_IN_FLIGHT,
+  MAX_PENDING,
+  MAX_SOCKET_BUFFERED,
+} from './inFlight'
 
 const ENABLED_KEY = 'passive-bci.model-service-enabled'
 const URL_KEY = 'passive-bci.model-service-url'
-const MAX_PENDING = 2
-const MAX_IN_FLIGHT = 2
 const MAX_SOURCE_BATCHES = 8
 const LATENCY_HISTORY = 120
 const DEFAULT_WINDOW_SEC = 4
@@ -126,6 +131,9 @@ class ModelRuntimeHub {
   private sourceQueue: RawBridgeBatch[] = []
   private sourceDraining = false
   private inFlight = new Set<string>()
+  private inFlightAt = new Map<string, number>()
+  private expireTimer: ReturnType<typeof setInterval> | null = null
+  private notifyQueued = false
   private sentWindowKeys = new Set<string>()
   private latencies: number[] = []
   private debugLog: ModelDebugEntry[] = []
@@ -282,7 +290,7 @@ class ModelRuntimeHub {
     socket.onopen = () => {
       if (this.socket !== socket) return
       this.pending = []
-      this.inFlight.clear()
+      this.clearInFlight()
       this.sentWindowKeys.clear()
       if (this.snapshotValue.sourceCompatible) {
         this.assembler.bumpSegment()
@@ -299,13 +307,7 @@ class ModelRuntimeHub {
       this.logDebug('info', '已发送 hello')
     }
     socket.onmessage = (event) => {
-      if (typeof event.data !== 'string') {
-        this.logDebug('info', '收到二进制帧', `${event.data instanceof ArrayBuffer ? event.data.byteLength : 0} bytes`)
-        return
-      }
-      const preview =
-        event.data.length > 240 ? `${event.data.slice(0, 240)}…` : event.data
-      this.logDebug('info', '收到 JSON', preview)
+      if (typeof event.data !== 'string') return
       this.handleMessage(event.data)
     }
     socket.onerror = () => {
@@ -320,7 +322,7 @@ class ModelRuntimeHub {
     socket.onclose = (event) => {
       if (this.socket !== socket) return
       this.socket = null
-      this.inFlight.clear()
+      this.clearInFlight()
       const detail = `code=${event.code}${event.reason ? ` reason=${event.reason}` : ''}`
       this.logDebug(event.wasClean ? 'info' : 'warn', 'WebSocket 已关闭', detail)
       this.patch({
@@ -343,7 +345,7 @@ class ModelRuntimeHub {
     this.pending = []
     this.sourceQueue = []
     this.sourceDraining = false
-    this.inFlight.clear()
+    this.clearInFlight()
     this.sentWindowKeys.clear()
     this.assembler = new ModelWindowAssembler({
       windowSec: DEFAULT_WINDOW_SEC,
@@ -361,7 +363,7 @@ class ModelRuntimeHub {
     })
   }
 
-  latestObservation(maxAgeMs = 5000): ModelPrediction | null {
+  latestObservation(maxAgeMs = 8000): ModelPrediction | null {
     const prediction = this.snapshotValue.latestPrediction
     if (!prediction || performance.now() - prediction.received_at_ms > maxAgeMs) return null
     return prediction
@@ -418,16 +420,16 @@ class ModelRuntimeHub {
       this.patch({
         sourceCompatible: false,
         sourceDetail:
-          batch.device === 'neuracle' || batch.device === 'bcigo'
+          batch.device === 'neuracle' || batch.device === 'bcigo' || batch.device === 'omni'
             ? `${batch.device} 通道布局未匹配已知模型源（${batch.channels} 导）`
             : `模型旁路暂不接收 ${batch.device}`,
       })
     } else {
       const projected = projectRawBatchToProfile(batch, matched)
-      this.patch({
-        sourceCompatible: true,
-        sourceDetail: describeModelSource(matched.profile, projected, batch.channels),
-      })
+      const sourceDetail = describeModelSource(matched.profile, projected, batch.channels)
+      if (!this.snapshotValue.sourceCompatible || this.snapshotValue.sourceDetail !== sourceDetail) {
+        this.patch({ sourceCompatible: true, sourceDetail })
+      }
       try {
         for (const packet of this.assembler.push(projected)) this.enqueue(packet)
       } catch (error) {
@@ -450,13 +452,53 @@ class ModelRuntimeHub {
     this.flush()
   }
 
+  private clearInFlight(): void {
+    this.inFlight.clear()
+    this.inFlightAt.clear()
+    if (this.expireTimer != null) {
+      clearInterval(this.expireTimer)
+      this.expireTimer = null
+    }
+  }
+
+  private trackInFlight(requestId: string): void {
+    this.inFlight.add(requestId)
+    this.inFlightAt.set(requestId, performance.now())
+    if (this.expireTimer != null || typeof window === 'undefined') return
+    this.expireTimer = window.setInterval(() => {
+      if (!this.inFlight.size) return
+      if (this.expireStaleInFlight()) this.flush()
+    }, 250)
+  }
+
+  private expireStaleInFlight(now = performance.now()): boolean {
+    const timeoutMs = inFlightTimeoutMs(this.snapshotValue.stepSec)
+    const expired = collectExpiredInFlight(this.inFlightAt, now, timeoutMs)
+    if (!expired.length) return false
+    for (const id of expired) {
+      this.inFlight.delete(id)
+      this.inFlightAt.delete(id)
+    }
+    this.logDebug('warn', `推理超时，丢弃 ${expired.length} 个卡住的窗口`)
+    this.patch({
+      inFlightWindows: this.inFlight.size,
+      droppedWindows: this.snapshotValue.droppedWindows + expired.length,
+    })
+    return true
+  }
+
   private flush(): void {
+    this.expireStaleInFlight()
     const socket = this.socket
     if (
       !socket ||
       socket.readyState !== WebSocket.OPEN ||
       this.snapshotValue.status !== 'ready'
     ) {
+      return
+    }
+    if (socket.bufferedAmount > MAX_SOCKET_BUFFERED) {
+      this.logDebug('warn', 'WebSocket 发送缓冲过大，暂停发窗')
       return
     }
     while (this.pending.length && this.inFlight.size < MAX_IN_FLIGHT) {
@@ -474,12 +516,7 @@ class ModelRuntimeHub {
       socket.send(JSON.stringify(packet.header))
       socket.send(packet.payload)
       this.sentWindowKeys.add(windowKey)
-      this.inFlight.add(packet.header.request_id)
-      this.logDebug(
-        'info',
-        `发送窗口 #${packet.header.window_id}`,
-        `${packet.header.channels}×${packet.header.samples} @ ${packet.header.sample_rate}Hz`,
-      )
+      this.trackInFlight(packet.header.request_id)
       this.patch({
         pendingWindows: this.pending.length,
         inFlightWindows: this.inFlight.size,
@@ -513,16 +550,23 @@ class ModelRuntimeHub {
         return
       }
       if (message.type === 'error') {
-        if (message.request_id) this.inFlight.delete(message.request_id)
+        if (message.request_id) {
+          this.inFlight.delete(message.request_id)
+          this.inFlightAt.delete(message.request_id)
+        } else {
+          this.clearInFlight()
+        }
         const err = `${message.code ? `${message.code}: ` : ''}${message.message}`
         this.logDebug('error', '服务端 error', err)
         if (
           message.code === 'duplicate_window_id' ||
           message.code === 'duplicate_request_id' ||
-          message.code === 'non_monotonic_window'
+          message.code === 'non_monotonic_window' ||
+          message.code === 'invalid_window'
         ) {
           this.pending = []
           this.sentWindowKeys.clear()
+          this.clearInFlight()
           this.assembler.bumpSegment()
           this.logDebug('warn', '已新建 segment，丢弃待发送窗口')
         }
@@ -536,11 +580,7 @@ class ModelRuntimeHub {
       }
 
       this.inFlight.delete(message.request_id)
-      this.logDebug(
-        'info',
-        `prediction ${message.class_name}`,
-        `${(message.confidence * 100).toFixed(1)}% · ${message.observation_id}`,
-      )
+      this.inFlightAt.delete(message.request_id)
       const latency = message.prepare_latency_ms + message.inference_latency_ms
       this.latencies.push(latency)
       if (this.latencies.length > LATENCY_HISTORY) this.latencies.shift()
@@ -615,7 +655,12 @@ class ModelRuntimeHub {
 
   private patch(next: Partial<ModelRuntimeSnapshot>): void {
     this.snapshotValue = { ...this.snapshotValue, ...next }
-    for (const listener of this.listeners) listener()
+    if (this.notifyQueued) return
+    this.notifyQueued = true
+    queueMicrotask(() => {
+      this.notifyQueued = false
+      for (const listener of this.listeners) listener()
+    })
   }
 }
 

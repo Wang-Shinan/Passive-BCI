@@ -2,6 +2,8 @@ export type ReveTaskId = 'passive_rating' | 'smr_control' | 'tetris_action'
 
 export const REVE_WINDOW_SEC = 2
 export const REVE_DEFAULT_LIVE_STEP_SEC = 0.5
+/** Keep using the last REVE prediction through a GPU/WS hitch. */
+export const LIVE_PREDICTION_MAX_AGE_MS = 8000
 /** Tetris pages + tetris_action live decode hop. Offline export/fit must not reuse this. */
 export const TETRIS_LIVE_STEP_SEC = 0.1
 

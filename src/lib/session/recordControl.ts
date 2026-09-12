@@ -1,4 +1,4 @@
-import { acqRuntime } from '../../acquisition/runtime'
+import { acqRuntime, omniRecordsAsFrames } from '../../acquisition/runtime'
 import { CHANNEL_NAMES, CHANNELS, FRAME_BYTES, FS } from '../../acquisition/protocol/constants'
 import { formatRecordBytes } from '../../acquisition/session/recorder'
 import { liveEegHub } from '../eeg/liveHub'
@@ -60,7 +60,7 @@ export async function startExperimentRecording(opts: {
   }
   const names = liveEegHub.meta.channelNames
   const meta =
-    device === 'omni'
+    device === 'omni' && omniRecordsAsFrames()
       ? {
           device: 'omni',
           format: 'ads1299-frame',
