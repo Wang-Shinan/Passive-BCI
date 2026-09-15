@@ -3,7 +3,12 @@
 .gaze-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 20px 0; }
 .gaze-controls input { width: 120px; }
 .gaze-arena { position: relative; height: 360px; overflow: hidden; background: #11151e; border: 1px solid #30394d; border-radius: 16px; color: #edf3ff; }
-.gaze-arena:fullscreen { width: 100vw; height: 100dvh; border: 0; border-radius: 0; cursor: none; }
+.gaze-arena:fullscreen { width: 100vw; height: 100dvh; border: 0; border-radius: 0; cursor: default; }
+.gaze-field { position: relative; width: 100%; height: 100%; overflow: hidden; background: #11151e; }
+.gaze-arena:fullscreen { display: grid; place-items: center; background: #05080d; }
+.gaze-arena:fullscreen .gaze-field { width: min(76vw, 1100px); height: min(72dvh, 720px); border: 1px solid #445168; border-radius: 8px; }
+.gaze-arena button { cursor: pointer; }
+.gaze-arena button:focus-visible { outline: 3px solid #63d6ff; outline-offset: 4px; }
 .gaze-dot { position: absolute; width: 28px; height: 28px; border-radius: 50%; background: #f3cc62; transform: translate(-50%, -50%); left: 50%; top: 50%; box-shadow: 0 0 0 5px #f3cc621a; }
 .gaze-dot::after { content: ''; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: #11151e; left: 12px; top: 12px; }
 .gaze-dot.is-left { left: 12%; }
@@ -12,6 +17,26 @@
 .gaze-dot.is-down { top: 84%; }
 .gaze-dot.is-center { width: 18px; height: 18px; background: #d9e2f0; box-shadow: none; }
 .gaze-dot.is-center::after { left: 7px; top: 7px; }
+.gaze-cursor { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; box-sizing: border-box; border: 3px solid #63d6ff; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 16px #63d6ff66; pointer-events: none; transition: left 240ms ease-out, top 240ms ease-out; }
+.gaze-cursor.is-left { left: 12%; }
+.gaze-cursor.is-right { left: 88%; }
+.gaze-cursor.is-up { top: 16%; }
+.gaze-cursor.is-down { top: 84%; }
+.gaze-legend { position: absolute; left: 24px; bottom: 46px; margin: 0; color: #c5d8ee; font-size: 12px; }
+.gaze-moving-cursor { transition: none; }
+.gaze-edge { position: absolute; background: #f3cc62; box-shadow: 0 0 28px #f3cc6255; pointer-events: none; }
+.gaze-edge.is-left { left: 0; top: 0; width: 6%; height: 100%; }
+.gaze-edge.is-right { right: 0; top: 0; width: 6%; height: 100%; }
+.gaze-edge.is-up { left: 0; top: 0; width: 100%; height: 6%; }
+.gaze-edge.is-down { left: 0; bottom: 0; width: 100%; height: 6%; }
+.gaze-edge.is-hit { background: #57df9a; box-shadow: 0 0 28px #57df9a55; }
+.gaze-arena .gaze-instruction { top: 9%; max-width: 78%; text-align: center; }
+.gaze-arena .gaze-legend { left: 9%; bottom: 12%; }
+.gaze-arena .gaze-progress { left: 9%; bottom: 8%; }
+.gaze-arena .gaze-stop { right: 8%; bottom: 8%; }
+.gaze-arena .gaze-recenter { right: 8%; bottom: 18%; }
+.gaze-recenter { position: absolute; right: 20px; bottom: 66px; }
+@media (prefers-reduced-motion: reduce) { .gaze-cursor { transition: none; } }
 .gaze-instruction { position: absolute; top: 24px; left: 50%; transform: translateX(-50%); margin: 0; font-size: 16px; color: #aeb9cf; }
 .gaze-progress { position: absolute; bottom: 18px; left: 24px; font-size: 12px; color: #7e8ba5; }
 .gaze-center { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }

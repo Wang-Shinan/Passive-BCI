@@ -7,7 +7,7 @@
  *   npm run model-service -- --profile bcigo32
  */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -72,6 +72,7 @@ function argValue(flag) {
 }
 
 function defaultStateFile(task) {
+  if (task === 'gaze_smr') return path.join(passiveRoot, 'recordings', '.reve-heads', 'gaze_smr_active.pt')
   if (task === 'smr_control') {
     // Live now: 0825pm joint LoRA + LP head refit on today's BCIGo session.
     // Previous default (0825pm hop01 LoRA + serving-refit head): recordings/.reve-heads/smr_control_s02_0825pm_4class_livehead.pt
@@ -82,7 +83,7 @@ function defaultStateFile(task) {
 }
 
 function defaultStrategy(task) {
-  return task === 'smr_control' ? 'none' : 'supervised-head'
+  return task === 'smr_control' || task === 'gaze_smr' ? 'none' : 'supervised-head'
 }
 
 function defaultStepSec(task) {
@@ -104,9 +105,15 @@ function main() {
   const task = argValue('--task') || process.env.MODEL_REVE_TASK || 'passive_rating'
   const stepSec = argValue('--step-sec') || process.env.MODEL_STEP_SEC || defaultStepSec(task)
   const stateFile = argValue('--state-file') || process.env.MODEL_STATE_FILE || defaultStateFile(task)
+  let pairedLora = null
+  if (task === 'gaze_smr' && stateFile) {
+    const metadata = stateFile.replace(/\.pt$/, '.json')
+    if (existsSync(metadata)) pairedLora = JSON.parse(readFileSync(metadata, 'utf8')).loraCheckpoint || null
+    if (pairedLora && !existsSync(pairedLora)) throw new Error(`Missing paired LoRA: ${pairedLora}`)
+  }
   const strategy =
     argValue('--strategy') ||
-    (task === 'smr_control' ? defaultStrategy(task) : process.env.MODEL_STRATEGY || defaultStrategy(task))
+    (task === 'smr_control' || task === 'gaze_smr' ? defaultStrategy(task) : process.env.MODEL_STRATEGY || defaultStrategy(task))
   const args = pkg
     ? [
         'scripts/serve_runtime_model.py',
@@ -138,7 +145,7 @@ function main() {
           task,
           ...(stepSec ? ['--step-sec', String(stepSec)] : []),
           ...(stateFile ? ['--state-file', stateFile] : []),
-          ...(process.env.MODEL_REVE_LORA ? ['--lora-checkpoint', process.env.MODEL_REVE_LORA] : []),
+          ...(pairedLora || process.env.MODEL_REVE_LORA ? ['--lora-checkpoint', pairedLora || process.env.MODEL_REVE_LORA] : []),
           ...(process.env.MODEL_REVE_NO_LORA === '1' ? ['--no-lora'] : []),
           ...(process.env.MODEL_TCP_HOST ? ['--tcp-host', process.env.MODEL_TCP_HOST] : []),
           ...(process.env.MODEL_TCP_PORT ? ['--tcp-port', process.env.MODEL_TCP_PORT] : []),

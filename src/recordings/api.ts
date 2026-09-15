@@ -49,8 +49,8 @@ export async function fetchSessionList(): Promise<SessionSummary[]> {
   return body.sessions ?? []
 }
 
-export async function fetchSessionPreview(stem: string): Promise<SessionPreview> {
-  return readJson<SessionPreview>(`/api/record/library/${encodeURIComponent(stem)}/preview`)
+export async function fetchSessionPreview(stem: string, tail = 24): Promise<SessionPreview> {
+  return readJson<SessionPreview>(`/api/record/library/${encodeURIComponent(stem)}/preview?tail=${tail}`)
 }
 
 export async function patchSessionMeta(
