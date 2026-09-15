@@ -1,4 +1,4 @@
-export type ReveTaskId = 'passive_rating' | 'smr_control' | 'tetris_action'
+export type ReveTaskId = 'passive_rating' | 'smr_control' | 'tetris_action' | 'gaze_smr'
 
 export const REVE_WINDOW_SEC = 2
 export const REVE_DEFAULT_LIVE_STEP_SEC = 0.5
@@ -16,6 +16,7 @@ export type ReveTaskOption = {
 }
 
 export const REVE_TASKS: readonly ReveTaskOption[] = [
+  { id: 'gaze_smr', label: '眼动辅助 SMR · 左 / 右 / 上 / 下', short: '眼动辅助 SMR', semantics: 'gaze_smr_direction_4', classNames: ['left', 'right', 'up', 'down'] },
   {
     id: 'passive_rating',
     label: '三类 · 任务一 / 任务二 / 任务三',
@@ -68,7 +69,7 @@ export function rewardForClass(semantics: string | undefined, classId: number): 
 }
 
 export function defaultReveStrategy(task: string | null | undefined): 'none' | 'supervised-head' {
-  return task === 'smr_control' ? 'none' : 'supervised-head'
+  return (task === 'smr_control' || task === 'gaze_smr') ? 'none' : 'supervised-head'
 }
 
 export function liveStepSecForReveTask(task: string | null | undefined): number {

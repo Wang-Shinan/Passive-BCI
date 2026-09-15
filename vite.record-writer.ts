@@ -300,7 +300,9 @@ export function recordWriterPlugin(): Plugin {
           }
 
           if (action === 'preview' && req.method === 'GET') {
-            const preview = previewSession(recordingsDir(), stem, 24, liveOverlays())
+            const requestedTail = Number(new URL(req.url ?? '', 'http://localhost').searchParams.get('tail') ?? 24)
+            const tail = Number.isInteger(requestedTail) && requestedTail > 0 ? Math.min(requestedTail, 10_000) : 24
+            const preview = previewSession(recordingsDir(), stem, tail, liveOverlays())
             if (!preview) {
               sendJson(res, 404, { ok: false, message: '会话不存在' })
               return
