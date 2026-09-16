@@ -2,7 +2,16 @@
 
 export type ModelServiceBackend = 'reve' | 'mock'
 
+export function preferredModelHead(task = 'passive_rating'): string {
+  try {
+    const value = JSON.parse(localStorage.getItem('passive-bci.model-heads') || '{}')?.[task]
+    return typeof value === 'string' ? value : ''
+  } catch { return '' }
+}
+
 export type ModelServiceEnsureResult = {
+  headId?: string | null
+  loadedHead?: string | null
   ok: boolean
   backend: ModelServiceBackend | null
   task?: string | null
@@ -35,6 +44,7 @@ export async function modelServiceStatus(
 }
 
 export async function ensureModelService(options?: {
+  headId?: string
   backend?: ModelServiceBackend
   task?: string
   stepSec?: number
@@ -47,6 +57,7 @@ export async function ensureModelService(options?: {
     body: JSON.stringify({
       backend: options?.backend ?? 'reve',
       task: options?.task,
+      headId: options?.backend === 'mock' ? undefined : options?.headId ?? preferredModelHead(options?.task),
       stepSec: options?.stepSec,
       force: options?.force === true,
     }),
@@ -62,4 +73,17 @@ export async function ensureModelService(options?: {
 export async function stopModelService(signal?: AbortSignal): Promise<ModelServiceEnsureResult> {
   const res = await fetch('/api/model-service/stop', { method: 'POST', signal })
   return parseResult(res)
+}
+
+export type ModelHeadOption = {
+  trainedAt?: string | null; updatedAt?: string | null
+  id: string; name: string; task: string | null; encoderId: string | null
+  classes: number | null; available: boolean; reason: string
+}
+
+export async function fetchModelHeads(signal?: AbortSignal): Promise<ModelHeadOption[]> {
+  const response = await fetch('/api/model-service/heads', { signal })
+  const body = await response.json() as { ok: boolean; heads: ModelHeadOption[]; message?: string }
+  if (!response.ok || !body.ok) throw new Error(body.message || '读取线性头失败')
+  return body.heads
 }

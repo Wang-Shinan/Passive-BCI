@@ -1,5 +1,6 @@
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Home } from './Home'
+import { TrainingPage } from './training'
 import { AcquisitionDebugPage } from './acquisition'
 import { RlGraphExperiment } from './experiments/rl-graph'
 import { TetrisExperiment } from './experiments/tetris'
@@ -9,6 +10,7 @@ import { JumpExperiment } from './experiments/jump'
 import { DrawGuessExperiment } from './experiments/draw-guess'
 import { DinoExperiment } from './experiments/dino'
 import { SchulteExperiment } from './experiments/schulte'
+import { NBackExperiment } from './experiments/nback'
 import { OnlineLearnPage } from './experiments/online-learn'
 import { SmrAdaptPage } from './experiments/smr-adapt'
 import { SmrUdPage } from './experiments/smr-ud'
@@ -20,6 +22,7 @@ export default function App() {
     <HashRouter>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/training" element={<TrainingPage />} />
         <Route path="/acquisition" element={<AcquisitionDebugPage />} />
         <Route path="/recordings" element={<RecordingsPage />} />
         <Route path="/online-learn" element={<OnlineLearnPage />} />
@@ -33,6 +36,7 @@ export default function App() {
         <Route path="/draw-guess" element={<DrawGuessExperiment />} />
         <Route path="/dino" element={<DinoExperiment />} />
         <Route path="/schulte" element={<SchulteExperiment />} />
+        <Route path="/nback" element={<NBackExperiment />} />
         <Route path="/stress-remote" element={<StressRemotePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

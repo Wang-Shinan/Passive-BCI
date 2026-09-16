@@ -13,6 +13,7 @@ import {
 } from './api'
 
 const EXPERIMENT_LABEL: Record<string, string> = {
+  nback: 'N-back 工作记忆',
   tetris: '俄罗斯方块',
   'rl-graph': '人脑反馈强化学习',
   'card-cit': '扑克牌 CIT',

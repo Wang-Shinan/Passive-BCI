@@ -2,10 +2,15 @@ import { Link } from 'react-router-dom'
 
 const TOOLS = [
   {
+    path: '/training', title: '数据导出与 Linear Probing',
+    blurb: '选择 SMR 录制、导出 H5、训练冻结 REVE 的线性头，查看后台日志和评估结果，再应用到模型。',
+    tag: 'H5 · Linear probing', accent: '#22d3ee',
+  },
+  {
     path: '/acquisition',
     title: '采集调试',
     blurb:
-      'OmniBCI V19 应用 API / USB、博睿康、强脑：实时波形、通道配置与开流。开流后实验页可切「实时 EEG」，并在方块页按局录制。',
+      'OmniBCI LSL / USB、博睿康、强脑：实时波形、通道配置与开流。开流后实验页可切「实时 EEG」，并在方块页按局录制。',
     tag: 'OmniBCI · 博睿康 · 强脑',
     accent: '#22d3ee',
   },
@@ -52,6 +57,13 @@ const TOOLS = [
 ]
 
 const EXPERIMENTS = [
+  {
+    path: '/nback',
+    title: '实验八 · N-back 工作记忆',
+    blurb: '1–3-back 字母匹配，记录命中、漏报、误报与反应时，支持 EEG 同步录制和行为日志导出。',
+    tag: 'N-back / Working memory',
+    accent: '#22d3ee',
+  },
   {
     path: '/rl-graph',
     title: '实验一 · 人脑反馈强化学习',
@@ -141,7 +153,7 @@ export function Home() {
         </h1>
         <p className="muted mt-3 max-w-2xl text-base">
           先在采集调试连接设备并点「开始采集」，再进实验。采俄罗斯方块时在实验页点「开始本局 / 结束本局」，到「会话库」查看和下载。
-          未开流时仍可用手动滑块或「演示数据」。采集支持 OmniBCI V19 应用 API、USB 固件、博睿康与强脑 BCIGo。
+          未开流时仍可用手动滑块或「演示数据」。采集支持 OmniBCI LSL、USB 固件、博睿康与强脑 BCIGo。
         </p>
       </header>
 

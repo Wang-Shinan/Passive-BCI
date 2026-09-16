@@ -155,10 +155,12 @@ class DiskSink implements RecordSink {
   }
 
   async write(chunk: Uint8Array): Promise<void> {
+    const body = new ArrayBuffer(chunk.byteLength)
+    new Uint8Array(body).set(chunk)
     const res = await fetch(`/api/record/${this.id}/chunk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
-      body: chunk,
+      body,
     })
     if (!res.ok) throw new Error(`record chunk failed (${res.status})`)
   }

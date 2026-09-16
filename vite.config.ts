@@ -6,6 +6,7 @@ import type { Connect } from 'vite'
 import { bridgeManagerPlugin } from './vite.bridge-manager.ts'
 import { modelServiceManagerPlugin } from './vite.model-service-manager.ts'
 import { recordWriterPlugin } from './vite.record-writer.ts'
+import { trainingPlugin } from './vite.training.ts'
 
 const MAX_LOG_CHARS = 2400
 
@@ -310,12 +311,13 @@ export default defineConfig({
     bridgeManagerPlugin(),
     modelServiceManagerPlugin(),
     recordWriterPlugin(),
+    trainingPlugin(),
   ],
   server: {
     proxy: {
-      // OmniBCI V19 local API — app owns ws://127.0.0.1:8765
+      // OmniBCI publishes LSL; the local bridge exposes it as WebSocket.
       '/ws/omni': {
-        target: 'ws://127.0.0.1:8765',
+        target: 'ws://127.0.0.1:8771',
         ws: true,
         rewrite: (path) => path.replace(/^\/ws\/omni/, '/v1/stream'),
       },

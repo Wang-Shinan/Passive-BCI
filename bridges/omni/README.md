@@ -1,32 +1,15 @@
-# OmniBCI V19 本机 API
+# OmniBCI LSL 桥接
 
-OmniBCI V19 应用自己在本机开 WebSocket，浏览器**不需要**再起 Python 桥。采集页默认走这条路径；USB 串口直连固件仍可作为备选。
-
-官方 Python SDK 与协议说明放在本目录（`omnibci_sdk.py`、`API_SDK_GUIDE.md`），网页客户端在 `src/acquisition/omni/`。
+新版 OmniBCI 通过 Lab Streaming Layer（LSL）发布 EEG。浏览器不能直接订阅 LSL，因此本项目用 `lsl_ws_bridge.py` 把 LSL EEG 转成采集页已有的 WebSocket 协议。
 
 ## 用法
 
-1. 打开 OmniBCI V19 桌面应用，连接设备并**开始测量**。
-2. 应用会在本机监听：
-   - 数据：`ws://127.0.0.1:8765/v1/stream`
-   - 控制：`ws://127.0.0.1:8765/v1/control`
-3. `npm run dev` →「采集调试」→ 设备选 **OmniBCI**，链路选 **V19 应用 API** → **连接** → **开始采集**。
+1. 在 OmniBCI 中连接设备、开始测量并启用 LSL。
+2. 安装一次依赖：`pip install -r bridges/omni/requirements.txt`。
+3. 运行 `npm run dev`，进入「采集调试」，设备选择 **OmniBCI**、链路选择 **LSL 桥接**，然后点「连接」。
 
-默认订阅 `raw`（μV，8 导，250 Hz）。显示滤波仍由采集页自己做，避免和应用内滤波叠两层。需要应用当前滤波输出时，把链路旁的流切到 `filtered`。
+网页会自动启动桥接进程。桥接优先选择名称或 source ID 包含 `omni` 的 `EEG` 类型 LSL 流；没有匹配时使用发现的第一个 EEG 流。
 
-连接后如果 hello 成功但没有样本，说明应用还没开始测量：在 OmniBCI 里点开始后再等数据。消费端跟不上时，API 会发 `gap`（丢样本），本页会计入 loss，不会用假数据填洞。
+桥接监听 `ws://127.0.0.1:8771/v1/stream`，端口 8765 留给 OmniBCI 应用，8768/8769 留给模型服务。当前 OmniBCI 只发布一条 EEG LSL 流，所以网页中的流固定显示为 `LSL EEG`。通道标签缺失时使用 `CH1` 至 `CHn`；采样率和通道数从 LSL 元数据读取。
 
-## 和 USB 串口的区别
-
-| | V19 应用 API | USB 串口 |
-|---|---|---|
-| 谁占用设备 | OmniBCI 应用 | 本页 Web Serial |
-| 数据 | JSON 头 + float32 矩阵 | 48 字节 ADS1299 帧 |
-| 通道增益 / 参考 / 阻抗 | 在 OmniBCI 应用里设置 | 本页下发固件命令 |
-| 浏览器 | 任意本机 localhost | 需要 Chrome / Edge Web Serial |
-
-同一时刻只能选一种：应用开着时不要再抢 USB。
-
-## 触发 / 导出
-
-SDK 还提供 `send_trigger`、`send_marker`、`stop_measurement`、`export_bdf`。网页采集目前只消费实时流；控制通道实现见 `src/acquisition/omni/client.ts` 的 `sendOmniTrigger`。
+`omnibci_sdk.py` 和 `API_SDK_GUIDE.md` 是旧版 8765 WebSocket API 的兼容资料，不再用于当前采集链路。

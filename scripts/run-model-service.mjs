@@ -38,7 +38,7 @@ function condaRoots() {
   return [...new Set(roots.filter(Boolean))]
 }
 
-function findNcc() {
+export function findNcc() {
   return firstExisting([
     process.env.NCC_OI_BCI_ROOT,
     path.resolve(passiveRoot, '..', 'NCC-OI-BCI'),
@@ -47,7 +47,7 @@ function findNcc() {
   ])
 }
 
-function findPython(ncc) {
+export function findPython(ncc) {
   const candidates = [
     process.env.NCC_PYTHON,
     path.join(ncc, '.venv', 'Scripts', 'python.exe'),
@@ -96,6 +96,14 @@ function main() {
     process.exit(1)
   }
   const python = findPython(ncc)
+  if (process.argv.includes('--list-heads')) {
+    const child = spawn(python, [path.join(passiveRoot, 'scripts', 'list-reve-heads.py'), passiveRoot, ncc], {
+      cwd: passiveRoot, stdio: 'inherit', windowsHide: true,
+    })
+    child.on('exit', (code) => process.exit(code ?? 1))
+    child.on('error', (error) => { console.error(error.message); process.exit(1) })
+    return
+  }
   const profile = argValue('--profile') || process.env.MODEL_DEVICE_PROFILE || 'neuracle59'
   const port = process.env.MODEL_SERVICE_PORT || '8768'
   const host = process.env.MODEL_SERVICE_HOST || '127.0.0.1'
@@ -129,7 +137,7 @@ function main() {
           '--port',
           port,
           '--size',
-          process.env.MODEL_REVE_SIZE || 'base',
+          argValue('--size') || process.env.MODEL_REVE_SIZE || 'base',
           '--device',
           process.env.MODEL_DEVICE || 'auto',
           '--strategy',
@@ -138,8 +146,9 @@ function main() {
           task,
           ...(stepSec ? ['--step-sec', String(stepSec)] : []),
           ...(stateFile ? ['--state-file', stateFile] : []),
-          ...(process.env.MODEL_REVE_LORA ? ['--lora-checkpoint', process.env.MODEL_REVE_LORA] : []),
-          ...(process.env.MODEL_REVE_NO_LORA === '1' ? ['--no-lora'] : []),
+          ...(argValue('--lora-checkpoint') ? ['--lora-checkpoint', argValue('--lora-checkpoint')] :
+            !process.argv.includes('--no-lora') && process.env.MODEL_REVE_LORA ? ['--lora-checkpoint', process.env.MODEL_REVE_LORA] : []),
+          ...(process.argv.includes('--no-lora') || (!argValue('--lora-checkpoint') && process.env.MODEL_REVE_NO_LORA === '1') ? ['--no-lora'] : []),
           ...(process.env.MODEL_TCP_HOST ? ['--tcp-host', process.env.MODEL_TCP_HOST] : []),
           ...(process.env.MODEL_TCP_PORT ? ['--tcp-port', process.env.MODEL_TCP_PORT] : []),
           ...(process.env.MODEL_NO_TCP === '1' ? ['--no-tcp'] : []),
@@ -184,4 +193,4 @@ function main() {
   })
 }
 
-main()
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()

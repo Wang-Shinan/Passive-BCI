@@ -37,6 +37,7 @@ import {
   type LiveOverlay,
 } from './vite.record-library.ts'
 import { onDevProcessExit } from './vite.process-hooks.ts'
+import { saveNBackSnapshot } from './vite.nback-storage.ts'
 
 const RECORD_DIR = 'recordings'
 const ID_RE = /^[a-zA-Z0-9_-]{8,64}$/
@@ -251,6 +252,20 @@ export function recordWriterPlugin(): Plugin {
 
     void (async () => {
       try {
+        if (url === '/api/record/nback' && req.method === 'POST') {
+          const buffer = await readBody(req)
+          if (buffer.length > 2 * 1024 * 1024) {
+            sendJson(res, 413, { ok: false, message: 'N-back 数据过大' })
+            return
+          }
+          try {
+            const rel = saveNBackSnapshot(recordingsDir(), JSON.parse(buffer.toString('utf8')))
+            sendJson(res, 200, { ok: true, rel })
+          } catch (error) {
+            sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
         if (url === '/api/record/active' && req.method === 'GET') {
           const session = [...sessions.values()].at(-1) ?? null
           if (!session) {

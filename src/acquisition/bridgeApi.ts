@@ -1,6 +1,6 @@
 /** Dev-server helpers to auto-start local acquisition bridges. */
 
-export type BridgeName = 'bcigo' | 'neuracle'
+export type BridgeName = 'bcigo' | 'neuracle' | 'omni'
 
 export interface BridgeEnsureResult {
   ok: boolean
@@ -36,8 +36,8 @@ export async function probeOmniApi(): Promise<OmniProbeResult> {
     return {
       ok: false,
       listening: false,
-      port: 8765,
-      message: '无法探测 OmniBCI V19 本机 API。请确认正在 npm run dev。',
+      port: 8771,
+      message: '无法探测 OmniBCI LSL 桥接。请确认正在 npm run dev。',
     }
   }
 }

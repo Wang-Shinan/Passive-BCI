@@ -1,7 +1,7 @@
-/** OmniBCI V19 local WebSocket API (schema v1). */
+/** OmniBCI LSL bridge WebSocket protocol (schema v1). */
 
 export const OMNI_API_SCHEMA = 1
-export const OMNI_API_PORT = 8765
+export const OMNI_API_PORT = 8771
 export const OMNI_SAMPLE_RATE = 250
 export const OMNI_CHANNELS = 8
 export const OMNI_CHANNEL_NAMES = [

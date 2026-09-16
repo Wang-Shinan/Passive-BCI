@@ -16,10 +16,12 @@ import type { Duplex } from 'node:stream'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
+import { listModelHeads, selectModelHead, modelHeadArgs } from './vite.model-heads.ts'
 
 export type ModelServiceBackend = 'reve' | 'mock'
 
 interface ManagedService {
+  headId?: string | null
   child: ChildProcess | null
   owned: boolean
   backend: ModelServiceBackend | null
@@ -31,6 +33,8 @@ interface ManagedService {
 }
 
 export interface EnsureResult {
+  headId?: string | null
+  loadedHead?: string | null
   ok: boolean
   backend: ModelServiceBackend | null
   port: number
@@ -254,6 +258,8 @@ export function modelServiceManagerPlugin(): Plugin {
       backend: extra.backend ?? state.backend,
       task: extra.task ?? state.task,
       stepSec: extra.stepSec ?? state.stepSec,
+      headId: state.headId ?? null,
+      loadedHead: alive ? state.logBuf.match(/\[reve\] state-file loaded[^\r\n]*[\\/]([^\\/\r\n]+\.pt)/)?.[1] ?? null : null,
       port: PORT,
       running: extra.running ?? false,
       owned: extra.owned ?? (state.owned && alive),
@@ -293,6 +299,7 @@ export function modelServiceManagerPlugin(): Plugin {
     state.backend = null
     state.task = null
     state.stepSec = null
+    state.headId = null
   }
 
   async function ensure(
@@ -300,10 +307,16 @@ export function modelServiceManagerPlugin(): Plugin {
     force: boolean,
     task: string,
     stepSec: number,
+    headId: string | null,
   ): Promise<EnsureResult> {
-    if (state.starting) return state.starting
+    if (state.starting) {
+      return snapshot({ ok: false, message: '模型正在加载，请等待完成后再切换线性头' })
+    }
 
     const run = (async (): Promise<EnsureResult> => {
+      const selected = backend === 'reve' && headId
+        ? selectModelHead(await listModelHeads(projectRoot), headId, task) : null
+      if (selected && process.env.MODEL_PACKAGE) throw new Error('当前使用 MODEL_PACKAGE，不能选择 REVE 线性头')
       const listening = await isPortOpen(PORT)
       const alive = Boolean(state.child && state.child.exitCode === null && !state.child.killed)
 
@@ -315,6 +328,7 @@ export function modelServiceManagerPlugin(): Plugin {
         state.owned &&
         state.backend === backend &&
         state.task === wantedTask &&
+        (state.headId ?? null) === (selected?.id ?? null) &&
         hopOk &&
         !force
       ) {
@@ -356,6 +370,7 @@ export function modelServiceManagerPlugin(): Plugin {
       state.backend = backend
       state.task = wantedTask
       state.stepSec = backend === 'reve' ? stepSec : null
+      state.headId = selected?.id ?? null
       console.log(
         `\x1b[36m[model-service]\x1b[0m starting ${backend}${wantedTask ? `/${wantedTask}` : ''}${
           backend === 'reve' ? ` hop=${stepSec}s` : ''
@@ -367,6 +382,7 @@ export function modelServiceManagerPlugin(): Plugin {
         spawnArgs.push('--task', task)
         spawnArgs.push('--step-sec', String(stepSec))
         if (task === 'smr_control') spawnArgs.push('--strategy', 'none')
+        if (selected) spawnArgs.push(...modelHeadArgs(selected))
       }
       const child = spawn(process.execPath, spawnArgs, {
         cwd: projectRoot,
@@ -412,6 +428,11 @@ export function modelServiceManagerPlugin(): Plugin {
         }
         if (!sawReadyLog && READY_PATTERN.test(state.logBuf)) sawReadyLog = true
         if (sawReadyLog && (await isPortOpen(PORT))) {
+          if (selected && !state.logBuf.includes('[reve] state-file loaded')) {
+            if (child.pid) killPidTree(child.pid)
+            state.lastError = '所选线性头未成功加载（任务或编码器维度不匹配），已停止本次启动。'
+            return snapshot({ ok: false, running: false, message: state.lastError })
+          }
           return snapshot({
             ok: true,
             running: true,
@@ -491,6 +512,11 @@ export function modelServiceManagerPlugin(): Plugin {
 
     void (async () => {
       try {
+        if (action === 'heads' && req.method === 'GET') {
+          const heads = await listModelHeads(projectRoot)
+          sendJson(res, 200, { ok: true, heads: heads.map(({ stateFile: _state, loraCheckpoint: _lora, ...head }) => head) })
+          return
+        }
         if (action === 'status' && (req.method === 'GET' || req.method === 'POST')) {
           sendJson(res, 200, await statusOf())
           return
@@ -502,6 +528,7 @@ export function modelServiceManagerPlugin(): Plugin {
             body.force === true,
             parseReveTask(body.task),
             parseStepSec(body.stepSec ?? body.step_sec, parseReveTask(body.task)),
+            typeof body.headId === 'string' && body.headId ? body.headId : null,
           )
           sendJson(res, result.ok ? 200 : 409, result)
           return

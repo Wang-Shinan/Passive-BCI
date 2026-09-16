@@ -16,7 +16,7 @@ import path from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 
-type BridgeName = 'bcigo' | 'neuracle'
+type BridgeName = 'bcigo' | 'neuracle' | 'omni'
 
 interface BridgeSpec {
   name: BridgeName
@@ -47,6 +47,14 @@ interface EnsureResult {
 }
 
 const SPECS: Record<BridgeName, BridgeSpec> = {
+  omni: {
+    name: 'omni',
+    port: 8771,
+    script: 'bridges/omni/lsl_ws_bridge.py',
+    readyPattern: /\[omni-lsl-bridge\].*ready/i,
+    buildEnv: () => ({ ...process.env, PYTHONUNBUFFERED: '1' }),
+    resolvePython: () => process.env.OMNI_LSL_PYTHON || findPython(),
+  },
   bcigo: {
     name: 'bcigo',
     port: 8767,
@@ -173,9 +181,12 @@ function sendJson(res: import('node:http').ServerResponse, status: number, body:
 
 export function bridgeManagerPlugin(): Plugin {
   const managed = persistentDevStore('bridge-manager', (): Record<BridgeName, ManagedBridge> => ({
+    omni: { child: null, owned: false, lastError: '', starting: null },
     bcigo: { child: null, owned: false, lastError: '', starting: null },
     neuracle: { child: null, owned: false, lastError: '', starting: null },
   }))
+  // Vite reloads config inside the same process; migrate stores created by an older config.
+  managed.omni ??= { child: null, owned: false, lastError: '', starting: null }
   let projectRoot = process.cwd()
 
   async function statusOf(name: BridgeName): Promise<EnsureResult> {
@@ -279,7 +290,9 @@ export function bridgeManagerPlugin(): Plugin {
               ? child.exitCode === 9009
                 ? 'Windows 找不到 python3（退出码 9009）。请用 Anaconda 的 python，或设置 BCIGO_PYTHON'
                 : '请确认已 pip install bcigo-sdk websockets numpy'
-              : '请确认 OI_MI_ROOT / oi-mi 与 neuracle 依赖可用'
+              : name === 'omni'
+                ? '请执行 pip install -r bridges/omni/requirements.txt'
+                : '请确认 OI_MI_ROOT / oi-mi 与 neuracle 依赖可用'
           return {
             ok: false,
             name,
@@ -513,20 +526,20 @@ export function bridgeManagerPlugin(): Plugin {
   const middleware: Connect.NextHandleFunction = (req, res, next) => {
     const url = req.url?.split('?')[0] ?? ''
     if (url === '/api/bridge/omni/probe' && (req.method === 'GET' || req.method === 'POST')) {
-      void isPortOpen(8765)
+      void isPortOpen(8771)
         .then((listening) =>
           sendJson(res, 200, {
             ok: listening,
             listening,
-            port: 8765,
+            port: 8771,
             message: listening
-              ? 'OmniBCI V19 API 已在 :8765 监听，可以连接。'
-              : '未发现 OmniBCI V19（端口 8765）。请先打开应用并开始测量。',
+              ? 'OmniBCI LSL 桥接已在 :8771 监听，可以连接。'
+              : 'OmniBCI LSL 桥接尚未启动。',
           }),
         )
         .catch((err) => {
           const message = err instanceof Error ? err.message : String(err)
-          sendJson(res, 500, { ok: false, listening: false, port: 8765, message })
+          sendJson(res, 500, { ok: false, listening: false, port: 8771, message })
         })
       return
     }
@@ -539,7 +552,7 @@ export function bridgeManagerPlugin(): Plugin {
         })
       return
     }
-    const m = url.match(/^\/api\/bridge\/(bcigo|neuracle)\/(ensure|status|stop)$/)
+    const m = url.match(/^\/api\/bridge\/(bcigo|neuracle|omni)\/(ensure|status|stop)$/)
     if (!m) {
       next()
       return
@@ -587,7 +600,7 @@ export function bridgeManagerPlugin(): Plugin {
       // Do not SIGTERM owned bridges here — only on real process exit.
       onDevProcessExit('bridge-manager', stopAll)
       console.log(
-        '\x1b[35m[bridge]\x1b[0m ready — POST /api/bridge/{bcigo|neuracle}/ensure 可一键启动',
+        '\x1b[35m[bridge]\x1b[0m ready — POST /api/bridge/{omni|bcigo|neuracle}/ensure 可一键启动',
       )
     },
   }

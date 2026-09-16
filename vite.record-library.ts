@@ -5,6 +5,7 @@ import { zipStoreBuffers } from './vite.record-zip.ts'
 export const SESSION_SCHEMA = 'passive-bci.session.v1'
 export const STEM_RE = /^[a-zA-Z0-9._-]{1,80}$/
 export const SESSION_FILES = [
+  'behavior.json',
   'session.json',
   'eeg.bin',
   'eeg.json',

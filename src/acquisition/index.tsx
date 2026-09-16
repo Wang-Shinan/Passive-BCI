@@ -11,7 +11,6 @@ import { BcigoWsClient, type BcigoHello } from './bcigo/client'
 import {
   OmniWsClient,
   OMNI_API_PORT,
-  OMNI_STREAM_FILTERED,
   OMNI_STREAM_RAW,
   type OmniHello,
   type OmniStreamKind,
@@ -242,12 +241,7 @@ function loadOmniLink(): OmniLink {
 }
 
 function loadOmniStream(): OmniStreamKind {
-  try {
-    const v = localStorage.getItem(OMNI_STREAM_STORAGE_KEY)
-    if (v === OMNI_STREAM_FILTERED || v === OMNI_STREAM_RAW) return v
-  } catch {
-    /* ignore */
-  }
+  // OmniBCI currently publishes one EEG LSL outlet; the bridge exposes it as raw.
   return OMNI_STREAM_RAW
 }
 
@@ -259,11 +253,11 @@ function deviceDetail(d: DeviceKind, supported: boolean, omniLink: OmniLink = 'a
     return '连接强脑 BCIGo Wi‑Fi（点连接会自动启动本机桥接；基于 bcigo-sdk）。'
   }
   if (omniLink === 'api') {
-    return '先打开 OmniBCI V19 并开始测量，再点连接。本页订阅本机 ws://127.0.0.1:8765 的 8 导 250 Hz μV 流。'
+    return '先在 OmniBCI 中开始测量并启用 LSL，再点连接。本页会自动启动 LSL 桥接并订阅 EEG 流。'
   }
   return supported
     ? '通过 Web Serial 直连 ADS1299（OmniBCI 固件）。与 V19 应用不要同时占用 USB。'
-    : '当前浏览器不支持 Web Serial，请使用 Chrome / Edge，或改用 V19 应用 API。'
+    : '当前浏览器不支持 Web Serial，请使用 Chrome / Edge，或改用 LSL 桥接。'
 }
 
 function loadSavedConfig(): ChannelConfig {
@@ -1068,18 +1062,12 @@ export function AcquisitionDebugPage() {
       resetBuffers(CHANNELS)
       acqRuntime.status = 'connecting'
       liveEegHub.configure({ device: 'omni', sampleRate: FS, channelNames: [...cfg.labels] })
-      liveEegHub.markConnecting('正在连接 OmniBCI V19 本机 API…')
+      liveEegHub.markConnecting('正在启动 OmniBCI LSL 桥接…')
       setStatus('connecting')
-      setDetail('正在连接 OmniBCI V19 本机 API…')
+      setDetail('正在启动 OmniBCI LSL 桥接…')
       try {
-        const probed = await probeOmniApi()
-        if (probed.message) setOmniProbe(probed.message)
-        if (!probed.listening) {
-          setStatus('error')
-          setDetail(probed.message || '未发现 OmniBCI V19。请先打开应用并开始测量。')
-          liveEegHub.markError(probed.message)
-          return
-        }
+        const ensured = await ensureBridge('omni')
+        if (ensured.message) setOmniProbe(ensured.message)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         setStatus('error')
@@ -1137,7 +1125,7 @@ export function AcquisitionDebugPage() {
           acqRuntime.device = 'omni'
           acqRuntime.omniLink = 'api'
           setStatus('open')
-          const msg = `已连接 OmniBCI V19 · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。若无波形，请在应用里开始测量，再点「开始采集」。`
+          const msg = `已连接 OmniBCI LSL · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。`
           liveEegHub.configure({
             device: 'omni',
             sampleRate: hello.sample_rate,
@@ -1705,7 +1693,7 @@ export function AcquisitionDebugPage() {
     if (device === 'neuracle' || omniApi || status === 'demo') {
       setImpedanceDetail(
         omniApi
-          ? 'V19 应用 API 不提供阻抗。请在 OmniBCI 应用里测，或改用 USB 串口链路。'
+          ? 'LSL 流不提供阻抗。请在 OmniBCI 应用里测，或改用 USB 串口链路。'
           : '当前设备没有 ADS1299 A9 交流导联脱落，无法测量电极阻抗。',
       )
       return
@@ -1997,7 +1985,7 @@ export function AcquisitionDebugPage() {
                 disabled={deviceBusy}
                 onChange={(e) => void switchOmniLink(e.target.value as OmniLink)}
               >
-                <option value="api">V19 应用 API</option>
+                <option value="api">LSL 桥接</option>
                 <option value="usb">USB 串口</option>
               </select>
             </label>
@@ -2020,8 +2008,7 @@ export function AcquisitionDebugPage() {
                     }
                   }}
                 >
-                  <option value={OMNI_STREAM_RAW}>raw（推荐）</option>
-                  <option value={OMNI_STREAM_FILTERED}>filtered</option>
+                  <option value={OMNI_STREAM_RAW}>LSL EEG</option>
                 </select>
               </label>
               {omniProbe ? <span className="acq-hint">{omniProbe}</span> : null}

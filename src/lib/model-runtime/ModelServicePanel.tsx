@@ -3,12 +3,15 @@ import {
   ensureModelService,
   modelServiceStatus,
   stopModelService,
+  fetchModelHeads,
+  type ModelHeadOption,
   type ModelServiceBackend,
   type ModelServiceEnsureResult,
 } from './modelServiceApi'
 import { modelRuntimeHub, modelUrlPresets } from './modelRuntimeHub'
 import { REVE_TASKS, liveStepSecForReveTask, reveTaskOption, type ReveTaskId } from './reveTasks'
 import { useModelRuntime } from './useModelRuntime'
+import { HeadSelector } from './HeadSelector'
 
 function latency(value: number | null): string {
   return value == null ? '—' : `${value.toFixed(1)} ms`
@@ -46,6 +49,29 @@ function ModelServiceLaunchBar({
   const [busy, setBusy] = useState(false)
   const [proc, setProc] = useState<ModelServiceEnsureResult | null>(null)
   const [launchError, setLaunchError] = useState('')
+  const [heads, setHeads] = useState<ModelHeadOption[]>([])
+  const [headsLoading, setHeadsLoading] = useState(false)
+  const [headsError, setHeadsError] = useState('')
+  const [selection, setSelection] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('passive-bci.model-heads') || '{}') ?? {} } catch { return {} }
+  })
+  const task = reveTask ?? 'passive_rating'
+  const selectedHead = selection[task] ?? ''
+  const taskHeads = heads.filter((head) => head.task === task || !head.task)
+  const selectedOption = heads.find((head) => head.id === selectedHead && head.task === task)
+  const invalidHead = Boolean(selectedHead && (!selectedOption || !selectedOption.available))
+  const refreshHeads = async (signal?: AbortSignal) => {
+    setHeadsLoading(true)
+    setHeadsError('')
+    try { setHeads(await fetchModelHeads(signal)) }
+    catch (error) { if (!signal?.aborted) setHeadsError(error instanceof Error ? error.message : String(error)) }
+    finally { if (!signal?.aborted) setHeadsLoading(false) }
+  }
+  useEffect(() => {
+    const controller = new AbortController()
+    void refreshHeads(controller.signal)
+    return () => controller.abort()
+  }, [])
 
   const refresh = async (signal?: AbortSignal) => {
     try {
@@ -82,6 +108,7 @@ function ModelServiceLaunchBar({
         backend,
         force,
         task: backend === 'reve' ? reveTask : undefined,
+        headId: backend === 'reve' ? selectedHead : undefined,
         stepSec: backend === 'reve' ? (liveStepSec ?? liveStepSecForReveTask(reveTask)) : undefined,
       })
       setProc(result)
@@ -116,6 +143,15 @@ function ModelServiceLaunchBar({
   return (
     <div className="mb-3 space-y-2">
       <div className="flex flex-wrap items-center gap-2">
+        <div style={{ minWidth: 220, maxWidth: '100%' }}>
+          <HeadSelector heads={heads} task={task} value={selectedHead} disabled={starting || headsLoading}
+            onChange={(value) => {
+              const next = { ...selection, [task]: value }
+              setSelection(next)
+              try { localStorage.setItem('passive-bci.model-heads', JSON.stringify(next)) } catch { /* optional preference */ }
+            }} />
+        </div>
+        <button className="btn" disabled={starting || headsLoading} onClick={() => void refreshHeads()}>{headsLoading ? '读取中…' : '刷新线性头'}</button>
         {onReveTaskChange ? (
           <label className="acq-field" style={{ minWidth: 220 }}>
             任务头
@@ -136,10 +172,10 @@ function ModelServiceLaunchBar({
         <button
           type="button"
           className="btn btn-primary"
-          disabled={starting}
+          disabled={starting || headsLoading || invalidHead}
           onClick={() => void launch('reve', occupied || wrongTask)}
         >
-          {starting ? '正在启动…' : reveLaunchLabel(reveTask, occupied || wrongTask)}
+          {starting ? '正在启动…' : proc?.running && selectedHead !== (proc.headId ?? '') ? '应用线性头并重启' : reveLaunchLabel(reveTask, occupied || wrongTask)}
         </button>
         <button type="button" className="btn" disabled={starting} onClick={() => void launch('mock', occupied)}>
           启动 Mock
@@ -153,6 +189,10 @@ function ModelServiceLaunchBar({
             : proc?.message || '开发服务可一键拉起本地模型'}
         </span>
       </div>
+      <p className="muted m-0 text-xs">当前已加载：{proc?.loadedHead || '尚未确认'}。选择后点击启动按钮生效；切换会重启模型服务，暂停推理。</p>
+      {selectedOption && <p className="muted m-0 text-xs">配套编码器：{selectedOption.encoderId} · {selectedOption.classes} 类。启动时自动匹配。</p>}
+      {!headsLoading && !taskHeads.length && <p className="muted m-0 text-xs">当前任务暂无已保存线性头。将文件放入 recordings/.reve-heads 后刷新列表。</p>}
+      {(headsError || invalidHead) && <p className="m-0 text-xs" style={{ color: 'var(--danger)' }}>{headsError || selectedOption?.reason || '所选线性头不可用，请重新选择。'}</p>}
       {reveTask === 'smr_control' ? (
         <p className="m-0 text-xs" style={{ color: 'var(--warn)' }}>
           SMR 头冻结，不在线微调。光标仍可由 REVE 驱动。
