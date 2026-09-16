@@ -516,6 +516,10 @@ class ModelRuntimeHub {
       socket.send(JSON.stringify(packet.header))
       socket.send(packet.payload)
       this.sentWindowKeys.add(windowKey)
+      // Only recent windows can still be queued/replayed. Bound long-session memory.
+      while (this.sentWindowKeys.size > 2048) {
+        this.sentWindowKeys.delete(this.sentWindowKeys.values().next().value!)
+      }
       this.trackInFlight(packet.header.request_id)
       this.patch({
         pendingWindows: this.pending.length,

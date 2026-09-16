@@ -14,7 +14,7 @@ export class SessionHub {
   private rel: string | null = null
   private eventQ: string[] = []
   private contextQ: string[] = []
-  private eventFlushScheduled = false
+  private eventTimer: ReturnType<typeof setTimeout> | null = null
   private contextTimer: ReturnType<typeof setTimeout> | null = null
   private listeners = new Set<(info: SessionHubInfo) => void>()
   private flushChain: Promise<void> = Promise.resolve()
@@ -63,12 +63,11 @@ export class SessionHub {
   logEvent(record: SessionEventRecord): void {
     if (!this.id) return
     this.eventQ.push(JSON.stringify(record))
-    if (this.eventFlushScheduled) return
-    this.eventFlushScheduled = true
-    queueMicrotask(() => {
-      this.eventFlushScheduled = false
+    if (this.eventTimer !== null) return
+    this.eventTimer = setTimeout(() => {
+      this.eventTimer = null
       void this.flushEvents()
-    })
+    }, CONTEXT_FLUSH_MS)
   }
 
   logContext(record: SessionContextRecord): void {
@@ -125,6 +124,10 @@ export class SessionHub {
   }
 
   private clearTimer(): void {
+    if (this.eventTimer !== null) {
+      clearTimeout(this.eventTimer)
+      this.eventTimer = null
+    }
     if (this.contextTimer === null) return
     clearTimeout(this.contextTimer)
     this.contextTimer = null
@@ -135,7 +138,8 @@ export class SessionHub {
   }
 
   private async flushContext(): Promise<void> {
-    this.clearTimer()
+    if (this.contextTimer !== null) clearTimeout(this.contextTimer)
+    this.contextTimer = null
     await this.postQueue('context', this.contextQ)
   }
 
