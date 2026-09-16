@@ -4,6 +4,7 @@ import {
   modelServiceStatus,
   stopModelService,
   fetchModelHeads,
+  selectModelHeadPreference,
   type ModelHeadOption,
   type ModelServiceBackend,
   type ModelServiceEnsureResult,
@@ -12,6 +13,7 @@ import { modelRuntimeHub, modelUrlPresets } from './modelRuntimeHub'
 import { REVE_TASKS, liveStepSecForReveTask, reveTaskOption, type ReveTaskId } from './reveTasks'
 import { useModelRuntime } from './useModelRuntime'
 import { HeadSelector } from './HeadSelector'
+import { useModelConfiguration, useAppliedModel } from './useModelConfiguration'
 
 function latency(value: number | null): string {
   return value == null ? '—' : `${value.toFixed(1)} ms`
@@ -47,16 +49,14 @@ function ModelServiceLaunchBar({
   onReveTaskChange?: (task: ReveTaskId) => void
 }) {
   const [busy, setBusy] = useState(false)
-  const [proc, setProc] = useState<ModelServiceEnsureResult | null>(null)
+  const [details, setDetails] = useState<ModelServiceEnsureResult | null>(null)
+  const proc = useAppliedModel()
   const [launchError, setLaunchError] = useState('')
   const [heads, setHeads] = useState<ModelHeadOption[]>([])
   const [headsLoading, setHeadsLoading] = useState(false)
   const [headsError, setHeadsError] = useState('')
-  const [selection, setSelection] = useState<Record<string, string>>(() => {
-    try { return JSON.parse(localStorage.getItem('passive-bci.model-heads') || '{}') ?? {} } catch { return {} }
-  })
   const task = reveTask ?? 'passive_rating'
-  const selectedHead = selection[task] ?? ''
+  const { headId: selectedHead, recording, busy: operationBusy } = useModelConfiguration(task)
   const taskHeads = heads.filter((head) => head.task === task || !head.task)
   const selectedOption = heads.find((head) => head.id === selectedHead && head.task === task)
   const invalidHead = Boolean(selectedHead && (!selectedOption || !selectedOption.available))
@@ -75,7 +75,7 @@ function ModelServiceLaunchBar({
 
   const refresh = async (signal?: AbortSignal) => {
     try {
-      setProc(await modelServiceStatus(signal))
+      setDetails(await modelServiceStatus(signal))
     } catch (error) {
       if (signal?.aborted) return
       if (error instanceof DOMException && error.name === 'AbortError') return
@@ -95,10 +95,7 @@ function ModelServiceLaunchBar({
     }
   }, [])
 
-  const afterReady = () => {
-    modelRuntimeHub.setEnabled(true)
-    modelRuntimeHub.connect()
-  }
+  const afterReady = () => { modelRuntimeHub.setEnabled(true) }
 
   const launch = async (backend: ModelServiceBackend, force: boolean) => {
     setBusy(true)
@@ -111,7 +108,7 @@ function ModelServiceLaunchBar({
         headId: backend === 'reve' ? selectedHead : undefined,
         stepSec: backend === 'reve' ? (liveStepSec ?? liveStepSecForReveTask(reveTask)) : undefined,
       })
-      setProc(result)
+      setDetails(result)
       afterReady()
     } catch (error) {
       setLaunchError(error instanceof Error ? error.message : String(error))
@@ -125,7 +122,7 @@ function ModelServiceLaunchBar({
     setBusy(true)
     setLaunchError('')
     try {
-      setProc(await stopModelService())
+      setDetails(await stopModelService())
     } catch (error) {
       setLaunchError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -137,28 +134,31 @@ function ModelServiceLaunchBar({
   const wrongTask = Boolean(
     reveTask && proc?.backend === 'reve' && proc.task && proc.task !== reveTask,
   )
-  const canStop = Boolean(proc?.owned && proc.running) && !busy
-  const starting = busy || Boolean(proc?.starting)
+  const canStop = Boolean(proc?.owned || proc?.starting || operationBusy || busy)
+  const starting = busy || operationBusy || Boolean(proc?.starting)
+  const loadedId = proc?.headId || ''
+  const desiredId = selectedHead || (task === 'gaze_smr' ? 'gaze_smr_active.pt' : '')
+  const pendingSelection = Boolean(proc?.running && (proc.task !== task || desiredId !== loadedId || (selectedOption?.configurationKey && selectedOption.configurationKey !== proc.configurationKey)))
 
   return (
     <div className="mb-3 space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <div style={{ minWidth: 220, maxWidth: '100%' }}>
-          <HeadSelector heads={heads} task={task} value={selectedHead} disabled={starting || headsLoading}
+          <HeadSelector heads={heads} task={task} value={selectedHead} disabled={recording || starting || headsLoading}
+            defaultLabel={task === 'gaze_smr' ? '当前激活 gaze 头及其报告' : '默认配置'}
             onChange={(value) => {
-              const next = { ...selection, [task]: value }
-              setSelection(next)
-              try { localStorage.setItem('passive-bci.model-heads', JSON.stringify(next)) } catch { /* optional preference */ }
+              try { selectModelHeadPreference(task, value); setLaunchError('') }
+              catch (error) { setLaunchError(String(error)) }
             }} />
         </div>
-        <button className="btn" disabled={starting || headsLoading} onClick={() => void refreshHeads()}>{headsLoading ? '读取中…' : '刷新线性头'}</button>
+        <button className="btn" disabled={recording || starting || headsLoading} onClick={() => void refreshHeads()}>{headsLoading ? '读取中…' : '刷新线性头'}</button>
         {onReveTaskChange ? (
           <label className="acq-field" style={{ minWidth: 220 }}>
             任务头
             <select
               className="input"
               value={reveTask ?? 'passive_rating'}
-              disabled={starting}
+              disabled={recording || starting}
               onChange={(event) => onReveTaskChange(event.target.value as ReveTaskId)}
             >
               {REVE_TASKS.map((item) => (
@@ -172,24 +172,25 @@ function ModelServiceLaunchBar({
         <button
           type="button"
           className="btn btn-primary"
-          disabled={starting || headsLoading || invalidHead}
+          disabled={recording || starting || headsLoading || invalidHead}
           onClick={() => void launch('reve', occupied || wrongTask)}
         >
-          {starting ? '正在启动…' : proc?.running && selectedHead !== (proc.headId ?? '') ? '应用线性头并重启' : reveLaunchLabel(reveTask, occupied || wrongTask)}
+          {starting ? '正在启动…' : pendingSelection ? '应用线性头并重启' : reveLaunchLabel(reveTask, occupied || wrongTask)}
         </button>
-        <button type="button" className="btn" disabled={starting} onClick={() => void launch('mock', occupied)}>
+        <button type="button" className="btn" disabled={recording || starting} onClick={() => void launch('mock', occupied)}>
           启动 Mock
         </button>
         <button type="button" className="btn" disabled={!canStop} onClick={() => void stop()}>
-          停止
+          停止服务（不自动重连）
         </button>
         <span className="muted text-sm">
           {starting
             ? `加载中${proc?.backend ? ` · ${proc.backend}` : ''}（REVE 首次可能要一两分钟）`
-            : proc?.message || '开发服务可一键拉起本地模型'}
+            : details?.message || '开发服务可一键拉起本地模型'}
         </span>
       </div>
-      <p className="muted m-0 text-xs">当前已加载：{proc?.loadedHead || '尚未确认'}。选择后点击启动按钮生效；切换会重启模型服务，暂停推理。</p>
+      <p className="muted m-0 text-xs">已运行：{proc?.running ? proc?.headId || proc?.loadedHead || '默认模型' : '未运行'}。待应用：{selectedHead || '默认配置'}。{pendingSelection ? '选择尚未生效；点击应用后切换。' : '选择后点击启动按钮生效。'}</p>
+      {recording && <p role="status" className="muted m-0 text-xs">录制中：任务、模型和连接地址已锁定。停止服务会中断脑控，但不会删除录制。</p>}
       {selectedOption && <p className="muted m-0 text-xs">配套编码器：{selectedOption.encoderId} · {selectedOption.classes} 类。启动时自动匹配。</p>}
       {!headsLoading && !taskHeads.length && <p className="muted m-0 text-xs">当前任务暂无已保存线性头。将文件放入 recordings/.reve-heads 后刷新列表。</p>}
       {(headsError || invalidHead) && <p className="m-0 text-xs" style={{ color: 'var(--danger)' }}>{headsError || selectedOption?.reason || '所选线性头不可用，请重新选择。'}</p>}
@@ -203,9 +204,9 @@ function ModelServiceLaunchBar({
           {launchError}
         </p>
       ) : null}
-      {starting && proc?.logTail ? (
+      {starting && details?.logTail ? (
         <pre className="m-0 max-h-28 overflow-auto rounded-lg border border-[var(--border)] bg-[#0a0f18] p-2 text-xs text-[#94a3b8]">
-          {proc.logTail.trim()}
+          {details.logTail.trim()}
         </pre>
       ) : null}
     </div>
@@ -224,8 +225,9 @@ export function ModelServicePanel({
   onReveTaskChange?: (task: ReveTaskId) => void
 }) {
   const state = useModelRuntime()
+  const { recording, busy: operationBusy } = useModelConfiguration(reveTask ?? 'passive_rating')
   const [url, setUrl] = useState(state.url)
-  const [debugOpen, setDebugOpen] = useState(true)
+  const [debugOpen, setDebugOpen] = useState(false)
   const prediction = state.latestPrediction
 
   useEffect(() => {
@@ -244,6 +246,7 @@ export function ModelServicePanel({
           <input
             type="checkbox"
             checked={state.enabled}
+            disabled={!state.enabled && (recording || operationBusy)}
             onChange={(event) => modelRuntimeHub.setEnabled(event.target.checked)}
           />
           启用 NCC 模型旁路
@@ -253,6 +256,7 @@ export function ModelServicePanel({
           <input
             className="input"
             value={url}
+            disabled={recording || operationBusy}
             onChange={(event) => setUrl(event.target.value)}
             onBlur={() => modelRuntimeHub.setUrl(url)}
             onKeyDown={(event) => {
@@ -266,6 +270,7 @@ export function ModelServicePanel({
               key={preset.id}
               type="button"
               className="btn"
+              disabled={recording || operationBusy}
               onClick={() => {
                 setUrl(preset.url)
                 modelRuntimeHub.setUrl(preset.url)
@@ -277,7 +282,7 @@ export function ModelServicePanel({
           <button
             type="button"
             className="btn"
-            disabled={!state.enabled || state.status === 'connecting'}
+            disabled={operationBusy || !state.enabled || state.status === 'connecting' || (recording && url !== state.url)}
             onClick={() => {
               modelRuntimeHub.setUrl(url)
               modelRuntimeHub.connect()
@@ -288,7 +293,7 @@ export function ModelServicePanel({
           <button
             type="button"
             className="btn"
-            disabled={!state.enabled}
+            disabled={operationBusy || !state.enabled}
             onClick={() => modelRuntimeHub.sendHelloProbe()}
           >
             发送 hello

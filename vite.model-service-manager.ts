@@ -1,3 +1,6 @@
+import { operationGate } from './vite.operation-gate.ts'
+import { readGazeHead } from './vite.gaze-heads.ts'
+import type { GazeModelReport } from './src/lib/model-runtime/modelServiceTypes.ts'
 /**
  * Vite plugin: one-click start/stop for the local NCC model WebSocket
  * (REVE / mock) so the online-learn UI need not ask users for npm scripts.
@@ -14,13 +17,17 @@ import type { IncomingMessage } from 'node:http'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import path from 'node:path'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 import { listModelHeads, selectModelHead, modelHeadArgs } from './vite.model-heads.ts'
 
 export type ModelServiceBackend = 'reve' | 'mock'
 
 interface ManagedService {
+  configurationKey?: string | null
+  modelRevision?: string | null
+  gazeReport?: GazeModelReport | null
+  generation?: number
   headId?: string | null
   child: ChildProcess | null
   owned: boolean
@@ -33,6 +40,9 @@ interface ManagedService {
 }
 
 export interface EnsureResult {
+  configurationKey?: string | null
+  modelRevision?: string | null
+  gazeReport?: GazeModelReport | null
   headId?: string | null
   loadedHead?: string | null
   ok: boolean
@@ -260,6 +270,9 @@ export function modelServiceManagerPlugin(): Plugin {
       task: extra.task ?? state.task,
       stepSec: extra.stepSec ?? state.stepSec,
       headId: state.headId ?? null,
+      configurationKey: state.configurationKey ?? null,
+      modelRevision: state.modelRevision ?? null,
+      gazeReport: state.gazeReport ?? null,
       loadedHead: alive ? state.logBuf.match(/\[reve\] state-file loaded[^\r\n]*[\\/]([^\\/\r\n]+\.pt)/)?.[1] ?? null : null,
       port: PORT,
       running: extra.running ?? false,
@@ -301,6 +314,9 @@ export function modelServiceManagerPlugin(): Plugin {
     state.task = null
     state.stepSec = null
     state.headId = null
+    state.configurationKey = null
+    state.modelRevision = null
+    state.gazeReport = null
   }
 
   async function ensure(
@@ -314,14 +330,17 @@ export function modelServiceManagerPlugin(): Plugin {
       return snapshot({ ok: false, message: '模型正在加载，请等待完成后再切换线性头' })
     }
 
+    const generation = (state.generation ?? 0) + 1
+    state.generation = generation
+    let release: () => void = () => { /* no mutation lease yet */ }
+    const assertCurrent = () => { if (state.generation !== generation) throw new Error('模型启动已取消') }
     const run = (async (): Promise<EnsureResult> => {
-      if (backend === 'reve' && task === 'gaze_smr' && (headId || process.env.MODEL_PACKAGE)) {
-        throw new Error('gaze_smr 使用固定 active 头及配套报告，请清空 headId 和 MODEL_PACKAGE')
-      }
-      const selected = backend === 'reve' && headId
-        ? selectModelHead(await listModelHeads(projectRoot), headId, task) : null
+      const selected = backend !== 'reve' ? null : task === 'gaze_smr'
+        ? readGazeHead(projectRoot, headId || 'gaze_smr_active.pt')
+        : headId ? selectModelHead(await listModelHeads(projectRoot), headId, task) : null
       if (selected && process.env.MODEL_PACKAGE) throw new Error('当前使用 MODEL_PACKAGE，不能选择 REVE 线性头')
       const listening = await isPortOpen(PORT)
+      assertCurrent()
       const alive = Boolean(state.child && state.child.exitCode === null && !state.child.killed)
 
       const wantedTask = backend === 'reve' ? task : null
@@ -333,6 +352,7 @@ export function modelServiceManagerPlugin(): Plugin {
         state.backend === backend &&
         state.task === wantedTask &&
         (state.headId ?? null) === (selected?.id ?? null) &&
+        (state.configurationKey ?? null) === (selected?.configurationKey ?? null) &&
         hopOk &&
         !force
       ) {
@@ -355,11 +375,14 @@ export function modelServiceManagerPlugin(): Plugin {
         })
       }
 
+      assertCurrent()
+      release = operationGate.beginModelChange()
       if (listening || (state.owned && alive) || force) {
         stopOwned()
         if (force || listening) await freePort(PORT)
       }
 
+      assertCurrent()
       const scriptPath = path.join(projectRoot, 'scripts', 'run-model-service.mjs')
       if (!existsSync(scriptPath)) {
         return snapshot({
@@ -375,6 +398,9 @@ export function modelServiceManagerPlugin(): Plugin {
       state.task = wantedTask
       state.stepSec = backend === 'reve' ? stepSec : null
       state.headId = selected?.id ?? null
+      state.configurationKey = selected?.configurationKey ?? null
+      state.gazeReport = selected?.gazeReport ?? null
+      state.modelRevision = selected?.modelRevision ?? selected?.gazeReport?.modelRevision ?? null
       console.log(
         `\x1b[36m[model-service]\x1b[0m starting ${backend}${wantedTask ? `/${wantedTask}` : ''}${
           backend === 'reve' ? ` hop=${stepSec}s` : ''
@@ -386,9 +412,6 @@ export function modelServiceManagerPlugin(): Plugin {
         spawnArgs.push('--task', task)
         spawnArgs.push('--step-sec', String(stepSec))
         if (task === 'smr_control' || task === 'gaze_smr') spawnArgs.push('--strategy', 'none')
-        if (task === 'gaze_smr') {
-          spawnArgs.push('--state-file', path.join(projectRoot, 'recordings', '.reve-heads', 'gaze_smr_active.pt'), '--size', 'base')
-        }
         if (selected) spawnArgs.push(...modelHeadArgs(selected))
       }
       const child = spawn(process.execPath, spawnArgs, {
@@ -423,6 +446,7 @@ export function modelServiceManagerPlugin(): Plugin {
       const deadline = Date.now() + TIMEOUT_MS[backend]
       let sawReadyLog = false
       while (Date.now() < deadline) {
+        assertCurrent()
         if (child.exitCode !== null) {
           return snapshot({
             ok: false,
@@ -435,6 +459,7 @@ export function modelServiceManagerPlugin(): Plugin {
         }
         if (!sawReadyLog && READY_PATTERN.test(state.logBuf)) sawReadyLog = true
         if (sawReadyLog && (await isPortOpen(PORT))) {
+          assertCurrent()
           if ((selected || task === 'gaze_smr') && !state.logBuf.includes('[reve] state-file loaded')) {
             if (child.pid) killPidTree(child.pid)
             state.lastError = '所选线性头未成功加载（任务或编码器维度不匹配），已停止本次启动。'
@@ -474,11 +499,13 @@ export function modelServiceManagerPlugin(): Plugin {
     try {
       return await run
     } finally {
-      state.starting = null
+      release()
+      if (state.starting === run) state.starting = null
     }
   }
 
   function stop(): EnsureResult {
+    state.generation = (state.generation ?? 0) + 1
     if (state.child && state.owned) {
       stopOwned()
       return snapshot({
@@ -521,8 +548,9 @@ export function modelServiceManagerPlugin(): Plugin {
     void (async () => {
       try {
         if (action === 'gaze-smr-model' && req.method === 'GET') {
-          const report = path.join(projectRoot, 'recordings', '.reve-heads', 'gaze_smr_active.json')
-          sendJson(res, 200, { ok: true, model: existsSync(report) ? JSON.parse(readFileSync(report, 'utf8')) : null })
+          const id = new URL(req.url ?? '', 'http://localhost').searchParams.get('headId') || 'gaze_smr_active.pt'
+          const missingDefault = id === 'gaze_smr_active.pt' && !existsSync(path.join(projectRoot, 'recordings', '.reve-heads', id))
+          sendJson(res, 200, { ok: true, model: missingDefault ? null : readGazeHead(projectRoot, id).gazeReport })
           return
         }
         if (action === 'fit-gaze-smr' && req.method === 'POST') {
@@ -530,6 +558,7 @@ export function modelServiceManagerPlugin(): Plugin {
           const body = await readJson(req)
           if (typeof body.session !== 'string' || !/^[A-Za-z0-9_-]+$/.test(body.session)
             || typeof body.subject !== 'string' || !body.subject.trim()) throw new Error('Invalid session or subject')
+          const releaseFit = operationGate.beginModelChange()
           gazeFitting = true
           try {
             const output = await new Promise<string>((resolve, reject) => execFile(process.execPath,
@@ -539,12 +568,12 @@ export function modelServiceManagerPlugin(): Plugin {
             const result = output.split(/\r?\n/).find(line => line.startsWith('RESULT '))
             if (!result) throw new Error('REVE fitting returned no model report')
             sendJson(res, 200, { ok: true, model: JSON.parse(result.slice(7)) })
-          } finally { gazeFitting = false }
+          } finally { gazeFitting = false; releaseFit() }
           return
         }
         if (action === 'heads' && req.method === 'GET') {
           const heads = await listModelHeads(projectRoot)
-          sendJson(res, 200, { ok: true, heads: heads.map(({ stateFile: _state, loraCheckpoint: _lora, ...head }) => head) })
+          sendJson(res, 200, { ok: true, heads: heads.map(({ stateFile: _state, loraCheckpoint: _lora, reportFile: _report, ...head }) => head) })
           return
         }
         if (action === 'status' && (req.method === 'GET' || req.method === 'POST')) {

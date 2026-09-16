@@ -22,6 +22,7 @@ for file in sorted((root / 'recordings' / '.reve-heads').glob('*.pt')):
                     item['trainedAt'] = stamp.isoformat()
             except ValueError:
                 pass
+        item['modelRevision'] = payload.get('model_revision')
         task = str(payload.get('task', 'passive_rating'))
         encoder = str(payload.get('encoder_id', 'reve-base'))
         weight = payload['head']['weight']

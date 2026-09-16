@@ -20,7 +20,8 @@ import {
   type ModelWindowPacket,
 } from './contracts'
 import { ModelWindowAssembler } from './windowAssembler'
-import { modelServiceStatus } from './modelServiceApi'
+import { modelServiceStatus, registerModelRuntimeControl, modelConfigurationLocked } from './modelServiceApi'
+import { modelOperation } from './modelOperation'
 import {
   collectExpiredInFlight,
   inFlightTimeoutMs,
@@ -190,6 +191,8 @@ class ModelRuntimeHub {
   }
 
   setEnabled(enabled: boolean): void {
+    if (!enabled) modelOperation.cancel()
+    if (enabled && modelOperation.busy) return
     localStorage.setItem(ENABLED_KEY, String(enabled))
     this.patch({ enabled })
     this.logDebug('info', enabled ? '模型旁路已启用' : '模型旁路已关闭')
@@ -199,6 +202,9 @@ class ModelRuntimeHub {
 
   setUrl(url: string): void {
     const next = url.trim() || defaultModelUrl()
+    if (next !== this.snapshotValue.url && (modelConfigurationLocked() || modelOperation.busy)) {
+      this.logDebug('warn', '录制或模型操作期间不能更换连接地址'); return
+    }
     localStorage.setItem(URL_KEY, next)
     const reconnect = next !== this.snapshotValue.url && this.snapshotValue.enabled
     this.patch({ url: next })
@@ -242,6 +248,7 @@ class ModelRuntimeHub {
   }
 
   connect(): void {
+    if (modelOperation.busy) return
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
     void this.connectAsync()
@@ -690,3 +697,8 @@ class ModelRuntimeHub {
 }
 
 export const modelRuntimeHub = new ModelRuntimeHub()
+
+registerModelRuntimeControl({
+  suspend: () => modelRuntimeHub.disconnect('closed'),
+  disable: () => modelRuntimeHub.setEnabled(false),
+})

@@ -23,7 +23,7 @@ export function resolveReveLoraArgs({ task, stateFile, ncc, argv = [], env = {} 
     if (!stateFile || !/\.pt$/i.test(stateFile) || !existsSync(stateFile)) {
       throw new Error('Missing gaze-SMR active head; complete gaze collection and fitting first')
     }
-    const reportPath = stateFile.replace(/\.pt$/i, '.json')
+    const reportPath = option(argv, '--report-file') || stateFile.replace(/\.pt$/i, '.json')
     if (!existsSync(reportPath)) throw new Error(`Missing gaze-SMR report: ${reportPath}`)
     const report = JSON.parse(readFileSync(reportPath, 'utf8'))
     if (!report || report.task !== 'gaze_smr') throw new Error('Gaze head/report task mismatch')

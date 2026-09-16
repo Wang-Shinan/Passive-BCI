@@ -1,3 +1,5 @@
+import { ModelHeadPicker } from '../../lib/model-runtime/ModelHeadPicker'
+import { preferredModelHead } from '../../lib/model-runtime/modelServiceApi'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Board } from '../tetris/Board'
@@ -52,11 +54,12 @@ export function GazeTetrisPage({ eyeOnly = false }: { eyeOnly?: boolean }) {
       if (recorderIsActive()) throw new Error('请先保存并结束当前录制，再开始游戏会话')
       if (!liveEegHub.isFresh() || liveEegHub.meta.device === 'demo') throw new Error('请先连接真实 EEG 并开始采集')
       const channels = [...liveEegHub.meta.channelNames], hz = liveEegHub.meta.sampleRate
-      const model = eyeOnly ? null : await gazeModel()
+      const headId = preferredModelHead('gaze_smr')
+      const model = eyeOnly ? null : await gazeModel(undefined, undefined, headId)
       const eye = eyeOnly ? parseGazeModel(localStorage.getItem(`passive-bci.gaze-model.v1.${subject}`)) : null
       const selected = eyeOnly ? eye : model
       if (!selected || selected.subjectId !== subject || selected.sampleRate !== hz || selected.channels.join('|') !== channels.join('|')) throw new Error('需要本被试相同通道、采样率的已训练模型；请先完成对应采集')
-      if (!eyeOnly) await connectGazeModel()
+      if (!eyeOnly) await connectGazeModel(headId)
       if (!mounted.current) return
       const seed = randomSeed(), logger = new SessionLogger(experiment,subject)
       const rec = await startExperimentRecording({ experiment,subjectId: subject,seed })
@@ -66,7 +69,7 @@ export function GazeTetrisPage({ eyeOnly = false }: { eyeOnly?: boolean }) {
       const now = performance.now(), next = createGame(seed)
       active.current = { game: next,rng: mulberry32(seed),model,eye,baseline:null,ready:now+3000,last:now,actionAt:now,paused:false,channels,hz,logger }
       logger.log('session_start',{ protocol:`${experiment}-v1`,mode:'game',seed,channels,sampleRate:hz,
-        decoder:eyeOnly?'eeg-gaze-regularized-diagonal-lda':'reve-lp',modelRevision:model?.modelRevision,
+        decoder:eyeOnly?'eeg-gaze-regularized-diagonal-lda':'reve-lp',modelRevision:model?.modelRevision,headId:eyeOnly?null:headId || 'gaze_smr_active.pt',
         eyeModelCreatedAt:eye?.createdAt,activeClasses:model?.activeClasses ?? DIRECTIONS,predictionVisible:true,
         instructions:eyeOnly?'注视希望操作的方向，无需运动想象':'注视方向并做对应运动想象：左手/右手/双手/休息',
         actions:{left:'left',right:'right',up:'rotate',down:'softDrop'},labelsAre:'decoded_game_actions_not_ground_truth' })
@@ -123,11 +126,12 @@ export function GazeTetrisPage({ eyeOnly = false }: { eyeOnly?: boolean }) {
     return ()=>{ mounted.current=false; document.removeEventListener('visibilitychange',hidden); active.current?.logger.log('session_abort',{reason:'离开页面'}); active.current=null; if(owned.current){owned.current=false;void stopExperimentRecording()} }
   },[])
   return <main className="gaze-tetris-page">
-    <nav><Link to="/smr-gaze">← 眼动 SMR 采集</Link> · <Link to={eyeOnly?'/gaze-smr-tetris':'/gaze-tetris'}>{eyeOnly?'眼动 SMR 版':'纯眼动版'}</Link></nav>
+    <nav><Link to="/tetris">协作 Tetris（下→静止）</Link> · <Link to="/smr-gaze">← 眼动 SMR 采集</Link> · <Link to={eyeOnly?'/gaze-smr-tetris':'/gaze-tetris'}>{eyeOnly?'眼动 SMR 版':'纯眼动版'}</Link></nav>
     <h1>{eyeOnly?'眼动版':'眼动辅助 SMR'}俄罗斯方块</h1>
     <p>{eyeOnly?'使用已保存的 EEG 眼动 LDA，注视方向即可；无需运动想象。':'REVE＋LP：左手→左移，右手→右移，双手→旋转，休息→下落，同时注视对应方向。'}</p>
     <p>左右二分类模型只控制左右；旋转与下落可用下方按钮。游戏操作单独记录，不当作采集指令标签。</p>
     <LiveEegBadge />
+    {!eyeOnly && <ModelHeadPicker task="gaze_smr" disabled={running || busy} />}
     <div className="gaze-game-controls"><label>被试编号 <input value={subject} disabled={running||busy} onChange={e=>setSubject(e.target.value)} /></label>
       <button className="btn btn-primary" disabled={running||busy} onClick={()=>void start()}>开始并录制</button>
       <button className="btn" disabled={!running||busy} onClick={pause}>{paused?'继续':'暂停'}</button>

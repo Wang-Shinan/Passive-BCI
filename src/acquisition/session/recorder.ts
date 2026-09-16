@@ -1,5 +1,8 @@
+import { modelOperation } from '../../lib/model-runtime/modelOperation'
 import { sampleClock, type SampleClockDump } from '../../lib/eeg/sampleClock'
 import { sessionHub } from '../../lib/session/sessionHub'
+
+class RecordConflict extends Error {}
 
 /** Stream EEG to disk (Vite /api/record) or coalesced memory as fallback. */
 
@@ -127,6 +130,7 @@ class DiskSink implements RecordSink {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename, meta: meta ?? null }),
       })
+      if (res.status === 409) throw new RecordConflict('模型正在切换，录制未开始；请等待模型就绪')
       if (!res.ok) {
         const text = await res.text().catch(() => '')
         console.warn(`[record] disk start failed (${res.status}) ${text}`)
@@ -149,6 +153,7 @@ class DiskSink implements RecordSink {
       sessionHub.attach({ id: body.id, rel: body.rel })
       return new DiskSink(body.id, body.filename || filename, path, body.rel)
     } catch (err) {
+      if (err instanceof RecordConflict) throw err
       console.warn('[record] disk start threw', err)
       return null
     }
@@ -243,6 +248,7 @@ export class BinRecorder {
   }
 
   async start(opts: RecordStartOptions = { filenamePrefix: 'omni_ads1299' }): Promise<RecordSinkKind> {
+    if (modelOperation.busy) throw new Error('模型正在切换，暂不能开始录制')
     if (this.startedAt !== null) await this.discard()
     this.pending = new Uint8Array(this.flushBytes)
     this.pendingLen = 0
@@ -252,6 +258,7 @@ export class BinRecorder {
     this.startedAt = Date.now()
     this.sessionId = makeSessionId()
     this.filename = recordFilename(opts.filenamePrefix, this.sessionId)
+    try {
     if (this.createSink) {
       this.sink = await this.createSink({ filename: this.filename, meta: opts.meta })
     } else {
@@ -259,6 +266,7 @@ export class BinRecorder {
         (await DiskSink.open(this.filename, opts.meta)) ?? new MemorySink(this.filename)
     }
     return this.sink.kind
+    } catch (error) { this.resetLocal(); throw error }
   }
 
   append(frameRaw: Uint8Array): void {

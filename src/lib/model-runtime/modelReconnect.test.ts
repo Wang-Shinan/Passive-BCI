@@ -1,7 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
 vi.mock('../../acquisition/runtime', () => ({ subscribeRawBridgeBatches: vi.fn() }))
-vi.mock('./modelServiceApi', () => ({ modelServiceStatus: vi.fn(async () => ({ running: true })) }))
+vi.mock('./modelServiceApi', () => ({
+  modelServiceStatus: vi.fn(async () => ({ running: true })),
+  registerModelRuntimeControl: vi.fn(),
+  modelConfigurationLocked: vi.fn(() => false),
+}))
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.resetModules() })
 

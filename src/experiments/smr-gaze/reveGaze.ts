@@ -1,3 +1,4 @@
+import { normalizeGazePrediction } from './gazeModelContract'
 import { modelRuntimeHub } from '../../lib/model-runtime/modelRuntimeHub'
 import { ensureModelService } from '../../lib/model-runtime/modelServiceApi'
 import { DIRECTIONS } from './classifier'
@@ -10,18 +11,17 @@ export type GazeReport = {
   activeClasses?: string[]
   evaluation: { n: number; balancedAccuracy: number | null; recalls: (number | null)[] }
 }
-export async function gazeModel(session?: string, subject?: string): Promise<GazeReport | null> {
-  const response = await fetch(`/api/model-service/${session ? 'fit-gaze-smr' : 'gaze-smr-model'}`, session ? {
+export async function gazeModel(session?: string, subject?: string, headId = ''): Promise<GazeReport | null> {
+  const response = await fetch(`/api/model-service/${session ? 'fit-gaze-smr' : `gaze-smr-model?headId=${encodeURIComponent(headId)}`}`, session ? {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session, subject }),
   } : undefined)
   const result = await response.json()
   if (!response.ok || !result.ok) throw new Error(result.message || 'REVE 模型接口失败')
   return result.model
 }
-export async function connectGazeModel() {
-  await ensureModelService({ backend: 'reve', task: 'gaze_smr', stepSec: 0.2, force: true })
+export async function connectGazeModel(headId = '') {
+  await ensureModelService({ backend: 'reve', task: 'gaze_smr', headId, stepSec: 0.2, force: true })
   modelRuntimeHub.setEnabled(true)
-  modelRuntimeHub.connect()
 }
 export function gazePrediction(model: GazeReport, after = 0) {
   const { serviceHello: hello, latestPrediction: p } = modelRuntimeHub.snapshot
@@ -30,10 +30,5 @@ export function gazePrediction(model: GazeReport, after = 0) {
     || performance.now() - p.received_at_ms > 1000
     || p.class_names.join('|') !== DIRECTIONS.join('|')
     || p.probabilities.length !== 4 || p.probabilities.some(v => !Number.isFinite(v) || v < 0)) return null
-  if (model.activeClasses?.join('|') === 'left|right') {
-    const mass = p.probabilities[0]! + p.probabilities[1]!
-    if (mass <= 1e-8) return null
-    return { ...p, probabilities: [p.probabilities[0]! / mass, p.probabilities[1]! / mass, 0, 0] }
-  }
-  return p
+  return normalizeGazePrediction(p, { modelRevision: model.modelRevision, activeClasses: model.activeClasses ?? [...DIRECTIONS] })
 }

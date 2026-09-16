@@ -1,3 +1,4 @@
+import { operationGate } from './vite.operation-gate.ts'
 /**
  * Vite plugin: stream a labeled session to recordings/<stem>/
  *
@@ -176,6 +177,7 @@ export function recordWriterPlugin(): Plugin {
       endStream(session.eventsStream),
       endStream(session.contextStream),
     ]).catch(() => undefined)
+    operationGate.detachRecording(session.id)
     if (unlink) {
       try {
         rmSync(session.dirPath, { recursive: true, force: true })
@@ -391,6 +393,8 @@ export function recordWriterPlugin(): Plugin {
         }
 
         if (url === '/api/record/start' && req.method === 'POST') {
+          try { operationGate.assertCanRecord() }
+          catch (error) { sendJson(res, 409, { ok: false, message: String(error) }); return }
           await evictOldestIfNeeded()
           if (sessions.size >= MAX_SESSIONS) {
             sendJson(res, 429, { ok: false, message: '已有录制进行中' })
@@ -408,6 +412,8 @@ export function recordWriterPlugin(): Plugin {
           } catch {
             stem = safeSessionStem(stem)
           }
+          try { operationGate.assertCanRecord() }
+          catch (error) { sendJson(res, 409, { ok: false, message: String(error) }); return }
           const root = recordingsDir()
           mkdirSync(root, { recursive: true })
           stem = uniqueStem(root, stem)
@@ -452,6 +458,7 @@ export function recordWriterPlugin(): Plugin {
               },
             },
           }
+          operationGate.attachRecording(id)
           sessions.set(id, session)
           writeManifest(session)
           writeEegSidecar(session, { startedAt: session.manifest.startedAt, status: 'recording' })
@@ -590,6 +597,7 @@ export function recordWriterPlugin(): Plugin {
             endStream(session.contextStream),
           ])
           sessions.delete(id)
+          operationGate.detachRecording(id)
           if (bytes === 0) {
             try {
               rmSync(dirPath, { recursive: true, force: true })
