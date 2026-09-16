@@ -22,13 +22,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Snapshot reviewed source (tracked files only)
-        run: git archive --format=tar HEAD > "$RUNNER_TEMP/reviewed-source.tar"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: reviewed-source-${{ github.sha }}
-          path: ${{ runner.temp }}/reviewed-source.tar
-          retention-days: 3
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -44,6 +37,20 @@ jobs:
         run: |
           node --test scripts/test-reve-launch-options.mjs
           node --experimental-strip-types --test scripts/test-brain-control-task.mjs
+          node --experimental-strip-types --test scripts/test-model-integration.mjs
       - name: Lint
         if: ${{ !cancelled() }}
         run: npm run lint
+      - name: Browser control-flow regression (mock model and recording)
+        if: ${{ !cancelled() }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tetris-playwright" --no-package-lock --ignore-scripts playwright@1.56.1
+          "$RUNNER_TEMP/tetris-playwright/node_modules/.bin/playwright" install --with-deps chromium
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/tetris-playwright/node_modules/playwright/index.mjs" node scripts/test-tetris-ui.mjs
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: tetris-ui-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
