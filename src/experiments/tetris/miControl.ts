@@ -22,7 +22,7 @@ const CLASS_TO_ACTION: Record<string, MiControlAction> = {
 export const SMR_CONTROL_SEMANTICS = 'smr_control_4'
 
 export function isSmrControlPrediction(prediction: ModelPrediction): boolean {
-  return prediction.output_semantics === SMR_CONTROL_SEMANTICS || prediction.task === 'smr_control'
+  return prediction.output_semantics === SMR_CONTROL_SEMANTICS || prediction.task === 'smr_control' || prediction.task === 'gaze_smr'
 }
 
 export function miControlActionForClassName(name: string): MiControlAction | null {

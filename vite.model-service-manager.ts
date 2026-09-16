@@ -9,12 +9,12 @@
 
 import type { Plugin } from 'vite'
 import type { Connect } from 'vite'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import type { IncomingMessage } from 'node:http'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import path from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 import { listModelHeads, selectModelHead, modelHeadArgs } from './vite.model-heads.ts'
 
@@ -216,6 +216,7 @@ function parseBackend(value: unknown): ModelServiceBackend {
 
 function parseReveTask(value: unknown): string {
   const raw = typeof value === 'string' ? value.trim().toLowerCase().replace(/-/g, '_') : ''
+  if (raw === 'gaze_smr') return 'gaze_smr'
   if (raw === 'tetris' || raw === 'tetris_action' || raw === 'action') return 'tetris_action'
   if (raw === 'smr' || raw === 'smr_control' || raw === 'smr_cursor' || raw === 'cursor') return 'smr_control'
   return 'passive_rating'
@@ -314,6 +315,9 @@ export function modelServiceManagerPlugin(): Plugin {
     }
 
     const run = (async (): Promise<EnsureResult> => {
+      if (backend === 'reve' && task === 'gaze_smr' && (headId || process.env.MODEL_PACKAGE)) {
+        throw new Error('gaze_smr 使用固定 active 头及配套报告，请清空 headId 和 MODEL_PACKAGE')
+      }
       const selected = backend === 'reve' && headId
         ? selectModelHead(await listModelHeads(projectRoot), headId, task) : null
       if (selected && process.env.MODEL_PACKAGE) throw new Error('当前使用 MODEL_PACKAGE，不能选择 REVE 线性头')
@@ -381,7 +385,10 @@ export function modelServiceManagerPlugin(): Plugin {
       if (backend === 'reve') {
         spawnArgs.push('--task', task)
         spawnArgs.push('--step-sec', String(stepSec))
-        if (task === 'smr_control') spawnArgs.push('--strategy', 'none')
+        if (task === 'smr_control' || task === 'gaze_smr') spawnArgs.push('--strategy', 'none')
+        if (task === 'gaze_smr') {
+          spawnArgs.push('--state-file', path.join(projectRoot, 'recordings', '.reve-heads', 'gaze_smr_active.pt'), '--size', 'base')
+        }
         if (selected) spawnArgs.push(...modelHeadArgs(selected))
       }
       const child = spawn(process.execPath, spawnArgs, {
@@ -428,7 +435,7 @@ export function modelServiceManagerPlugin(): Plugin {
         }
         if (!sawReadyLog && READY_PATTERN.test(state.logBuf)) sawReadyLog = true
         if (sawReadyLog && (await isPortOpen(PORT))) {
-          if (selected && !state.logBuf.includes('[reve] state-file loaded')) {
+          if ((selected || task === 'gaze_smr') && !state.logBuf.includes('[reve] state-file loaded')) {
             if (child.pid) killPidTree(child.pid)
             state.lastError = '所选线性头未成功加载（任务或编码器维度不匹配），已停止本次启动。'
             return snapshot({ ok: false, running: false, message: state.lastError })
@@ -493,6 +500,7 @@ export function modelServiceManagerPlugin(): Plugin {
     })
   }
 
+  let gazeFitting = false
   const middleware: Connect.NextHandleFunction = (req, res, next) => {
     const url = req.url?.split('?')[0] ?? ''
     if (!url.startsWith('/api/model-service/')) {
@@ -512,6 +520,28 @@ export function modelServiceManagerPlugin(): Plugin {
 
     void (async () => {
       try {
+        if (action === 'gaze-smr-model' && req.method === 'GET') {
+          const report = path.join(projectRoot, 'recordings', '.reve-heads', 'gaze_smr_active.json')
+          sendJson(res, 200, { ok: true, model: existsSync(report) ? JSON.parse(readFileSync(report, 'utf8')) : null })
+          return
+        }
+        if (action === 'fit-gaze-smr' && req.method === 'POST') {
+          if (gazeFitting) { sendJson(res, 409, { ok: false, message: 'REVE LP 正在训练' }); return }
+          const body = await readJson(req)
+          if (typeof body.session !== 'string' || !/^[A-Za-z0-9_-]+$/.test(body.session)
+            || typeof body.subject !== 'string' || !body.subject.trim()) throw new Error('Invalid session or subject')
+          gazeFitting = true
+          try {
+            const output = await new Promise<string>((resolve, reject) => execFile(process.execPath,
+              [path.join(projectRoot, 'scripts', 'run-gaze-fit.mjs'), '--recordings', path.join(projectRoot, 'recordings'), '--session', body.session as string, '--subject', body.subject as string],
+              { cwd: projectRoot, windowsHide: true, timeout: 180000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, PYTHONUTF8: '1' } },
+              (err, stdout, stderr) => err ? reject(new Error(stderr.slice(-3000) || err.message)) : resolve(stdout)))
+            const result = output.split(/\r?\n/).find(line => line.startsWith('RESULT '))
+            if (!result) throw new Error('REVE fitting returned no model report')
+            sendJson(res, 200, { ok: true, model: JSON.parse(result.slice(7)) })
+          } finally { gazeFitting = false }
+          return
+        }
         if (action === 'heads' && req.method === 'GET') {
           const heads = await listModelHeads(projectRoot)
           sendJson(res, 200, { ok: true, heads: heads.map(({ stateFile: _state, loraCheckpoint: _lora, ...head }) => head) })

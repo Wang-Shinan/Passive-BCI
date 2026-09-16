@@ -376,6 +376,7 @@ export function SmrAdaptPage() {
             ← 返回首页
           </Link>
           <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">SMR 个体化适配</h1>
+          <Link to="/smr-gaze" className="btn mt-3">全屏视线方向采集 · 解码眼动伪迹</Link>
           <p className="muted mt-1 max-w-2xl text-sm">
             Stieger 式连续光标：左手左、右手右、双手上、休息下。光标可选 REVE 四分类或原来的 C3/C4 mu。SMR 头冻结，不在线微调。只展示上下可去{' '}
             <Link to="/smr-ud" style={{ color: 'var(--accent)' }}>

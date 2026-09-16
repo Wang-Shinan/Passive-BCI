@@ -7,6 +7,13 @@ const TOOLS = [
     tag: 'H5 · Linear probing', accent: '#22d3ee',
   },
   {
+    path: '/smr-gaze',
+    title: '眼动辅助 SMR 采集',
+    blurb: '均衡方向试次、闭环光标反馈与个体化 REVE 线性头训练；也保留纯 EEG 眼动方向分类器。',
+    tag: '视线方向 · 采集与训练',
+    accent: '#f3cc62',
+  },
+  {
     path: '/acquisition',
     title: '采集调试',
     blurb:

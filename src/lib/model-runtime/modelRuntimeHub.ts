@@ -138,6 +138,15 @@ class ModelRuntimeHub {
   private latencies: number[] = []
   private debugLog: ModelDebugEntry[] = []
   private connectSeq = 0
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+  private scheduleReconnect(): void {
+    if (!this.snapshotValue.enabled || this.reconnectTimer !== null) return
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      if (this.snapshotValue.enabled) this.connect()
+    }, 2000)
+  }
   private snapshotValue: ModelRuntimeSnapshot = {
     enabled: loadEnabled(),
     status: loadEnabled() ? 'closed' : 'disabled',
@@ -233,6 +242,8 @@ class ModelRuntimeHub {
   }
 
   connect(): void {
+    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
     void this.connectAsync()
   }
 
@@ -256,6 +267,7 @@ class ModelRuntimeHub {
           lastError: '模型服务未在 :8768 监听。请先点「启动 REVE」。',
           socketReadyState: null,
         })
+        this.scheduleReconnect()
         return
       }
     }
@@ -283,6 +295,7 @@ class ModelRuntimeHub {
         lastError: message,
         socketReadyState: null,
       })
+      this.scheduleReconnect()
       return
     }
     socket.binaryType = 'arraybuffer'
@@ -327,6 +340,8 @@ class ModelRuntimeHub {
       this.logDebug(event.wasClean ? 'info' : 'warn', 'WebSocket 已关闭', detail)
       this.patch({
         status: this.snapshotValue.enabled ? 'closed' : 'disabled',
+        latestPrediction: null,
+        serviceHello: null,
         inFlightWindows: 0,
         socketReadyState: WebSocket.CLOSED,
         lastCloseCode: event.code,
@@ -337,10 +352,14 @@ class ModelRuntimeHub {
             : this.snapshotValue.lastError ||
               `连接关闭 (${event.code}${event.reason ? `: ${event.reason}` : ''})`,
       })
+      this.scheduleReconnect()
     }
   }
 
   disconnect(status: ModelServiceStatus = 'closed'): void {
+    this.connectSeq++
+    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
     this.disconnectSocket()
     this.pending = []
     this.sourceQueue = []
@@ -353,6 +372,8 @@ class ModelRuntimeHub {
     })
     this.patch({
       status,
+      latestPrediction: null,
+      serviceHello: null,
       pendingWindows: 0,
       inFlightWindows: 0,
       sourceCompatible: false,
@@ -516,6 +537,10 @@ class ModelRuntimeHub {
       socket.send(JSON.stringify(packet.header))
       socket.send(packet.payload)
       this.sentWindowKeys.add(windowKey)
+      // Only recent windows can still be queued/replayed. Bound long-session memory.
+      while (this.sentWindowKeys.size > 2048) {
+        this.sentWindowKeys.delete(this.sentWindowKeys.values().next().value!)
+      }
       this.trackInFlight(packet.header.request_id)
       this.patch({
         pendingWindows: this.pending.length,

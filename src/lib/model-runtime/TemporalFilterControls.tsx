@@ -27,6 +27,7 @@ export function useTemporalFilter(stepSec = DEFAULT_TEMPORAL_FILTER.stepSec) {
 }
 
 const MODES: { id: TemporalFilterMode; label: string }[] = [
+  { id: 'vote', label: '多数投票' },
   { id: 'raw', label: '原始 argmax' },
   { id: 'ema', label: 'EMA logits' },
   { id: 'window', label: '滑窗均值' },
@@ -83,7 +84,7 @@ export function TemporalFilterControls({
           onChange={(stayProb) => onChange({ ...config, stayProb })}
         />
       ) : null}
-      {config.mode === 'window' ? (
+      {config.mode === 'window' || config.mode === 'vote' ? (
         <Slider
           label="累积窗"
           value={config.horizonSec}
@@ -94,7 +95,7 @@ export function TemporalFilterControls({
           onChange={(horizonSec) => onChange({ ...config, horizonSec })}
         />
       ) : null}
-      {config.mode !== 'raw' ? (
+      {config.mode !== 'raw' && config.mode !== 'vote' ? (
         <Slider
           label="温度 T"
           value={config.temperature}
@@ -106,7 +107,9 @@ export function TemporalFilterControls({
         />
       ) : null}
       <p className="muted m-0 text-xs">
-        {config.mode === 'raw'
+        {config.mode === 'vote'
+          ? `最近 ${n} 次独立收到的预测各投一票；收满后，超过半数才执行。票数占比不是模型置信度。`
+          : config.mode === 'raw'
           ? '每个 0.1s 窗独立 argmax。重叠窗会被当成新样本，容易闪动。'
           : config.mode === 'ema'
             ? `当前窗只占 ${(config.alpha * 100).toFixed(0)}% logits，其余来自历史。不平均 softmax。`

@@ -7,6 +7,7 @@ import { bridgeManagerPlugin } from './vite.bridge-manager.ts'
 import { modelServiceManagerPlugin } from './vite.model-service-manager.ts'
 import { recordWriterPlugin } from './vite.record-writer.ts'
 import { trainingPlugin } from './vite.training.ts'
+import { clientDiagnosticsPlugin } from './vite.client-diagnostics.ts'
 
 const MAX_LOG_CHARS = 2400
 
@@ -233,7 +234,6 @@ async function proxyLlm(req: IncomingMessage, res: ServerResponse) {
       logBlock('RESPONSE ← upstream STREAM', [
         `status: ${upstream.status} ${upstream.statusText}`,
         `ttfb: ${msHeaders} ms`,
-        `content-type: ${contentType}`,
       ])
 
       res.statusCode = upstream.status
@@ -312,6 +312,7 @@ export default defineConfig({
     modelServiceManagerPlugin(),
     recordWriterPlugin(),
     trainingPlugin(),
+    clientDiagnosticsPlugin(),
   ],
   server: {
     proxy: {

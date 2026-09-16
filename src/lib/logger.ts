@@ -54,8 +54,8 @@ export class SessionLogger {
       type,
       data: eeg ? { ...data, eeg } : data,
     })
-    if (sessionHub.active && this.events.length > EVENT_RING) {
-      this.events = this.events.slice(-EVENT_RING)
+    if (this.events.length > EVENT_RING) {
+      this.events.splice(0, this.events.length - EVENT_RING)
     }
     sessionHub.logEvent({
       schema: EVENT_SCHEMA,

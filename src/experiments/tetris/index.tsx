@@ -1,3 +1,5 @@
+import { TeacherTargetDrop } from './targetDrop'
+import { LandingIntentGuard, harmsUsefulLanding } from './landingGuard'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { SessionLogger } from '../../lib/logger'
@@ -45,6 +47,7 @@ import { RlAgentPanel } from './RlAgentPanel'
 import { StressPanel } from './StressPanel'
 import {
   applyTeacherFollow,
+  teacherFollowActions,
   clampFollowMoves,
   clampFollowSteps,
   describeCollabDecision,
@@ -178,6 +181,13 @@ export function TetrisExperiment() {
   const [followMoves, setFollowMoves] = useState(loadFollowMoves)
   const [followSteps, setFollowSteps] = useState(loadFollowSteps)
   const [followHumanCount, setFollowHumanCount] = useState(0)
+  const landingGuardRef = useRef(new LandingIntentGuard())
+  const teacherTargetDropRef = useRef(new TeacherTargetDrop())
+  const autoDropActiveRef = useRef<string | null>(null)
+  const autoDropUntilRef = useRef(0)
+  const followRemainingRef = useRef(0)
+  const followActionAtRef = useRef(0)
+  const followQueuePieceRef = useRef<string | null>(null)
   const followMovesRef = useRef(followMoves)
   const followStepsRef = useRef(followSteps)
   const followHumanCountRef = useRef(0)
@@ -299,7 +309,25 @@ export function TetrisExperiment() {
     }
   }, [miControlEnabled])
 
-  const enableSmrControl = async (enabled: boolean) => {
+  useEffect(() => {
+    setTemporalConfig(config => ({ ...config, mode: 'vote', horizonSec: 0.5 }))
+  }, [setTemporalConfig])
+
+  useEffect(() => {
+    if (!miControlEnabled) return
+    if (!modelRuntime.enabled) modelRuntimeHub.setEnabled(true)
+    else if (modelRuntime.status === 'closed' || modelRuntime.status === 'error') modelRuntimeHub.connect()
+  }, [miControlEnabled, modelRuntime.enabled])
+
+  useEffect(() => {
+    if (modelRuntime.status === 'ready') return
+    temporalFilterRef.current.reset()
+    lastMiObservationRef.current = null
+    setSmrDecision(null)
+    setLastMiAction('等待模型连接和新预测')
+  }, [modelRuntime.status, temporalFilterRef])
+
+  const enableSmrControl = async (enabled: boolean, task = 'gaze_smr') => {
     setMiControlEnabled(enabled)
     if (!enabled) {
       setCollabEnabled(false)
@@ -313,12 +341,12 @@ export function TetrisExperiment() {
       const force = Boolean(
         status.running &&
           (!status.owned ||
-            status.task !== 'smr_control' ||
+            status.task !== task ||
             !reveLiveHopMatches(status.stepSec, TETRIS_LIVE_STEP_SEC)),
       )
       await ensureModelService({
         backend: 'reve',
-        task: 'smr_control',
+        task,
         stepSec: TETRIS_LIVE_STEP_SEC,
         force,
       })
@@ -346,7 +374,7 @@ export function TetrisExperiment() {
     setRlEnabled(false)
     setCollabEnabled(false)
     teacherRef.current.reset()
-    if (!miControlEnabled) await enableSmrControl(true)
+    await enableSmrControl(true, 'gaze_smr')
   }
 
   useEffect(() => {
@@ -435,22 +463,21 @@ export function TetrisExperiment() {
 
   const runFollowBurst = useCallback((afterMove: GameState) => {
     if (!afterMove.piece || afterMove.gameOver || afterMove.paused || afterMove.anim) return
-    const t0 = performance.now()
-    const burst = applyTeacherFollow(afterMove, followStepsRef.current, rngRef.current)
-    const latencyMs = performance.now() - t0
-    setRlLatencyMs(latencyMs)
-    setLastRlAction(
-      burst.actions.length > 0 ? burst.actions.map(describeRlAction).join(' → ') : '跟手 · 无后续',
-    )
-    applyResult(burst.state, burst.events)
-    followPieceKeyRef.current = followPieceKey(burst.state)
-    loggerRef.current.log('action', {
-      source: 'follow',
-      action: burst.actions.join(',') || 'noop',
-      steps: burst.actions.length,
-      human_moves: followMovesRef.current,
-      budget: followStepsRef.current,
-      latency_ms: latencyMs,
+    followRemainingRef.current = followStepsRef.current
+    followQueuePieceRef.current = followPieceKey(afterMove)
+    followActionAtRef.current = performance.now()
+    // Rotate immediately; lateral movement starts on the next 500 ms beat.
+    let rotated = afterMove
+    const rotations = teacherFollowActions(afterMove, 1).filter(action => action === 'rotateCW' || action === 'rotateCCW')
+    for (const action of rotations) {
+      const result = applyRlAction(rotated, action, rngRef.current)
+      rotated = result.state
+      applyResult(result.state, result.events)
+      loggerRef.current.log('action', { source: 'follow', action, counts_toward_budget: false })
+    }
+    loggerRef.current.log('follow_plan', {
+      human_moves: followMovesRef.current, budget: followStepsRef.current,
+      step_interval_ms: 500, replan_each_step: true,
     })
   }, [applyResult])
 
@@ -474,7 +501,18 @@ export function TetrisExperiment() {
     if (!miControlEnabled || rlEnabled) return
     const prediction = modelRuntime.latestPrediction
     if (!prediction || prediction.observation_id === lastMiObservationRef.current) return
+    if (prediction.task !== 'gaze_smr') {
+      temporalFilterRef.current.reset()
+      setLastMiAction('模型任务不匹配，请重新连接脑控服务')
+      return
+    }
 
+    if (temporalConfig.mode === 'vote' && (stateRef.current.paused || stateRef.current.gameOver || stateRef.current.anim || (followEnabled && followRemainingRef.current > 0))) {
+      temporalFilterRef.current.reset()
+      landingGuardRef.current.reset()
+      lastMiObservationRef.current = prediction.observation_id
+      return
+    }
     const decision = temporalFilterRef.current.observePrediction(prediction)
     const smoothed = predictionFromDecision(prediction, decision)
     setSmrDecision(decision)
@@ -506,10 +544,20 @@ export function TetrisExperiment() {
       confidence: decision.confidence,
     })
 
-    if (!action || action === 'none') return
+    if (decision.ready === false || !action || action === 'none') { landingGuardRef.current.reset(); return }
+    if (followEnabled && followRemainingRef.current > 0) return
 
     const s = stateRef.current
     if (s.gameOver || s.paused || s.anim) return
+
+    if ((followEnabled || collabEnabled) && (action === 'left' || action === 'right') && harmsUsefulLanding(s, action)) {
+      const strong = decision.confidence >= .8 && miControlActionForClassName(decision.rawClassName) === action
+      const allowed = landingGuardRef.current.allow(`${prediction.model_revision}|${followPieceKey(s)}|${s.piece?.x}|${s.piece?.rot}`, action, performance.now(), strong)
+      if (!allowed) {
+        loggerRef.current.log('landing_guard', { action, blocked: true, reason: 'protect_useful_landing', confidence: decision.confidence })
+        return
+      }
+    } else landingGuardRef.current.reset()
 
     const beforeX = s.piece?.x
     const result = applyMiControlAction(s, action, rngRef.current)
@@ -608,7 +656,35 @@ export function TetrisExperiment() {
         )
       }
 
+      if (!followEnabled || followQueuePieceRef.current !== followPieceKey(stateRef.current) || stateRef.current.gameOver) {
+        followRemainingRef.current = 0
+      }
+      const queuedState = stateRef.current
+      if (followEnabled && !queuedState.paused && !queuedState.anim && followRemainingRef.current > 0
+        && performance.now() - followActionAtRef.current >= 500) {
+        // Replan from the current board instead of replaying stale actions.
+        const result = applyTeacherFollow(queuedState, 1, rngRef.current)
+        applyResult(result.state, result.events)
+        const lateral = result.actions.some(action => action === 'left' || action === 'right')
+        followRemainingRef.current = lateral ? followRemainingRef.current - 1 : 0
+        followActionAtRef.current = performance.now()
+        setLastRlAction(result.actions.map(describeRlAction).join(' / '))
+        for (const action of result.actions) {
+          loggerRef.current.log('action', { source: 'follow', action, step_interval_ms: 500,
+            counts_toward_budget: action === 'left' || action === 'right',
+            budget: followStepsRef.current, remaining_steps: followRemainingRef.current })
+        }
+      }
       const s = stateRef.current
+      const autoDrop = followEnabled && teacherTargetDropRef.current.ready(s)
+      const targetKey = autoDrop ? `${followPieceKey(s)}|${s.piece?.x}|${s.piece?.rot}` : null
+      if (targetKey !== autoDropActiveRef.current) {
+        autoDropActiveRef.current = targetKey
+        autoDropUntilRef.current = targetKey ? performance.now() + 3000 : 0
+        loggerRef.current.log('teacher_target_soft_drop', { active: Boolean(targetKey), duration_ms: 3000,
+          x: s.piece?.x, rotation: s.piece?.rot })
+      }
+      const targetSoftDrop = Boolean(targetKey) && performance.now() < autoDropUntilRef.current
       const teacherDrive = rlEnabled || collabEnabled
       if (!s.gameOver && !s.paused) {
         if (s.anim) {
@@ -621,7 +697,7 @@ export function TetrisExperiment() {
           } else {
             const speed = softDropHeldRef.current
               ? Math.max(gState.smoothed, 22)
-              : gState.smoothed
+              : targetSoftDrop ? Math.max(gState.smoothed, 10) : gState.smoothed
             const result = softDropHeldRef.current
               ? softDropBurst(s, rngRef.current, dtSec, speed)
               : advanceFall(s, rngRef.current, dtSec, speed, false)
@@ -684,6 +760,7 @@ export function TetrisExperiment() {
         return
       }
       if (s.gameOver || s.paused || s.anim) return
+      if (followEnabled && followRemainingRef.current > 0) return
       if (collabEnabled && ['ArrowUp', 'x', 'X', 'z', 'Z'].includes(e.key)) return
       if (followEnabled && e.repeat && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return
 
@@ -732,6 +809,8 @@ export function TetrisExperiment() {
   }, [applyResult, rlEnabled, collabEnabled, followEnabled, noteHumanFollowSlide])
 
   const restart = () => {
+    followRemainingRef.current = 0
+    followActionAtRef.current = 0
     const nextSeed = (Math.random() * 0xffffffff) >>> 0
     seedRef.current = nextSeed
     rngRef.current = mulberry32(nextSeed)
@@ -770,7 +849,7 @@ export function TetrisExperiment() {
     modelRuntime.status === 'ready' &&
     Boolean(modelRuntime.serviceHello) &&
     !smrPrediction &&
-    modelRuntime.serviceHello?.task !== 'smr_control'
+    modelRuntime.serviceHello?.task !== 'gaze_smr'
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6">
@@ -788,7 +867,7 @@ export function TetrisExperiment() {
             ←→ 移动 · ↑/X 顺时针 · Z 逆时针 · ↓ 软降 · 空格硬降 · P 暂停 · R 重开
             {miControlEnabled && !collabEnabled ? ' · SMR：左手← 右手→ 双手↻ 休息静止' : ''}
             {collabEnabled ? ' · 协作：脑控←→ · I 无井不竖' : ''}
-            {followEnabled ? ` · 跟手：人 ${followMoves} 左右 / 教师 ${followSteps} 左右 · 旋转不计` : ''}
+            {followEnabled ? ` · 跟手：人 ${followMoves} 左右 / 教师 ${followSteps} 左右 · 旋转不计 · 教师每步 0.5 秒` : ''}
             {rlEnabled ? ' · 启发式教师代打中' : ''}
           </p>
         </div>
@@ -964,7 +1043,7 @@ export function TetrisExperiment() {
             </label>
             <p className="muted m-0 mb-3 text-sm">
               左手 → 左移 · 右手 → 右移 · 双手 → 顺时针旋转 · 休息 → 静止。勾选后拉起已拟合、冻结的
-              smr_control，每 0.1 秒送来一帧重叠窗；默认对 logits 做时间滤波后再动手，不在线微调
+              gaze_smr，每 0.1 秒送来一帧重叠窗；默认多数投票后再动手，不在线微调
               {collabEnabled
                 ? '。协作模式下手脑旋转会被忽略；I 只在已有深井时才竖放，空盘保持横放。'
                 : followEnabled
@@ -985,7 +1064,7 @@ export function TetrisExperiment() {
                   disabled={smrEnsuring}
                   onClick={() => void enableSmrControl(true)}
                 >
-                  切换到 smr_control
+                  切换到 gaze_smr
                 </button>
               </p>
             ) : null}
@@ -1022,7 +1101,7 @@ export function TetrisExperiment() {
               ) : null}
             </div>
             <div className="mt-4">
-              <ModelServicePanel embedded reveTask="smr_control" liveStepSec={TETRIS_LIVE_STEP_SEC} />
+              <ModelServicePanel embedded reveTask="gaze_smr" liveStepSec={TETRIS_LIVE_STEP_SEC} />
             </div>
           </Panel>
 
