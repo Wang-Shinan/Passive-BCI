@@ -42,9 +42,9 @@ jobs:
       - run: npm run lint
       - name: Browser interaction regression (mocked model and recording)
         run: |
-          npm install --no-save --package-lock=false --ignore-scripts playwright@1.56.1
-          npx playwright install --with-deps chromium
-          node scripts/test-tetris-ui.mjs
+          npm install --prefix "$RUNNER_TEMP/tetris-playwright" --no-package-lock --ignore-scripts playwright@1.56.1
+          "$RUNNER_TEMP/tetris-playwright/node_modules/.bin/playwright" install --with-deps chromium
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/tetris-playwright/node_modules/playwright/index.mjs" node scripts/test-tetris-ui.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -11,6 +11,7 @@ plans = [
     (gzip.decompress(base64.b64decode(encoded, validate=True)), 'cdce1c3b3dd104824899de88ac033217ee7f2bab648addec694b06d58e0db2d1'),
     ((root / '.github/tetris-fixups.json').read_bytes(), 'e35fb92d42422cebdc7c08101999ceefb07b3dca0b954c71b51866289f27dc4c'),
     ((root / '.github/tetris-fixups-2.json').read_bytes(), 'b542264366250e2d013cb8febd5152493261e42b6fff02fe95402a82512e1656'),
+    ((root / '.github/tetris-fixups-3.json').read_bytes(), '221c40d1eb9e744cf3dec77c1e1caee99a35f0a6f5214420ce5b7a5a56052832'),
 ]
 for raw, expected in plans:
     if hashlib.sha256(raw).hexdigest() != expected:
