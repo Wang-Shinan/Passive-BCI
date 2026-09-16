@@ -114,3 +114,44 @@ export function parseGazeModel(raw: string | null): GazeModel | null {
     return m
   } catch { return null }
 }
+
+export function makeLeftRightPlan(seed: number, perDirection: 10 | 20): GazeTrial[] {
+  const rng = mulberry32(seed)
+  const trials: GazeTrial[] = []
+  for (const [i, count] of [perDirection * .4, perDirection * .4, perDirection * .2].entries()) {
+    const targets = shuffleInPlace(Array.from({ length: count }, () => ['left', 'right'] as const).flat(), rng)
+    for (const target of targets) trials.push({ index: trials.length, run: i + 1, target })
+  }
+  return trials
+}
+
+/** Recover only completed calibration trials; never mix feedback or validation data. */
+export function recoverGazeModel(events: unknown[], subjectId: string): GazeModel {
+  const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const entries = events.map(object)
+  const start = entries.find((event) => event.type === 'session_start')
+  const config = object(start?.data)
+  if (start?.subjectId !== subjectId || config.mode !== 'train' || config.protocol !== 'eeg-gaze-v1') {
+    throw new Error('所选会话不是本被试的眼动训练会话')
+  }
+  const channels = config.channels
+  const hz = config.sampleRate
+  if (!Array.isArray(channels) || !channels.length || !channels.every((c) => typeof c === 'string')
+    || typeof hz !== 'number' || !Number.isFinite(hz) || hz < 20) throw new Error('会话通道或采样率无效')
+  const rows: Example[] = []
+  const seen = new Set<number>()
+  for (const event of entries) {
+    if (event.type !== 'gaze_trial') continue
+    const data = object(event.data)
+    if (data.valid !== true) continue
+    if (event.subjectId !== subjectId || typeof data.index !== 'number' || !Number.isInteger(data.index)
+      || typeof data.run !== 'number' || !Number.isInteger(data.run) || data.run < 1
+      || !DIRECTIONS.includes(data.target as Direction) || !Array.isArray(data.features)
+      || !data.features.every((x) => typeof x === 'number' && Number.isFinite(x)) || seen.has(data.index)) {
+      throw new Error('会话包含无效或重复的训练试次')
+    }
+    seen.add(data.index)
+    rows.push({ index: data.index, run: data.run, target: data.target as Direction, features: data.features })
+  }
+  return fitGazeModel(rows, subjectId, channels, hz)
+}

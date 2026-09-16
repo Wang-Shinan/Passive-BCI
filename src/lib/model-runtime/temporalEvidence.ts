@@ -3,7 +3,7 @@ import type { ModelPrediction } from './contracts'
 const LOG_EPS = 1e-12
 const STORAGE_KEY = 'passive-bci.smr-temporal-filter'
 
-export type TemporalFilterMode = 'raw' | 'ema' | 'window' | 'hmm'
+export type TemporalFilterMode = 'raw' | 'ema' | 'window' | 'hmm' | 'vote'
 
 export type TemporalFilterConfig = {
   mode: TemporalFilterMode
@@ -37,6 +37,7 @@ export type TemporalObservation = {
 }
 
 export type TemporalDecision = {
+  ready?: boolean
   classId: number
   className: string
   classNames: string[]
@@ -205,6 +206,15 @@ export class TemporalEvidenceFilter {
           : this.emaLogits.map((s, i) => (1 - alpha) * s + alpha * (z[i] ?? 0))
       outLogits = this.emaLogits
       outProbs = softmax(outLogits)
+    } else if (mode === 'vote') {
+      const rows = this.logitHistory.slice(-nKeep)
+      const counts = new Array<number>(classNames.length).fill(0)
+      for (const row of rows) {
+        const winner = argmax(row)
+        if (row.filter(value => value === row[winner]).length === 1) counts[winner]! += 1
+      }
+      outProbs = counts.map(count => count / rows.length)
+      outLogits = logitsFromProbabilities(outProbs)
     } else if (mode === 'window') {
       outLogits = meanRows(this.logitHistory.slice(-nKeep))
       outProbs = softmax(outLogits)
@@ -222,6 +232,7 @@ export class TemporalEvidenceFilter {
 
     const classId = argmax(outProbs)
     const decision: TemporalDecision = {
+      ready: mode !== 'vote' || (this.logitHistory.length >= nKeep && (outProbs[classId] ?? 0) > 0.5),
       classId,
       className: classNames[classId] ?? '',
       classNames,
@@ -303,7 +314,7 @@ export function loadTemporalFilterConfig(): TemporalFilterConfig {
     return {
       ...DEFAULT_TEMPORAL_FILTER,
       ...parsed,
-      mode: mode === 'raw' || mode === 'ema' || mode === 'window' || mode === 'hmm' ? mode : 'ema',
+      mode: mode === 'raw' || mode === 'ema' || mode === 'window' || mode === 'hmm' || mode === 'vote' ? mode : 'ema',
       alpha: Number.isFinite(parsed.alpha) ? Number(parsed.alpha) : DEFAULT_TEMPORAL_FILTER.alpha,
       stayProb: Number.isFinite(parsed.stayProb)
         ? Number(parsed.stayProb)
