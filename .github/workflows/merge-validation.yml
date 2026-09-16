@@ -1,0 +1,49 @@
+name: Merge validation
+
+on:
+  push:
+    branches: [merge]
+  pull_request:
+    branches: [main, merge]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: merge-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Snapshot reviewed source (tracked files only)
+        run: git archive --format=tar HEAD > "$RUNNER_TEMP/reviewed-source.tar"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-source-${{ github.sha }}
+          path: ${{ runner.temp }}/reviewed-source.tar
+          retention-days: 3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Typecheck and production build
+        run: npm run build
+      - name: Project tests
+        if: ${{ !cancelled() }}
+        run: npm test
+      - name: Integration contract tests
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/test-reve-launch-options.mjs
+          node --experimental-strip-types --test scripts/test-brain-control-task.mjs
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: npm run lint
