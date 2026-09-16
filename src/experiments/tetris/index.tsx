@@ -313,7 +313,21 @@ export function TetrisExperiment() {
     setTemporalConfig(config => ({ ...config, mode: 'vote', horizonSec: 0.5 }))
   }, [setTemporalConfig])
 
-  const enableSmrControl = async (enabled: boolean, task = followEnabled ? 'gaze_smr' : 'smr_control') => {
+  useEffect(() => {
+    if (!miControlEnabled) return
+    if (!modelRuntime.enabled) modelRuntimeHub.setEnabled(true)
+    else if (modelRuntime.status === 'closed' || modelRuntime.status === 'error') modelRuntimeHub.connect()
+  }, [miControlEnabled, modelRuntime.enabled])
+
+  useEffect(() => {
+    if (modelRuntime.status === 'ready') return
+    temporalFilterRef.current.reset()
+    lastMiObservationRef.current = null
+    setSmrDecision(null)
+    setLastMiAction('等待模型连接和新预测')
+  }, [modelRuntime.status, temporalFilterRef])
+
+  const enableSmrControl = async (enabled: boolean, task = 'gaze_smr') => {
     setMiControlEnabled(enabled)
     if (!enabled) {
       setCollabEnabled(false)
@@ -487,6 +501,11 @@ export function TetrisExperiment() {
     if (!miControlEnabled || rlEnabled) return
     const prediction = modelRuntime.latestPrediction
     if (!prediction || prediction.observation_id === lastMiObservationRef.current) return
+    if (prediction.task !== 'gaze_smr') {
+      temporalFilterRef.current.reset()
+      setLastMiAction('模型任务不匹配，请重新连接脑控服务')
+      return
+    }
 
     if (temporalConfig.mode === 'vote' && (stateRef.current.paused || stateRef.current.gameOver || stateRef.current.anim || (followEnabled && followRemainingRef.current > 0))) {
       temporalFilterRef.current.reset()
@@ -830,7 +849,7 @@ export function TetrisExperiment() {
     modelRuntime.status === 'ready' &&
     Boolean(modelRuntime.serviceHello) &&
     !smrPrediction &&
-    modelRuntime.serviceHello?.task !== (followEnabled ? 'gaze_smr' : 'smr_control')
+    modelRuntime.serviceHello?.task !== 'gaze_smr'
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6">
@@ -1024,7 +1043,7 @@ export function TetrisExperiment() {
             </label>
             <p className="muted m-0 mb-3 text-sm">
               左手 → 左移 · 右手 → 右移 · 双手 → 顺时针旋转 · 休息 → 静止。勾选后拉起已拟合、冻结的
-              smr_control，每 0.1 秒送来一帧重叠窗；默认对 logits 做时间滤波后再动手，不在线微调
+              gaze_smr，每 0.1 秒送来一帧重叠窗；默认多数投票后再动手，不在线微调
               {collabEnabled
                 ? '。协作模式下手脑旋转会被忽略；I 只在已有深井时才竖放，空盘保持横放。'
                 : followEnabled
@@ -1045,7 +1064,7 @@ export function TetrisExperiment() {
                   disabled={smrEnsuring}
                   onClick={() => void enableSmrControl(true)}
                 >
-                  切换到 smr_control
+                  切换到 gaze_smr
                 </button>
               </p>
             ) : null}
@@ -1082,7 +1101,7 @@ export function TetrisExperiment() {
               ) : null}
             </div>
             <div className="mt-4">
-              <ModelServicePanel embedded reveTask={followEnabled ? 'gaze_smr' : 'smr_control'} liveStepSec={TETRIS_LIVE_STEP_SEC} />
+              <ModelServicePanel embedded reveTask="gaze_smr" liveStepSec={TETRIS_LIVE_STEP_SEC} />
             </div>
           </Panel>
 

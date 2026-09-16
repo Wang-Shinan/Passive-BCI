@@ -1,3 +1,4 @@
+import { clientDiagnosticsPlugin } from './vite.client-diagnostics.ts'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -303,7 +304,7 @@ async function proxyLlm(req: IncomingMessage, res: ServerResponse) {
 }
 
 export default defineConfig({
-  plugins: [
+  plugins: [clientDiagnosticsPlugin(),
     react(),
     tailwindcss(),
     llmProxyPlugin(),
