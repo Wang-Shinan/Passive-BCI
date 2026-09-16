@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ModelHeadOption } from './modelServiceApi'
 import { REVE_TASKS, reveTaskOption } from './reveTasks'
 
@@ -18,6 +18,12 @@ export function HeadSelector({ heads, task, value, onChange, disabled, label = '
   disabled?: boolean; label?: string; defaultLabel?: string
 }) {
   const [filter, setFilter] = useState('current')
+  useEffect(() => {
+    if (task === 'gaze_smr' && value) onChange('')
+  }, [task, value, onChange])
+  if (task === 'gaze_smr') return <p className="muted m-0 text-sm">
+    gaze-SMR 固定使用 gaze_smr_active.pt 及对应报告。请在眼动辅助 SMR 采集页完成训练和激活；暂不混用历史头选择。
+  </p>
   const options = visibleHeads(heads, filter, task)
   const selected = heads.find(h => h.id === value)
   return <div className="grid min-w-0 max-w-full gap-2">

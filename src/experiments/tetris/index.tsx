@@ -1,3 +1,5 @@
+import { acceptsBrainPrediction, normalizeBrainControlTask, type BrainControlTask } from './brainControlTask'
+import { recorderIsActive } from '../../lib/session/recordControl'
 import { TeacherTargetDrop } from './targetDrop'
 import { LandingIntentGuard, harmsUsefulLanding } from './landingGuard'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -71,6 +73,7 @@ import { HeuristicPlanner } from './rl/heuristic'
 import { describeRlAction, applyRlAction, rlStep } from './rl/step'
 import { useStressBroadcast } from './useStressBroadcast'
 
+const BRAIN_TASK_KEY = 'passive-bci.tetris-brain-task'
 const MI_CONTROL_KEY = 'passive-bci.tetris-mi-control'
 const RL_CONTROL_KEY = 'passive-bci.tetris-rl-control'
 const COLLAB_CONTROL_KEY = 'passive-bci.tetris-collab-control'
@@ -160,6 +163,11 @@ export function TetrisExperiment() {
   })
   useStressBroadcast(stress, { mode, takeManualControl, setManualStressQuiet })
   const modelRuntime = useModelRuntime()
+  const [brainControlTask, setBrainControlTask] = useState<BrainControlTask>(() => {
+    try { return normalizeBrainControlTask(localStorage.getItem(BRAIN_TASK_KEY)) } catch { return 'smr_control' }
+  })
+  const brainPredictionAfterRef = useRef(0)
+  const smrStartAbortRef = useRef<AbortController | null>(null)
   const [miControlEnabled, setMiControlEnabled] = useState(
     () => loadMiControlEnabled() || loadCollabControlEnabled() || loadFollowControlEnabled(),
   )
@@ -299,45 +307,88 @@ export function TetrisExperiment() {
     cfgRef.current = cfg
   }, [cfg])
 
+  const resetBrainControl = useCallback(() => {
+    brainPredictionAfterRef.current = performance.now()
+    lastMiObservationRef.current = null
+    temporalFilterRef.current.reset()
+    setSmrDecision(null)
+    landingGuardRef.current.reset()
+    teacherTargetDropRef.current = new TeacherTargetDrop()
+    followRemainingRef.current = 0
+    followQueuePieceRef.current = null
+    followActionAtRef.current = 0
+    followHumanCountRef.current = 0
+    followPieceKeyRef.current = null
+    setFollowHumanCount(0)
+    autoDropActiveRef.current = null
+    autoDropUntilRef.current = 0
+  }, [temporalFilterRef])
+
+  const selectBrainTask = (value: string) => {
+    if (miControlEnabled || smrEnsuring) return
+    if (recorderIsActive()) {
+      setSmrEnsureError('请先结束当前录制，再切换脑控任务')
+      return
+    }
+    resetBrainControl()
+    modelRuntimeHub.setEnabled(false)
+    const task = normalizeBrainControlTask(value)
+    setBrainControlTask(task)
+    setSmrEnsureError('')
+    setLastMiAction('任务已切换，等待连接和新预测')
+    loggerRef.current.log('brain_control_task', { task })
+    try { localStorage.setItem(BRAIN_TASK_KEY, task) } catch { /* storage unavailable */ }
+  }
+
+  useEffect(() => {
+    return () => { smrStartAbortRef.current?.abort() }
+  }, [])
+
   useEffect(() => {
     localStorage.setItem(MI_CONTROL_KEY, String(miControlEnabled))
     if (!miControlEnabled) {
-      lastMiObservationRef.current = null
+      smrStartAbortRef.current?.abort()
+      resetBrainControl()
       setLastMiAction('—')
-      temporalFilterRef.current.reset()
-      setSmrDecision(null)
     }
-  }, [miControlEnabled])
+  }, [miControlEnabled, resetBrainControl])
 
   useEffect(() => {
     setTemporalConfig(config => ({ ...config, mode: 'vote', horizonSec: 0.5 }))
   }, [setTemporalConfig])
 
   useEffect(() => {
-    if (!miControlEnabled) return
-    if (!modelRuntime.enabled) modelRuntimeHub.setEnabled(true)
-    else if (modelRuntime.status === 'closed' || modelRuntime.status === 'error') modelRuntimeHub.connect()
-  }, [miControlEnabled, modelRuntime.enabled])
+    // Unexpected disconnects are retried by the hub; an explicit stop must stay stopped.
+    if (!miControlEnabled || smrEnsuring || modelRuntime.enabled) return
+    setMiControlEnabled(false)
+    setCollabEnabled(false)
+    setFollowEnabled(false)
+  }, [miControlEnabled, smrEnsuring, modelRuntime.enabled])
 
   useEffect(() => {
-    if (modelRuntime.status === 'ready') return
-    temporalFilterRef.current.reset()
-    lastMiObservationRef.current = null
-    setSmrDecision(null)
-    setLastMiAction('等待模型连接和新预测')
-  }, [modelRuntime.status, temporalFilterRef])
+    resetBrainControl()
+    setLastMiAction('等待所选模型的新预测')
+  }, [modelRuntime.status, modelRuntime.serviceHello?.model_revision, brainControlTask, resetBrainControl])
 
-  const enableSmrControl = async (enabled: boolean, task = 'gaze_smr') => {
+  const enableSmrControl = async (enabled: boolean) => {
+    smrStartAbortRef.current?.abort()
+    const controller = new AbortController()
+    smrStartAbortRef.current = controller
     setMiControlEnabled(enabled)
+    resetBrainControl()
     if (!enabled) {
       setCollabEnabled(false)
+      setFollowEnabled(false)
+      setSmrEnsuring(false)
+      modelRuntimeHub.setEnabled(false)
       return
     }
     setRlEnabled(false)
     setSmrEnsuring(true)
     setSmrEnsureError('')
+    const task = brainControlTask
     try {
-      const status = await modelServiceStatus()
+      const status = await modelServiceStatus(controller.signal)
       const force = Boolean(
         status.running &&
           (!status.owned ||
@@ -347,15 +398,26 @@ export function TetrisExperiment() {
       await ensureModelService({
         backend: 'reve',
         task,
+        headId: task === 'gaze_smr' ? '' : undefined,
         stepSec: TETRIS_LIVE_STEP_SEC,
         force,
+        signal: controller.signal,
       })
+      if (controller.signal.aborted) return
+      resetBrainControl()
       modelRuntimeHub.setEnabled(true)
       modelRuntimeHub.connect()
     } catch (error) {
+      if (controller.signal.aborted) return
       setSmrEnsureError(error instanceof Error ? error.message : String(error))
+      setMiControlEnabled(false)
+      setCollabEnabled(false)
+      setFollowEnabled(false)
     } finally {
-      setSmrEnsuring(false)
+      if (smrStartAbortRef.current === controller) {
+        smrStartAbortRef.current = null
+        setSmrEnsuring(false)
+      }
     }
   }
 
@@ -374,7 +436,7 @@ export function TetrisExperiment() {
     setRlEnabled(false)
     setCollabEnabled(false)
     teacherRef.current.reset()
-    await enableSmrControl(true, 'gaze_smr')
+    await enableSmrControl(true)
   }
 
   useEffect(() => {
@@ -498,12 +560,12 @@ export function TetrisExperiment() {
   }, [runFollowBurst])
 
   useEffect(() => {
-    if (!miControlEnabled || rlEnabled) return
+    if (!miControlEnabled || rlEnabled || smrEnsuring || modelRuntime.status !== 'ready') return
     const prediction = modelRuntime.latestPrediction
     if (!prediction || prediction.observation_id === lastMiObservationRef.current) return
-    if (prediction.task !== 'gaze_smr') {
-      temporalFilterRef.current.reset()
-      setLastMiAction('模型任务不匹配，请重新连接脑控服务')
+    if (!acceptsBrainPrediction(brainControlTask, modelRuntime.serviceHello, prediction, performance.now(), brainPredictionAfterRef.current)) {
+      resetBrainControl()
+      setLastMiAction('等待任务、版本及时间均匹配的新预测')
       return
     }
 
@@ -571,7 +633,7 @@ export function TetrisExperiment() {
     ) {
       noteHumanFollowSlide(result.state)
     }
-  }, [miControlEnabled, rlEnabled, collabEnabled, followEnabled, modelRuntime.latestPrediction, applyResult, noteHumanFollowSlide, temporalConfig.mode])
+  }, [miControlEnabled, rlEnabled, collabEnabled, followEnabled, smrEnsuring, brainControlTask, modelRuntime.status, modelRuntime.serviceHello, modelRuntime.latestPrediction, applyResult, noteHumanFollowSlide, temporalConfig.mode, resetBrainControl])
 
   const runRlDecision = useCallback(() => {
     if ((!rlEnabled && !collabEnabled) || rlBusyRef.current) return
@@ -809,6 +871,7 @@ export function TetrisExperiment() {
   }, [applyResult, rlEnabled, collabEnabled, followEnabled, noteHumanFollowSlide])
 
   const restart = () => {
+    resetBrainControl()
     followRemainingRef.current = 0
     followActionAtRef.current = 0
     const nextSeed = (Math.random() * 0xffffffff) >>> 0
@@ -841,15 +904,14 @@ export function TetrisExperiment() {
   }
 
   const smrPrediction =
-    modelRuntime.latestPrediction && isSmrControlPrediction(modelRuntime.latestPrediction)
+    modelRuntime.status === 'ready' && acceptsBrainPrediction(brainControlTask, modelRuntime.serviceHello, modelRuntime.latestPrediction, performance.now(), brainPredictionAfterRef.current)
       ? modelRuntime.latestPrediction
       : null
   const smrHeadWrong =
     miControlEnabled &&
     modelRuntime.status === 'ready' &&
     Boolean(modelRuntime.serviceHello) &&
-    !smrPrediction &&
-    modelRuntime.serviceHello?.task !== 'gaze_smr'
+    modelRuntime.serviceHello?.task !== brainControlTask
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6">
@@ -1032,18 +1094,27 @@ export function TetrisExperiment() {
           />
 
           <Panel title="SMR 控制">
+            <label className="mb-3 grid gap-1 text-sm">脑控任务
+              <select className="input" aria-label="脑控任务" value={brainControlTask}
+                disabled={miControlEnabled || smrEnsuring}
+                onChange={event => selectBrainTask(event.target.value)}>
+                <option value="smr_control">传统 SMR · 使用训练页面的线性头</option>
+                <option value="gaze_smr">眼动辅助 SMR · 使用 gaze active 头</option>
+              </select>
+              <span className="muted text-xs">先关闭脑控并结束录制，再切换任务；两种任务的预测不会混用。</span>
+            </label>
             <label className="acq-check mb-3 flex items-center gap-2">
               <input
                 type="checkbox"
                 checked={miControlEnabled}
-                disabled={rlEnabled || smrEnsuring}
+                disabled={rlEnabled}
                 onChange={(event) => void enableSmrControl(event.target.checked)}
               />
               用 SMR 头操控方块（与键盘并行{collabEnabled ? '；协作时只左右' : followEnabled ? '；跟手旋转不占次数' : ''}）
             </label>
             <p className="muted m-0 mb-3 text-sm">
               左手 → 左移 · 右手 → 右移 · 双手 → 顺时针旋转 · 休息 → 静止。勾选后拉起已拟合、冻结的
-              gaze_smr，每 0.1 秒送来一帧重叠窗；默认多数投票后再动手，不在线微调
+              {brainControlTask}，每 0.1 秒送来一帧重叠窗；默认多数投票后再动手，不在线微调
               {collabEnabled
                 ? '。协作模式下手脑旋转会被忽略；I 只在已有深井时才竖放，空盘保持横放。'
                 : followEnabled
@@ -1057,14 +1128,14 @@ export function TetrisExperiment() {
             ) : null}
             {smrHeadWrong ? (
               <p className="mb-3 text-sm" style={{ color: 'var(--warn)' }}>
-                当前不是 SMR 头（{modelRuntime.serviceHello?.task ?? modelRuntime.latestPrediction?.task ?? '未知'}）。
+                当前模型任务与所选任务不一致（{modelRuntime.serviceHello?.task ?? modelRuntime.latestPrediction?.task ?? '未知'}）。
                 <button
                   type="button"
                   className="btn ml-2"
                   disabled={smrEnsuring}
                   onClick={() => void enableSmrControl(true)}
                 >
-                  切换到 gaze_smr
+                  切换到 {brainControlTask}
                 </button>
               </p>
             ) : null}
@@ -1101,7 +1172,7 @@ export function TetrisExperiment() {
               ) : null}
             </div>
             <div className="mt-4">
-              <ModelServicePanel embedded reveTask="gaze_smr" liveStepSec={TETRIS_LIVE_STEP_SEC} />
+              <ModelServicePanel key={brainControlTask} embedded reveTask={brainControlTask} liveStepSec={TETRIS_LIVE_STEP_SEC} />
             </div>
           </Panel>
 

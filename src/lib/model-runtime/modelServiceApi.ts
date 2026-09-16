@@ -3,6 +3,7 @@
 export type ModelServiceBackend = 'reve' | 'mock'
 
 export function preferredModelHead(task = 'passive_rating'): string {
+  if (task === 'gaze_smr') return ''
   try {
     const value = JSON.parse(localStorage.getItem('passive-bci.model-heads') || '{}')?.[task]
     return typeof value === 'string' ? value : ''
@@ -57,7 +58,8 @@ export async function ensureModelService(options?: {
     body: JSON.stringify({
       backend: options?.backend ?? 'reve',
       task: options?.task,
-      headId: options?.backend === 'mock' ? undefined : options?.headId ?? preferredModelHead(options?.task),
+      // Gaze collection reads a fixed active report, so it must launch that exact head.
+      headId: options?.backend === 'mock' ? undefined : options?.task === 'gaze_smr' ? '' : options?.headId ?? preferredModelHead(options?.task),
       stepSec: options?.stepSec,
       force: options?.force === true,
     }),
