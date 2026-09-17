@@ -1,4 +1,7 @@
 /** OmniBCI LSL bridge WebSocket protocol (schema v1). */
+import type { LslTiming } from '../../lib/eeg/lslClock'
+import type { NativeFrame } from './native'
+import type { SystemClockStamp } from '../../lib/eeg/systemClock'
 
 export const OMNI_API_SCHEMA = 1
 export const OMNI_API_PORT = 8771
@@ -51,6 +54,9 @@ export type OmniMarkerEvent = {
 }
 
 export type OmniDataBatch = {
+  receivedClock?: SystemClockStamp
+  nativeFrames?: NativeFrame[]
+  lsl?: LslTiming
   values: Float32Array
   samples: number
   channels: number
@@ -232,7 +238,19 @@ export function decodeOmniDataBatch(
     return { error: 'data 元数据（sequence / valid / modes）无效' }
   }
   const sampleRate = asFiniteNumber(header.sample_rate) ?? OMNI_SAMPLE_RATE
+  let lsl: LslTiming | undefined
+  if (header.lsl !== undefined) {
+    const timing = header.lsl
+    if (!isRecord(timing) || !Array.isArray(timing.timestampsSec) || timing.timestampsSec.length !== samples
+      || !timing.timestampsSec.every(t => typeof t === 'number' && Number.isFinite(t))
+      || !(timing.correctionSec === null || asFiniteNumber(timing.correctionSec) !== null)
+      || asFiniteNumber(timing.correctionAtSec) === null || typeof timing.streamId !== 'string') {
+      return { error: 'LSL 时间戳数量或时钟元数据无效' }
+    }
+    lsl = timing as LslTiming
+  }
   return {
+    lsl,
     values: new Float32Array(payload.slice(0)),
     samples,
     channels,

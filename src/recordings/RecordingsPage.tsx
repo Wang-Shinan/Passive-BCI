@@ -149,6 +149,11 @@ export function RecordingsPage() {
   }, [sessions, q, experiment, subject, status])
 
   const current = sessions.find((s) => s.stem === selected) ?? null
+  const linkedEeg = (session: SessionSummary) => {
+    const rel = session.game?.eegSessionRel
+    return typeof rel === 'string' ? sessions.find(s => s.rel === rel && s.stem !== session.stem) : undefined
+  }
+  const currentEeg = current ? linkedEeg(current) : undefined
 
   const saveNotes = async () => {
     if (!current) return
@@ -189,7 +194,7 @@ export function RecordingsPage() {
           </Link>
           <h1 className="m-0 mt-1 text-2xl font-semibold">会话库</h1>
           <p className="muted m-0 mt-1 max-w-2xl text-sm">
-            每个目录是一局：EEG（eeg.bin）+ 游戏事件 + 棋盘快照。采俄罗斯方块时，先在采集页开流，再进方块页点「开始本局」。
+            EEG 录制包含 eeg.bin 和同步事件。N-back 行为结果单独保存；选择该轮可查看并下载关联的 EEG 录制。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -296,7 +301,9 @@ export function RecordingsPage() {
                         <td className="px-3 py-2">{s.subjectId || '—'}</td>
                         <td className="px-3 py-2">{experimentLabel(s.experiment)}</td>
                         <td className="px-3 py-2 tabular-nums">{formatDuration(s.durationSec)}</td>
-                        <td className="px-3 py-2 tabular-nums">{formatRecordBytes(s.eegBytes)}</td>
+                        <td className="px-3 py-2 tabular-nums">{s.eegBytes > 0 ? formatRecordBytes(s.eegBytes)
+                          : linkedEeg(s)?.eegBytes ? '已关联 EEG'
+                          : s.game?.eegSessionRel ? '关联 EEG 缺失/空' : '未录制 EEG'}</td>
                         <td className="px-3 py-2 tabular-nums">{s.events}</td>
                       </tr>
                     )
@@ -364,6 +371,20 @@ export function RecordingsPage() {
                   </dd>
                 </div>
               </dl>
+
+              {current.experiment === 'nback' && current.eegBytes === 0 && <div className="rounded-lg border border-[var(--border)] p-3 text-sm">
+                <strong>本轮关联 EEG</strong>
+                {currentEeg ? <>
+                  <p className="break-all">{currentEeg.stem} · {formatRecordBytes(currentEeg.eegBytes)}</p>
+                  <p className="muted">行为数据与 EEG 分目录保存。下方「下载 ZIP」仅包含本轮行为结果；关联 EEG 是整段录制，可能包含多轮任务，可通过事件中的 blockId 和 EEG 样本编号对齐。</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="btn" onClick={() => setSelected(currentEeg.stem)}>查看 EEG 会话</button>
+                    {currentEeg.eegBytes > 0 && !currentEeg.live && <a className="btn btn-primary" href={sessionZipUrl(currentEeg.stem)}>下载关联 EEG ZIP</a>}
+                    {currentEeg.live && <span>EEG 仍在录制，结束录制后可下载。</span>}
+                    {!currentEeg.eegBytes && <span>关联会话尚无已保存的 EEG 样本。</span>}
+                  </div>
+                </> : <p className="muted">{current.game?.eegSessionRel ? `关联录制未找到：${String(current.game.eegSessionRel)}` : '本轮未关联 EEG 录制，仅保存了行为数据。需要同步 EEG 时，请先开流并点击 N-back 页顶部的「开始本局」。'}</p>}
+              </div>}
 
               {Object.keys(current.eventTypes).length ? (
                 <div>

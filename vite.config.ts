@@ -315,6 +315,15 @@ export default defineConfig({
   ],
   server: {
     proxy: {
+      // Native OmniBCI HTTP API has no CORS middleware; proxy same-origin requests.
+      '/api/omni-native': {
+        target: 'http://127.0.0.1:8766',
+        rewrite: (path) => path.replace(/^\/api\/omni-native/, ''),
+      },
+      '/ws/omni-native': {
+        target: 'ws://127.0.0.1:8766', ws: true,
+        rewrite: (path) => path.replace(/^\/ws\/omni-native/, '/v1/stream'),
+      },
       // OmniBCI publishes LSL; the local bridge exposes it as WebSocket.
       '/ws/omni': {
         target: 'ws://127.0.0.1:8771',

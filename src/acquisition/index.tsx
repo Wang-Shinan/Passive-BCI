@@ -50,6 +50,7 @@ import { ImpedancePanel } from './ImpedancePanel'
 import { FeaturePanel } from './FeaturePanel'
 import { ChannelRail, ChannelSettingsDialog } from './ChannelRail'
 import { ensureBridge, probeNeuracleForward, probeOmniApi } from './bridgeApi'
+import { nativeHealth } from './omni/native'
 import {
   acqRuntime,
   beginRawBridgeStream,
@@ -218,7 +219,11 @@ function bcigoWsUrl(): string {
   return `${proto}//${window.location.host}/ws/bcigo`
 }
 
-function omniWsUrl(): string {
+function omniWsUrl(native = false): string {
+  if (native) {
+    if (typeof window === 'undefined' || ['localhost', '127.0.0.1'].includes(window.location.hostname)) return 'ws://127.0.0.1:8766/v1/stream'
+    return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/omni-native`
+  }
   if (typeof window === 'undefined') return `ws://127.0.0.1:${OMNI_API_PORT}/v1/stream`
   const host = window.location.hostname
   if (host === 'localhost' || host === '127.0.0.1') {
@@ -253,7 +258,7 @@ function deviceDetail(d: DeviceKind, supported: boolean, omniLink: OmniLink = 'a
     return '连接强脑 BCIGo Wi‑Fi（点连接会自动启动本机桥接；基于 bcigo-sdk）。'
   }
   if (omniLink === 'api') {
-    return '先在 OmniBCI 中开始测量并启用 LSL，再点连接。本页会自动启动 LSL 桥接并订阅 EEG 流。'
+    return '原生直连：在 OmniBCI 的「工具 > Trigger / 转发」启用 Web API / Trigger 和 WebSocket 实时转发（8766）。也可选择 LSL 桥接。'
   }
   return supported
     ? '通过 Web Serial 直连 ADS1299（OmniBCI 固件）。与 V19 应用不要同时占用 USB。'
@@ -312,6 +317,9 @@ export function AcquisitionDebugPage() {
     }
   })
   const [omniLink, setOmniLink] = useState<OmniLink>(() => loadOmniLink())
+  const [omniNative, setOmniNative] = useState(() => {
+    try { return localStorage.getItem('passive-bci.omni-native') !== 'false' } catch { return true }
+  })
   const [omniStream, setOmniStream] = useState<OmniStreamKind>(() => loadOmniStream())
   const [omniProbe, setOmniProbe] = useState('')
   const [status, setStatus] = useState<ConnUi>(() => {
@@ -575,6 +583,11 @@ export function AcquisitionDebugPage() {
     if (device !== 'omni' || omniLink !== 'api') return
     let cancelled = false
     const tick = () => {
+      if (omniNative) {
+        void nativeHealth().then(r => { if (!cancelled) setOmniProbe(`原生 API：${r.streaming ? '采集中' : '未采集'} · ${r.session_id ? 'OmniBCI 正在录制' : 'OmniBCI 未录制，Trigger 不可用'}`) })
+          .catch(e => { if (!cancelled) setOmniProbe(String(e)) })
+        return
+      }
       void probeOmniApi().then((r) => {
         if (!cancelled && r.message) setOmniProbe(r.message)
       })
@@ -585,7 +598,7 @@ export function AcquisitionDebugPage() {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [device, omniLink])
+  }, [device, omniLink, omniNative])
 
   useEffect(() => {
     neuracleRef.current = acqRuntime.neuracle
@@ -1062,12 +1075,14 @@ export function AcquisitionDebugPage() {
       resetBuffers(CHANNELS)
       acqRuntime.status = 'connecting'
       liveEegHub.configure({ device: 'omni', sampleRate: FS, channelNames: [...cfg.labels] })
-      liveEegHub.markConnecting('正在启动 OmniBCI LSL 桥接…')
+      liveEegHub.markConnecting(omniNative ? '正在连接 OmniBCI 原生 WebSocket…' : '正在启动 OmniBCI LSL 桥接…')
       setStatus('connecting')
-      setDetail('正在启动 OmniBCI LSL 桥接…')
+      setDetail(omniNative ? '正在连接 OmniBCI 原生 WebSocket…' : '正在启动 OmniBCI LSL 桥接…')
       try {
-        const ensured = await ensureBridge('omni')
-        if (ensured.message) setOmniProbe(ensured.message)
+        if (!omniNative) {
+          const ensured = await ensureBridge('omni')
+          if (ensured.message) setOmniProbe(ensured.message)
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         setStatus('error')
@@ -1078,7 +1093,8 @@ export function AcquisitionDebugPage() {
 
       const labels = cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!)
       const client = new OmniWsClient({
-        url: omniWsUrl(),
+        url: omniWsUrl(omniNative),
+        native: omniNative,
         stream: omniStream,
         onStatus: (s, d) => {
           if (s === 'connecting') {
@@ -1125,7 +1141,7 @@ export function AcquisitionDebugPage() {
           acqRuntime.device = 'omni'
           acqRuntime.omniLink = 'api'
           setStatus('open')
-          const msg = `已连接 OmniBCI LSL · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。`
+          const msg = `已连接 OmniBCI ${omniNative ? '原生 WebSocket' : 'LSL'} · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。`
           liveEegHub.configure({
             device: 'omni',
             sampleRate: hello.sample_rate,
@@ -1145,9 +1161,12 @@ export function AcquisitionDebugPage() {
             unit: batch.unit,
             packetLoss: batch.packetLoss,
             packetCount: batch.packetCount,
-            arrivalNowMs: performance.now(),
+            arrivalNowMs: batch.receivedClock?.monotonicMs ?? performance.now(),
             sequence: batch.sequence,
             validFlags: batch.valid,
+            lsl: batch.lsl,
+            nativeFrames: batch.nativeFrames,
+            receivedClock: batch.receivedClock,
           }),
         onGap: (gap) => {
           statsRef.current.packetLoss += gap.dropped_samples
@@ -1227,10 +1246,6 @@ export function AcquisitionDebugPage() {
       st.seqGaps += gap.gaps
       st.lastSeq = gap.last
       lastSeqRef.current = gap.last
-    }
-    if (recorderRef.current.recording && !acqRuntime.impedanceActive) {
-      const bytes = new Uint8Array(batch.values.buffer, batch.values.byteOffset, batch.values.byteLength)
-      recorderRef.current.append(bytes)
     }
   }
   ingestBridgeBatchRef.current = ingestBridgeBatch
@@ -1955,7 +1970,7 @@ export function AcquisitionDebugPage() {
       <section className="acq-group">
         <div className="acq-group-title">
           {omniApi
-            ? 'OmniBCI V19 控制'
+            ? 'OmniBCI 应用转发'
             : device === 'omni'
               ? '串口控制'
               : device === 'neuracle'
@@ -1985,13 +2000,20 @@ export function AcquisitionDebugPage() {
                 disabled={deviceBusy}
                 onChange={(e) => void switchOmniLink(e.target.value as OmniLink)}
               >
-                <option value="api">LSL 桥接</option>
+                <option value="api">OmniBCI 应用转发</option>
                 <option value="usb">USB 串口</option>
               </select>
             </label>
           ) : null}
           {omniApi ? (
             <>
+              <label className="acq-field">转发方式
+                <select className="select" value={omniNative ? 'native' : 'lsl'} disabled={deviceBusy || deviceLinked}
+                  onChange={e => { const native = e.target.value === 'native'; setOmniNative(native); localStorage.setItem('passive-bci.omni-native', String(native)) }}>
+                  <option value="native">原生 WebSocket · 8766</option>
+                  <option value="lsl">LSL 桥接 · 8771</option>
+                </select>
+              </label>
               <label className="acq-field">
                 流
                 <select
@@ -2008,7 +2030,7 @@ export function AcquisitionDebugPage() {
                     }
                   }}
                 >
-                  <option value={OMNI_STREAM_RAW}>LSL EEG</option>
+                  <option value={OMNI_STREAM_RAW}>{omniNative ? '原始 EEG（μV）' : 'LSL EEG'}</option>
                 </select>
               </label>
               {omniProbe ? <span className="acq-hint">{omniProbe}</span> : null}

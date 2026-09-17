@@ -2,6 +2,9 @@
 
 import { liveEegHub } from '../lib/eeg/liveHub'
 import { sampleClock } from '../lib/eeg/sampleClock'
+import type { LslTiming } from '../lib/eeg/lslClock'
+import type { NativeFrame } from './omni/native'
+import type { SystemClockStamp } from '../lib/eeg/systemClock'
 import { LiveIirFilter } from './filter/iir'
 import { CHANNELS, FRAME_BYTES, FS, channelLsbUv, defaultChannelConfig } from './protocol/constants'
 import { ConfigAckScanner, type ConfigAck } from './protocol/configAck'
@@ -25,6 +28,9 @@ export type OmniLink = 'usb' | 'api'
 export type ConnUi = 'idle' | 'connecting' | 'open' | 'streaming' | 'error' | 'unsupported' | 'demo'
 
 export type BridgeBatch = {
+  receivedClock?: SystemClockStamp
+  nativeFrames?: NativeFrame[]
+  lsl?: LslTiming
   values: Float32Array
   samples: number
   channels: number
@@ -199,6 +205,10 @@ function deliverBridge(batch: BridgeBatch): void {
       sampleRate: batch.sampleRate,
       arrivalNowMs: batch.arrivalNowMs ?? performance.now(),
       deviceEndMs: batch.deviceEndMs,
+      lsl: batch.lsl,
+      receivedClock: batch.receivedClock,
+      native: batch.nativeFrames?.length ? { sequence: batch.nativeFrames.at(-1)!.sequence,
+        sourceTimestampMs: batch.nativeFrames.at(-1)!.source_timestamp_ms } : undefined,
     })
   }
   if (
@@ -219,6 +229,10 @@ function deliverBridge(batch: BridgeBatch): void {
       }
     }
   }
+  if (acqRuntime.streaming && acqRuntime.recorder.recording && !acqRuntime.impedanceActive) {
+    const bytes = new Uint8Array(batch.values.buffer, batch.values.byteOffset, batch.values.byteLength)
+    acqRuntime.recorder.append(bytes, batch.lsl, batch.nativeFrames, batch.receivedClock)
+  }
   if (acqRuntime.ui) {
     acqRuntime.ui.onBridgeBatch(batch)
     return
@@ -226,14 +240,6 @@ function deliverBridge(batch: BridgeBatch): void {
   if (!acqRuntime.streaming) return
   if (!acqRuntime.impedanceActive) {
     liveEegHub.pushInterleaved(batch.values, batch.samples, batch.channels)
-  }
-  if (acqRuntime.recorder.recording && !acqRuntime.impedanceActive) {
-    const bytes = new Uint8Array(
-      batch.values.buffer,
-      batch.values.byteOffset,
-      batch.values.byteLength,
-    )
-    acqRuntime.recorder.append(bytes)
   }
 }
 

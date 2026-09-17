@@ -7,10 +7,11 @@ import argparse
 import asyncio
 import json
 import time
+import contextlib
 from typing import Any
 
 import numpy as np
-from pylsl import StreamInlet, resolve_byprop
+from pylsl import StreamInlet, resolve_byprop, local_clock
 
 SCHEMA_VERSION = 1
 DEFAULT_WS_HOST = "127.0.0.1"
@@ -45,6 +46,7 @@ def _find_omni_stream(timeout: float = 6.0) -> Any:
 
 async def handle_client(websocket: Any) -> None:
     inlet: StreamInlet | None = None
+    clock_task = None
     try:
         raw = await asyncio.wait_for(websocket.recv(), timeout=8.0)
         msg = json.loads(raw) if isinstance(raw, str) else {}
@@ -54,7 +56,7 @@ async def handle_client(websocket: Any) -> None:
         requested_stream = "filtered" if msg.get("stream") == "filtered" else "raw"
 
         info = await asyncio.to_thread(_find_omni_stream)
-        inlet = StreamInlet(info, max_buflen=5, max_chunklen=32, recover=True)
+        inlet = StreamInlet(info, max_buflen=5, max_chunklen=32, recover=True, processing_flags=0)
         await asyncio.to_thread(inlet.open_stream, 5.0)
         channels = _channel_names(info)
         sample_rate = float(info.nominal_srate()) or DEFAULT_SAMPLE_RATE
@@ -77,10 +79,28 @@ async def handle_client(websocket: Any) -> None:
             )
         )
 
+        async def reply_clock():
+            async for raw_request in websocket:
+                received = local_clock()
+                request = json.loads(raw_request)
+                if request.get('type') == 'clock_ping':
+                    await websocket.send(json.dumps(dict(type='clock_pong', browser_ms=request['browser_ms'],
+                                                         receive_sec=received, send_sec=local_clock())))
+
+        clock_task = asyncio.create_task(reply_clock())
+        correction = None
+        correction_at = 0.0
         sequence = 0
         packet_count = 0
         while True:
-            samples, _timestamps = await asyncio.to_thread(
+            if local_clock() - correction_at > 5:
+                try:
+                    correction = await asyncio.to_thread(inlet.time_correction, 0.2)
+                    correction_at = local_clock()
+                except Exception:
+                    correction = None
+                    correction_at = local_clock()
+            samples, timestamps = await asyncio.to_thread(
                 inlet.pull_chunk, 0.25, 32
             )
             if not samples:
@@ -113,6 +133,8 @@ async def handle_client(websocket: Any) -> None:
                 "session_id": session_id,
                 "packet_count": packet_count,
                 "packet_loss_count": 0,
+                "lsl": {"timestampsSec": timestamps, "correctionSec": correction,
+                        "correctionAtSec": correction_at, "streamId": info.uid()},
             }
             await websocket.send(json.dumps(header, separators=(",", ":")))
             await websocket.send(values.tobytes(order="C"))
@@ -126,6 +148,10 @@ async def handle_client(websocket: Any) -> None:
         except Exception:
             pass
     finally:
+        if clock_task is not None:
+            clock_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await clock_task
         if inlet is not None:
             try:
                 inlet.close_stream()

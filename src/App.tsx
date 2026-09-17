@@ -1,4 +1,6 @@
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { installTriggerTestReceiver } from './lib/session/triggerTestReceiver'
 import { Home } from './Home'
 import { TrainingPage } from './training'
 import { AcquisitionDebugPage } from './acquisition'
@@ -18,6 +20,9 @@ import { TetrisAdaptPage } from './experiments/tetris-adapt'
 import { RecordingsPage } from './recordings/RecordingsPage'
 
 export default function App() {
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('triggerTest') === '1') return installTriggerTestReceiver()
+  }, [])
   return (
     <HashRouter>
       <Routes>

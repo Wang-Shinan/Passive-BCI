@@ -24,6 +24,12 @@ function header(partial: Record<string, unknown> = {}): Record<string, unknown> 
 }
 
 describe('OmniBCI V19 protocol', () => {
+  it('preserves LSL timestamps and rejects lengths that cannot align to samples', () => {
+    const lsl = { timestampsSec: [5000000, 5000000.004], correctionSec: .001, correctionAtSec: 5000001, streamId: 'uid' }
+    const decoded = decodeOmniDataBatch(header({ lsl }), new ArrayBuffer(64), 'raw')
+    expect(decoded).toHaveProperty('lsl', lsl)
+    expect(decodeOmniDataBatch(header({ lsl: { ...lsl, timestampsSec: [1] } }), new ArrayBuffer(64), 'raw')).toHaveProperty('error')
+  })
   it('accepts a compatible hello', () => {
     const parsed = parseOmniText(
       JSON.stringify({

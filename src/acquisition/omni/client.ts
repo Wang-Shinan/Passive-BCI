@@ -1,4 +1,7 @@
-/** Browser client for the local OmniBCI LSL-to-WebSocket bridge. */
+/** Browser client for native OmniBCI WebSocket or the LSL bridge. */
+import { lslClock } from '../../lib/eeg/lslClock'
+import { captureSystemClock, type SystemClockStamp } from '../../lib/eeg/systemClock'
+import { decodeNativeEeg, sendNativeTrigger, type TriggerAck } from './native'
 
 import {
   OMNI_API_PORT,
@@ -27,6 +30,7 @@ export type { OmniDataBatch, OmniGapEvent, OmniHello, OmniMarkerEvent, OmniStrea
 export type OmniStatus = 'idle' | 'connecting' | 'live' | 'error' | 'closed'
 
 export interface OmniClientOptions {
+  native?: boolean
   url?: string
   stream?: OmniStreamKind
   onStatus?: (status: OmniStatus, detail?: string) => void
@@ -57,6 +61,8 @@ export class OmniWsClient {
   private closedByUser = false
   private helloReceived = false
   private connectTimer: ReturnType<typeof setTimeout> | null = null
+  private clockTimer: ReturnType<typeof setInterval> | null = null
+  private clockRequests = new Set<number>()
   private readonly opts: OmniClientOptions & { url: string; stream: OmniStreamKind }
 
   constructor(opts: OmniClientOptions = {}) {
@@ -72,12 +78,13 @@ export class OmniWsClient {
     this.closedByUser = false
     this.helloReceived = false
     this.pendingHeader = null
-    this.opts.onStatus?.('connecting', '正在连接 OmniBCI LSL 桥接…')
+    const transport = this.opts.native ? '原生 WebSocket' : 'LSL 桥接'
+    this.opts.onStatus?.('connecting', `正在连接 OmniBCI ${transport}（${this.opts.url}）…`)
     this.connectTimer = setTimeout(() => {
       if (this.helloReceived || this.closedByUser) return
       this.opts.onStatus?.(
         'error',
-        '连接超时。请先在 OmniBCI 中开始测量并启用 LSL。',
+        this.opts.native ? '未收到 EEG：请开始采集并启用 Web API / Trigger 和 WebSocket 实时转发。' : '连接超时。请先在 OmniBCI 中开始测量并启用 LSL。',
       )
       this.disconnect()
     }, 8_000)
@@ -95,36 +102,41 @@ export class OmniWsClient {
     this.ws = ws
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'subscribe', stream: this.opts.stream }))
+      if (this.ws !== ws) return
+      if (!this.opts.native) ws.send(JSON.stringify({ type: 'subscribe', stream: this.opts.stream }))
     }
 
     ws.onmessage = (ev) => {
+      if (this.ws !== ws) return
+      const receivedClock = captureSystemClock()
       if (typeof ev.data === 'string') {
-        this.handleText(ev.data)
+        this.handleText(ev.data, receivedClock)
         return
       }
-      if (ev.data instanceof ArrayBuffer) this.handleBinary(ev.data)
+      if (ev.data instanceof ArrayBuffer) this.handleBinary(ev.data, receivedClock)
     }
 
     ws.onerror = () => {
-      if (!this.closedByUser) {
-        this.clearConnectTimer()
-        this.opts.onStatus?.(
-          'error',
-          `无法连接 OmniBCI LSL 桥接（${this.opts.url}）。`,
-        )
+      if (this.ws === ws && !this.closedByUser) {
+        this.fail(`OmniBCI ${transport}连接失败（${this.opts.url}）。${this.opts.native ? '请检查应用的 WebSocket 实时转发是否启用，地址及端口是否正确。' : '请检查 LSL 桥接服务和 EEG 流。'}`)
       }
     }
 
     ws.onclose = () => {
+      if (this.ws !== ws) return
+      this.clearClock()
       this.clearConnectTimer()
       this.ws = null
       this.pendingHeader = null
-      if (!this.closedByUser) this.opts.onStatus?.('closed', 'OmniBCI LSL 连接已断开')
+      if (!this.closedByUser) this.opts.onStatus?.(
+        this.helloReceived ? 'closed' : 'error',
+        this.helloReceived ? `OmniBCI ${transport}连接已断开` : `OmniBCI ${transport}在收到 EEG 数据前关闭（${this.opts.url}）。`,
+      )
     }
   }
 
   disconnect(): void {
+    this.clearClock()
     this.closedByUser = true
     this.clearConnectTimer()
     try {
@@ -150,13 +162,45 @@ export class OmniWsClient {
     this.disconnect()
   }
 
-  private handleText(text: string): void {
+  private handleText(text: string, receivedClock: SystemClockStamp): void {
+    if (this.opts.native) {
+      try {
+        const batch = decodeNativeEeg(text)
+        batch.receivedClock = receivedClock
+        if (!this.helloReceived) {
+          this.helloReceived = true
+          this.clearConnectTimer()
+          this.opts.onHello?.({ type: 'hello', schema_version: OMNI_API_SCHEMA, stream: 'raw',
+            sample_rate: batch.sampleRate, channels: batch.channelNames, unit: 'uV' })
+          this.opts.onStatus?.('live', `已直连 OmniBCI · ${batch.channels} 通道 @ ${batch.sampleRate} Hz`)
+        }
+        this.opts.onBatch?.(batch)
+      } catch (error) { this.fail(error instanceof Error ? error.message : String(error)) }
+      return
+    }
+    try {
+      const msg = JSON.parse(text)
+      if (msg.type === 'clock_pong') {
+        if (this.clockRequests.delete(msg.browser_ms)) lslClock.observe(msg.browser_ms, performance.now(), msg.receive_sec, msg.send_sec)
+        return
+      }
+    } catch { /* The protocol parser reports malformed messages. */ }
     const parsed = parseOmniText(text, this.opts.stream)
     if (parsed.kind === 'error') {
       this.fail(parsed.message)
       return
     }
     if (parsed.kind === 'hello') {
+      const ping = () => {
+        if (this.ws?.readyState !== WebSocket.OPEN) return
+        const now = performance.now()
+        this.clockRequests = new Set([...this.clockRequests].filter(t => now - t < 30000))
+        this.clockRequests.add(now)
+        this.ws.send(JSON.stringify({ type: 'clock_ping', browser_ms: now }))
+      }
+      this.clearClock()
+      ping()
+      this.clockTimer = setInterval(ping, 2000)
       this.helloReceived = true
       this.clearConnectTimer()
       this.opts.onHello?.(parsed.hello)
@@ -178,7 +222,7 @@ export class OmniWsClient {
     this.pendingHeader = parsed.header
   }
 
-  private handleBinary(buf: ArrayBuffer): void {
+  private handleBinary(buf: ArrayBuffer, receivedClock: SystemClockStamp): void {
     const header = this.pendingHeader
     this.pendingHeader = null
     if (!header) return
@@ -187,7 +231,14 @@ export class OmniWsClient {
       this.opts.onStatus?.('error', decoded.error)
       return
     }
-    this.opts.onBatch?.(decoded)
+    this.opts.onBatch?.({ ...decoded, receivedClock })
+  }
+
+  private clearClock(): void {
+    if (this.clockTimer !== null) clearInterval(this.clockTimer)
+    this.clockTimer = null
+    this.clockRequests.clear()
+    lslClock.reset()
   }
 }
 
@@ -279,20 +330,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function sendOmniTrigger(
   number: number,
-  opts?: { sequence?: number; url?: string },
-): Promise<Record<string, unknown>> {
-  if (!Number.isInteger(number) || number < 1 || number > 255) {
-    return Promise.reject(new Error('trigger 必须是 1–255 的整数'))
-  }
-  return omniControlRequest(
-    {
-      type: 'marker',
-      code: 'soft_trigger',
-      value: number,
-      sequence: opts?.sequence ?? null,
-      duration: 0,
-      description: '',
-    },
-    { url: opts?.url },
-  )
+  opts?: { label?: string },
+): Promise<TriggerAck> {
+  return sendNativeTrigger(number, opts?.label ?? '')
 }

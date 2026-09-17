@@ -63,6 +63,7 @@ type SessionManifest = {
   dir: string
   startedAt: string
   stoppedAt?: string
+  firstDataReceived?: unknown
   status: string
   files: {
     eeg: string
@@ -545,12 +546,14 @@ export function recordWriterPlugin(): Plugin {
           await session.queue.catch(() => undefined)
           const bytes = session.bytes
           const { stem, binPath, dirPath } = session
+          let firstDataReceived: unknown = null
           let clock: unknown = null
           try {
             const raw = await readBody(req)
             if (raw.byteLength) {
-              const parsed = JSON.parse(raw.toString('utf8')) as { clock?: unknown }
+              const parsed = JSON.parse(raw.toString('utf8')) as { clock?: unknown; firstDataReceived?: unknown }
               clock = parsed.clock ?? null
+              firstDataReceived = parsed.firstDataReceived ?? null
             }
           } catch {
             clock = null
@@ -570,12 +573,14 @@ export function recordWriterPlugin(): Plugin {
             stoppedAt: new Date().toISOString(),
             status: bytes === 0 ? 'empty' : 'complete',
             clock: clockSummary,
+            firstDataReceived,
           })
           if (clock && bytes > 0) {
             writeFileSync(session.idxPath, `${JSON.stringify(clock)}\n`, 'utf8')
           }
           session.manifest.stoppedAt = new Date().toISOString()
           session.manifest.status = bytes === 0 ? 'empty' : 'complete'
+          session.manifest.firstDataReceived = firstDataReceived
           session.manifest.bytes = bytes
           session.manifest.clock = {
             ...(session.manifest.clock ?? {}),

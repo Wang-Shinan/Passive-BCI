@@ -1,10 +1,15 @@
 /** Map EEG batches onto the browser clock using Neuracle device timestamps. */
+import { lslClock, type LslTiming } from './lslClock'
+import type { SystemClockStamp } from './systemClock'
 
 const UINT32_MS = 2 ** 32
 
-export type SampleClockSource = 'device' | 'arrival'
+export type SampleClockSource = 'device' | 'arrival' | 'lsl'
 
 export type SampleClockNote = {
+  receivedClock?: SystemClockStamp
+  native?: { sequence: number; sourceTimestampMs: number | null }
+  lsl?: LslTiming
   samples: number
   sampleRate: number
   arrivalNowMs: number
@@ -12,6 +17,10 @@ export type SampleClockNote = {
 }
 
 export type SampleClockSnapshot = {
+  receivedClock?: SystemClockStamp
+  native?: { sequence: number; sourceTimestampMs: number | null }
+  lsl?: { streamId: string; lastSourceTimestampSec: number; correctionSec: number | null
+    eventLocalSec: number | null; browserOffsetMs: number | null; syncRttMs: number | null; syncAgeMs: number | null }
   sampleIndex: number
   sampleRate: number
   arrivalNowMs: number
@@ -48,6 +57,9 @@ export class SampleClock {
   private wraps = 0
   private minOffsetMs: number | null = null
   private source: SampleClockSource = 'arrival'
+  private lsl: LslTiming | undefined
+  private native: SampleClockNote['native']
+  private receivedClock: SystemClockStamp | undefined
   private readonly batches: SampleClockBatchDump[] = []
   private static readonly MAX_BATCHES = 1024
 
@@ -61,6 +73,9 @@ export class SampleClock {
     this.wraps = 0
     this.minOffsetMs = null
     this.source = 'arrival'
+    this.lsl = undefined
+    this.native = undefined
+    this.receivedClock = undefined
     this.batches.length = 0
   }
 
@@ -73,15 +88,21 @@ export class SampleClock {
     return Math.max(0, this.lastArrivalMs - this.lastAcquiredMs)
   }
 
-  snapshot(): SampleClockSnapshot | null {
+  snapshot(eventNowMs = performance.now()): SampleClockSnapshot | null {
     if (!this.sampleIndex) return null
+    const mapping = this.lsl ? lslClock.mapping(eventNowMs) : null
     return {
+      ...(this.native ? { native: this.native } : {}),
+      ...(this.receivedClock ? { receivedClock: this.receivedClock } : {}),
+      ...(this.lsl ? { lsl: { streamId: this.lsl.streamId, lastSourceTimestampSec: this.lsl.timestampsSec.at(-1)!,
+        correctionSec: this.lsl.correctionSec, eventLocalSec: mapping ? (eventNowMs + mapping.offsetMs) / 1000 : null,
+        browserOffsetMs: mapping?.offsetMs ?? null, syncRttMs: mapping?.rttMs ?? null, syncAgeMs: mapping?.ageMs ?? null } } : {}),
       sampleIndex: this.sampleIndex,
       sampleRate: this.sampleRate,
       arrivalNowMs: this.lastArrivalMs,
       deviceEndMs: this.lastDeviceEndMs,
       acquiredNowMs: this.lastAcquiredMs,
-      source: this.source,
+      source: this.lsl && !mapping ? 'arrival' : this.source,
       pipelineDelayMs: Math.max(0, this.lastArrivalMs - this.lastAcquiredMs),
     }
   }
@@ -117,6 +138,9 @@ export class SampleClock {
     const n = note.samples
     this.sampleIndex += n
     this.lastArrivalMs = note.arrivalNowMs
+    this.lsl = note.lsl
+    this.native = note.native
+    this.receivedClock = note.receivedClock
 
     const rawDevice = finiteMs(note.deviceEndMs)
     let acquiredMs = note.arrivalNowMs
@@ -132,6 +156,14 @@ export class SampleClock {
     } else {
       this.lastDeviceEndMs = null
       if (this.minOffsetMs === null) this.source = 'arrival'
+    }
+    if (note.lsl) {
+      const mapping = lslClock.mapping(note.arrivalNowMs)
+      this.source = 'arrival'
+      if (mapping && note.lsl.correctionSec !== null) {
+        acquiredMs = (note.lsl.timestampsSec.at(-1)! + note.lsl.correctionSec) * 1000 - mapping.offsetMs
+        this.source = 'lsl'
+      }
     }
 
     this.lastAcquiredMs = acquiredMs

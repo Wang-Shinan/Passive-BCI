@@ -1,5 +1,9 @@
 import { sampleClock, type SampleClockDump } from '../../lib/eeg/sampleClock'
 import { sessionHub } from '../../lib/session/sessionHub'
+import { CONTEXT_SCHEMA, type SessionContextRecord } from '../../lib/session/contracts'
+import type { LslTiming } from '../../lib/eeg/lslClock'
+import type { NativeFrame } from '../omni/native'
+import { captureSystemClock, type SystemClockStamp } from '../../lib/eeg/systemClock'
 
 /** Stream EEG to disk (Vite /api/record) or coalesced memory as fallback. */
 
@@ -30,8 +34,16 @@ export interface RecordStopResult {
   rel?: string
 }
 
+export type FirstDataReceived = {
+  systemClock: SystemClockStamp
+  capturePoint: 'transport_receive' | 'recorder_append'
+  byteOffset: 0
+}
+
 export interface RecordFinishExtra {
+  firstDataReceived?: FirstDataReceived | null
   clock?: SampleClockDump
+  lslBatches?: SessionContextRecord[]
 }
 
 export interface RecordSink {
@@ -97,7 +109,11 @@ class MemorySink implements RecordSink {
         this.filename.replace(/\.bin$/i, '.idx.json'),
       )
     }
+    if (extra?.firstDataReceived) triggerDownload(new Blob([JSON.stringify({ firstDataReceived: extra.firstDataReceived })],
+      { type: 'application/json' }), this.filename.replace(/\.bin$/i, '.timing.json'))
     this.chunks = []
+    if (extra?.lslBatches?.length) triggerDownload(new Blob([extra.lslBatches.map(row => JSON.stringify(row)).join('\n') + '\n'],
+      { type: 'application/x-ndjson' }), this.filename.replace(/\.bin$/i, '.lsl.jsonl'))
     return { name: this.filename }
   }
 
@@ -210,6 +226,8 @@ export class BinRecorder {
   private flushQueuedBytes = 0
   private readonly flushBytes: number
   private readonly createSink: CreateRecordSink | undefined
+  private firstDataReceived: FirstDataReceived | null = null
+  private lslBatches: SessionContextRecord[] = []
 
   constructor(opts?: { flushBytes?: number; createSink?: CreateRecordSink }) {
     this.flushBytes = opts?.flushBytes ?? RECORD_FLUSH_BYTES
@@ -247,6 +265,8 @@ export class BinRecorder {
     this.pending = new Uint8Array(this.flushBytes)
     this.pendingLen = 0
     this.bytes = 0
+    this.lslBatches = []
+    this.firstDataReceived = null
     this.flushQueuedBytes = 0
     this.flushChain = Promise.resolve()
     this.startedAt = Date.now()
@@ -258,11 +278,36 @@ export class BinRecorder {
       this.sink =
         (await DiskSink.open(this.filename, opts.meta)) ?? new MemorySink(this.filename)
     }
+    if (this.sink.kind === 'disk' && sessionHub.active && this.lslBatches.length) {
+      for (const row of this.lslBatches) sessionHub.logContext(row)
+      this.lslBatches = []
+    }
     return this.sink.kind
   }
 
-  append(frameRaw: Uint8Array): void {
-    if (this.startedAt === null) return
+  append(frameRaw: Uint8Array, lsl?: LslTiming, nativeFrames?: NativeFrame[], receivedClock?: SystemClockStamp): void {
+    if (this.startedAt === null || frameRaw.byteLength === 0) return
+    if (!this.firstDataReceived) {
+      const systemClock = receivedClock ? { ...receivedClock } : captureSystemClock()
+      this.firstDataReceived = { systemClock, capturePoint: receivedClock ? 'transport_receive' : 'recorder_append', byteOffset: 0 }
+      const record: SessionContextRecord = { schema: CONTEXT_SCHEMA, type: 'first_data_received',
+        systemClock, firstDataReceived: this.firstDataReceived, t_ms: systemClock.monotonicMs,
+        perf_ms: systemClock.monotonicMs, experiment: 'eeg', subjectId: '', byteOffset: 0,
+        eeg: sampleClock.snapshot(systemClock.monotonicMs) }
+      if (sessionHub.active) sessionHub.logContext(record)
+      else this.lslBatches.push(record)
+    }
+    if (lsl || nativeFrames) {
+      const systemClock = captureSystemClock()
+      const now = systemClock.monotonicMs
+      const record: SessionContextRecord = { schema: CONTEXT_SCHEMA, type: lsl ? 'lsl_timestamps' : 'omni_native_frames',
+        systemClock, receivedClock: receivedClock ?? null,
+        t_ms: now, perf_ms: now, experiment: 'eeg', subjectId: '', eeg: sampleClock.snapshot(now),
+        byteOffset: this.bytes, byteLength: frameRaw.byteLength, ...(lsl ? { lsl } : { nativeFrames }) }
+      // Disk context is streamed throughout recording, independent of the 1024-batch clock ring.
+      if (sessionHub.active) sessionHub.logContext(record)
+      else this.lslBatches.push(record)
+    }
     let off = 0
     while (off < frameRaw.byteLength) {
       const n = Math.min(this.flushBytes - this.pendingLen, frameRaw.byteLength - off)
@@ -276,6 +321,8 @@ export class BinRecorder {
 
   async stop(): Promise<RecordStopResult | null> {
     if (this.startedAt === null) return null
+    this.startedAt = null
+    const clock = sampleClock.dump()
     this.enqueueTail()
     try {
       await this.flushChain
@@ -286,14 +333,16 @@ export class BinRecorder {
     const name = this.filename
     const sink = this.sink
     const kind = sink?.kind ?? 'memory'
+    const firstDataReceived = this.firstDataReceived
+    const lslBatches = this.lslBatches
+    this.lslBatches = []
     this.resetLocal()
     if (bytes === 0) {
       await sink?.abort()
       return null
     }
     try {
-      const clock = sampleClock.dump()
-      const done = await sink?.finish(clock.sampleIndex > 0 ? { clock } : undefined)
+      const done = await sink?.finish({ firstDataReceived, ...(clock.sampleIndex > 0 ? { clock } : {}), ...(lslBatches.length ? { lslBatches } : {}) })
       return {
         bytes,
         name: done?.name ?? name,
@@ -341,6 +390,7 @@ export class BinRecorder {
   }
 
   private resetLocal(): void {
+    this.firstDataReceived = null
     this.startedAt = null
     this.bytes = 0
     this.pendingLen = 0

@@ -1,8 +1,10 @@
 import { sampleClock } from './eeg/sampleClock'
 import { CONTEXT_SCHEMA, EVENT_SCHEMA, type SessionContextRecord } from './session/contracts'
 import { sessionHub } from './session/sessionHub'
+import { captureSystemClock, type SystemClockStamp } from './eeg/systemClock'
 
 export interface LogEvent {
+  systemClock?: SystemClockStamp
   t: number
   experiment: string
   type: string
@@ -45,10 +47,12 @@ export class SessionLogger {
   }
 
   log(type: string, data?: Record<string, unknown>): void {
-    const eeg = sampleClock.snapshot()
-    const t = performance.now() - this.t0
-    const perf_ms = performance.now()
+    const systemClock = captureSystemClock()
+    const perf_ms = systemClock.monotonicMs
+    const eeg = sampleClock.snapshot(perf_ms)
+    const t = perf_ms - this.t0
     this.events.push({
+      systemClock,
       t,
       experiment: this.meta.experiment,
       type,
@@ -58,6 +62,7 @@ export class SessionLogger {
       this.events = this.events.slice(-EVENT_RING)
     }
     sessionHub.logEvent({
+      systemClock,
       schema: EVENT_SCHEMA,
       t_ms: t,
       perf_ms,
@@ -70,9 +75,10 @@ export class SessionLogger {
   }
 
   logContext(row: object): void {
-    const eeg = sampleClock.snapshot()
-    const t = performance.now() - this.t0
-    const perf_ms = performance.now()
+    const systemClock = captureSystemClock()
+    const perf_ms = systemClock.monotonicMs
+    const eeg = sampleClock.snapshot(perf_ms)
+    const t = perf_ms - this.t0
     const record: SessionContextRecord = {
       schema: CONTEXT_SCHEMA,
       t_ms: t,
@@ -81,6 +87,7 @@ export class SessionLogger {
       subjectId: this.meta.subjectId,
       eeg,
       ...(row as Record<string, unknown>),
+      systemClock,
     }
     if (!sessionHub.active) {
       this.contexts.push(record)
@@ -115,10 +122,11 @@ export class SessionLogger {
   }
 
   toCSV(): string {
-    const rows = ['t_ms,experiment,type,data_json']
+    const rows = ['t_ms,experiment,type,data_json,wall_unix_ms,monotonic_ms,time_origin_unix_ms,monotonic_unix_ms,wall_read_span_ms']
     for (const e of this.events) {
       const data = e.data ? JSON.stringify(e.data).replaceAll('"', '""') : ''
-      rows.push(`${e.t.toFixed(3)},${e.experiment},${e.type},"${data}"`)
+      const c = e.systemClock
+      rows.push(`${e.t.toFixed(3)},${e.experiment},${e.type},"${data}",${c?.wallUnixMs ?? ''},${c?.monotonicMs ?? ''},${c?.timeOriginUnixMs ?? ''},${c?.monotonicUnixMs ?? ''},${c?.wallReadSpanMs ?? ''}`)
     }
     return rows.join('\n')
   }
