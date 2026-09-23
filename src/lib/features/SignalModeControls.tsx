@@ -40,6 +40,7 @@ export function SignalModeControls({
   mode,
   onModeChange,
   driverFeature,
+  preferredDriver,
   onDriverChange,
   rangeMap,
   onRangeMapChange,
@@ -58,6 +59,7 @@ export function SignalModeControls({
   onModeChange: (m: SignalControlMode) => void
   /** Stress games: which feature drives 0–100 stress. */
   driverFeature?: string
+  preferredDriver?: string
   onDriverChange?: (id: string) => void
   rangeMap?: FeatureRangeMap
   onRangeMapChange?: (next: FeatureRangeMap) => void
@@ -111,7 +113,7 @@ export function SignalModeControls({
             ? live
               ? '真实 EEG 特征驱动难度。无数据时保持上次输出；点「手动输入」接管。'
               : '未收到实时样本。请先在采集页连接并点「开始采集」。'
-            : '演示 EEG → 可选 C 档及以上特征驱动难度（默认 rms）。点「手动输入」接管。'}
+            : '演示 EEG → 所选特征驱动难度。点「手动输入」接管。'}
       </p>
       {recipe && onRecipeChange ? (
         <div className="mb-3">
@@ -132,15 +134,18 @@ export function SignalModeControls({
             value={driverFeature}
             onChange={(e) => onDriverChange(e.target.value)}
           >
+            {preferredDriver && <optgroup label="首选">
+              {CONTROL_SIGNAL_OPTIONS.filter(o => o.id === preferredDriver).map(o => <option key={o.id} value={o.id}>{o.id === 'cognitive_load' ? 'Cognitive Load · 认知负荷' : o.label}</option>)}
+            </optgroup>}
             {CONTROL_SIGNAL_TIER_ORDER.map((tier) => {
-              const opts = CONTROL_SIGNAL_OPTIONS.filter((o) => o.tier === tier)
+              const opts = CONTROL_SIGNAL_OPTIONS.filter((o) => o.tier === tier && o.id !== preferredDriver)
               if (!opts.length) return null
               return (
-                <optgroup key={tier} label={CONTROL_SIGNAL_TIER_LABEL[tier as ControlSignalTier]}>
+                <optgroup key={tier} label={preferredDriver && tier === 'S' ? 'S · 幅度' : CONTROL_SIGNAL_TIER_LABEL[tier as ControlSignalTier]}>
                   {opts.map((o) => (
                     <option key={o.id} value={o.id}>
                       {o.label}
-                      {o.note ? ` — ${o.note}` : ''}
+                      {o.note ? ` — ${preferredDriver ? o.note.replace(' · 首选', '') : o.note}` : ''}
                     </option>
                   ))}
                 </optgroup>

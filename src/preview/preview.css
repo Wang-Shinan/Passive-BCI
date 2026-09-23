@@ -1,0 +1,137 @@
+/* Directory layout and palette. Shared application theme lives in theme.css. */
+.experiment-directory {
+  --ed-bg: #10151e;
+  --ed-sidebar: #141b26;
+  --ed-surface: #182130;
+  --ed-hover: #1e2b40;
+  --ed-ink: #e3e8f1;
+  --ed-body: #b7c3d6;
+  --ed-muted: #a5b8d4;
+  --ed-line: #2b3341;
+  --ed-stroke: #3a485d;
+  --ed-accent: #abcaff;
+  --ed-on-accent: #18243c;
+  --ed-active-bg: #26364e;
+  --ed-active-text: #cbdcff;
+  --ed-active-border: #3c5271;
+  --ed-legacy-bg: #43392a;
+  --ed-legacy-text: #e2c393;
+  --ed-backdrop: #080f1bc9;
+  --ed-success: #84d2ad;
+  --ed-danger: #ff9393;
+  --muted: var(--ed-muted);
+  --accent: var(--ed-accent);
+  --accent-2: var(--ed-success);
+  --danger: var(--ed-danger);
+  --border: var(--ed-stroke);
+  color-scheme: dark;
+  min-height: 100dvh;
+  display: flex;
+  color: var(--ed-ink);
+  background: var(--ed-bg);
+}
+
+/* Warm white and terracotta, referencing Anthropic's restrained page palette.
+   Orange text is darker than the decorative orange to retain text contrast. */
+.experiment-directory[data-theme='light'] {
+  --ed-bg: #faf9f5;
+  --ed-sidebar: #f2f0e9;
+  --ed-surface: #fffefa;
+  --ed-hover: #fbf0e8;
+  --ed-ink: #28251f;
+  --ed-body: #58544d;
+  --ed-muted: #6e685f;
+  --ed-line: #ded9cf;
+  --ed-stroke: #c7bfb2;
+  --ed-accent: #a74728;
+  --ed-on-accent: #ffffff;
+  --ed-active-bg: #f2dfd2;
+  --ed-active-text: #963d22;
+  --ed-active-border: #d9b29b;
+  --ed-legacy-bg: #efe4d2;
+  --ed-legacy-text: #795821;
+  --ed-backdrop: #28251f70;
+  --ed-success: #286b4b;
+  --ed-danger: #b13232;
+  color-scheme: light;
+}
+
+.experiment-directory .ed-sidebar {
+  width: 224px;
+  flex: 0 0 224px;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  background: var(--ed-sidebar);
+  border-right: 1px solid var(--ed-line);
+  padding: 30px 16px 20px;
+  display: flex;
+  flex-direction: column;
+}
+.experiment-directory .ed-brand { padding: 0 14px; font-size: 21px; font-weight: 600; letter-spacing: -.4px; color: var(--ed-ink); }
+.experiment-directory nav { display: grid; gap: 5px; margin-top: 32px; }
+.experiment-directory nav button, .experiment-directory nav a { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 14px; text-align: left; color: var(--ed-body); font-size: 13px; border: 1px solid transparent; background: none; border-radius: 5px; }
+.experiment-directory nav .active { background: var(--ed-active-bg); color: var(--ed-active-text); border-color: var(--ed-active-border); }
+.experiment-directory nav button:hover, .experiment-directory nav a:hover { background: var(--ed-hover); color: var(--ed-accent); }
+.experiment-directory nav small { margin-left: auto; font-size: 11px; color: inherit; }
+.experiment-directory .ed-nav-divider { height: 1px; background: var(--ed-line); margin: 16px 12px; }
+.experiment-directory .ed-connection { margin-top: auto; padding: 20px 10px 0; border-top: 1px solid var(--ed-line); }
+.experiment-directory .ed-connection .chip { background: var(--ed-surface); border-color: var(--ed-stroke); }
+.experiment-directory .ed-main { flex: 1; min-width: 0; }
+.experiment-directory .ed-topbar { min-height: 62px; display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 12px 38px; border-bottom: 1px solid var(--ed-line); font-size: 12px; color: var(--ed-muted); }
+.experiment-directory .ed-breadcrumb { white-space: nowrap; }
+.experiment-directory .ed-topbar-actions { display: flex; align-items: center; gap: 22px; margin-left: auto; }
+.experiment-directory .ed-original { color: var(--ed-accent); white-space: nowrap; }
+.experiment-directory .ed-content { max-width: 1280px; margin: auto; padding: 34px 38px 48px; }
+.experiment-directory .ed-title-row { display: flex; align-items: center; justify-content: space-between; gap: 22px; margin-bottom: 16px; }
+.experiment-directory h1 { font-size: 26px; font-weight: 550; margin: 0; letter-spacing: -.5px; }
+.experiment-directory input { width: 270px; max-width: 100%; background: var(--ed-surface); color: var(--ed-ink); border: 1px solid var(--ed-stroke); border-radius: 5px; padding: 9px 12px; font-size: 12px; }
+.experiment-directory input::placeholder { color: var(--ed-muted); }
+.experiment-directory .ed-page-note { color: var(--ed-muted); font-size: 12px; line-height: 1.7; padding-bottom: 23px; border-bottom: 1px solid var(--ed-line); }
+.experiment-directory .ed-section { margin-top: 28px; }
+.experiment-directory h2 { margin: 0 0 16px; font-size: 17px; font-weight: 550; }
+.experiment-directory h2 small { font-size: 12px; font-weight: 400; color: var(--ed-accent); margin-left: 8px; }
+.experiment-directory .ed-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+.experiment-directory .ed-entry { display: flex; flex-direction: column; padding: 19px 20px 16px; border: 1px solid var(--ed-line); background: var(--ed-surface); border-radius: 6px; transition: border-color 120ms; }
+.experiment-directory .ed-entry:hover { border-color: var(--ed-accent); background: var(--ed-hover); }
+.experiment-directory .ed-entry-heading { display: flex; align-items: flex-start; gap: 16px; justify-content: space-between; }
+.experiment-directory h3 { margin: 0; font-size: 15px; line-height: 1.6; font-weight: 550; color: var(--ed-ink); }
+.experiment-directory .ed-open { color: var(--ed-accent); }
+.experiment-directory .ed-entry p { font-size: 12px; color: var(--ed-body); line-height: 1.9; margin: 9px 0 16px; }
+.experiment-directory .ed-entry-bottom { display: flex; align-items: baseline; gap: 8px; color: var(--ed-muted); font-size: 11px; line-height: 1.8; margin-top: auto; border-top: 1px solid var(--ed-line); padding-top: 11px; }
+.experiment-directory .ed-legacy { flex-shrink: 0; background: var(--ed-legacy-bg); color: var(--ed-legacy-text); padding: 1px 6px; border-radius: 3px; }
+.experiment-directory .ed-empty { padding: 50px 0; color: var(--ed-muted); font-size: 14px; }
+.experiment-directory .ed-empty button { margin-left: 18px; border: 0; background: transparent; color: var(--ed-accent); text-decoration: underline; }
+.experiment-directory :focus-visible { outline: 2px solid var(--ed-accent); outline-offset: 4px; }
+.experiment-directory .ed-menu, .experiment-directory .ed-backdrop { display: none; }
+@media (max-width: 1050px) {
+  .experiment-directory .ed-sidebar { width: 200px; flex-basis: 200px; }
+  .experiment-directory .ed-content { padding-inline: 26px; }
+  .experiment-directory .ed-topbar { padding-inline: 26px; }
+  .experiment-directory .ed-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .experiment-directory .ed-sidebar { display: none; }
+  .experiment-directory .ed-sidebar.is-open { position: fixed; inset: 0 auto 0 0; width: 238px; display: flex; z-index: 42; }
+  .experiment-directory .ed-backdrop { display: block; position: fixed; inset: 0; background: var(--ed-backdrop); border: 0; z-index: 41; }
+  .experiment-directory .ed-menu { display: inline-block; background: transparent; color: var(--ed-accent); border: 1px solid var(--ed-stroke); border-radius: 4px; padding: 5px 9px; font-size: 12px; }
+  .experiment-directory .ed-topbar { padding-inline: 18px; gap: 10px; font-size: 11px; }
+  .experiment-directory .ed-topbar-project { display: none; }
+  .experiment-directory .ed-topbar-actions { gap: 12px; }
+  .experiment-directory .ed-content { padding: 25px 18px 40px; }
+  .experiment-directory .ed-title-row { align-items: flex-start; flex-direction: column; gap: 18px; }
+  .experiment-directory input { width: 100%; }
+  .experiment-directory h1 { font-size: 23px; }
+  .experiment-directory .ed-entry { padding: 17px; }
+}
+@media (prefers-reduced-motion: reduce) { .experiment-directory .ed-entry { transition: none; } }
+
+.experiment-directory .ed-entry h3 { display: flex; align-items: center; gap: 10px; }
+.experiment-directory .ed-entry h3 svg { color: var(--ed-accent); }
+
+.experiment-directory .ed-section h2 { display: flex; align-items: center; gap: 8px; }
+
+.experiment-directory .ed-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 0 4px; }
+.experiment-directory .ed-brand .preview-brand-logo { width: 100%; }
+.experiment-directory .ed-brand-project { padding-left: 9px; font-size: 12px; font-weight: 500; color: var(--ed-muted); letter-spacing: .15px; }
+.experiment-directory[data-theme='dark'] .ed-sidebar { background: #10151e; }

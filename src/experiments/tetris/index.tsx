@@ -13,13 +13,16 @@ import { mulberry32 } from '../../lib/rng'
 import { ManualSignalSource } from '../../lib/signal/manual'
 import { ExportButtons, loadStoredSubjectId } from '../../lib/ui/ExportButtons'
 import { LineChart } from '../../lib/ui/LineChart'
+import { Icon } from '../../lib/ui/Icon'
 import { ColumnResizer } from '../../lib/ui/ColumnResizer'
+import './tetris.css'
 import { Panel } from '../../lib/ui/Panel'
 import { Slider } from '../../lib/ui/Slider'
-import { BOARD_DEFAULT_CELL, Board, NextPreview, useBoardCell } from './Board'
+import { BOARD_MIN_CELL, BOARD_MAX_CELL, Board, NextPreview, useBoardCell } from './Board'
 import { tetrisContextSnapshot, type TetrisControlSource } from './boardFeatures'
 import {
   COLS,
+  ROWS,
   advanceBoardAnim,
   advanceFall,
   collides,
@@ -83,11 +86,20 @@ const COLLAB_CONTROL_KEY = 'passive-bci.tetris-collab-control'
 const FOLLOW_CONTROL_KEY = 'passive-bci.tetris-follow-control'
 const FOLLOW_MOVES_KEY = 'passive-bci.tetris-follow-moves'
 const FOLLOW_STEPS_KEY = 'passive-bci.tetris-follow-steps'
+
+const SIDE_COL_DEFAULT = 320
+const SIDE_COL_MIN = 240
+const SIDE_COL_MAX = 640
+const LEFT_COL_KEY = 'passive-bci.tetris-left-col'
 const RIGHT_COL_KEY = 'passive-bci.tetris-right-col'
-const RIGHT_COL_DEFAULT = 320
-const RIGHT_COL_MIN = 260
-const RIGHT_COL_MAX = 620
-const MID_COL_MIN = 340
+
+function loadColumnWidth(key: string): number {
+  try {
+    const value = Number(localStorage.getItem(key))
+    if (Number.isFinite(value) && value > 0) return Math.max(SIDE_COL_MIN, Math.min(SIDE_COL_MAX, value))
+  } catch { /* Use the default when storage is unavailable. */ }
+  return SIDE_COL_DEFAULT
+}
 
 function loadMiControlEnabled(): boolean {
   if (typeof localStorage === 'undefined') return false
@@ -119,16 +131,6 @@ function loadFollowSteps(): number {
   return clampFollowSteps(Number(localStorage.getItem(FOLLOW_STEPS_KEY)))
 }
 
-function clampRightCol(value: number): number {
-  return Math.min(RIGHT_COL_MAX, Math.max(RIGHT_COL_MIN, Math.round(value)))
-}
-
-function loadRightCol(): number {
-  if (typeof localStorage === 'undefined') return RIGHT_COL_DEFAULT
-  const raw = Number(localStorage.getItem(RIGHT_COL_KEY))
-  return Number.isFinite(raw) && raw > 0 ? clampRightCol(raw) : RIGHT_COL_DEFAULT
-}
-
 interface TracePoint {
   t: number
   stress: number
@@ -158,6 +160,8 @@ export function TetrisExperiment() {
     features,
   } = useStressControl({
     initial: 40,
+    defaultDriver: 'cognitive_load',
+    driverStorageKey: 'passive-bci.tetris-stress-driver',
     manualModulators: (s) => ({
       stress: s,
       focus: 100 - s * 0.35,
@@ -230,47 +234,30 @@ export function TetrisExperiment() {
   const controlRef = useRef<TetrisControlSource>('human')
 
   const [boardCell, setBoardCell] = useBoardCell()
-  const [rightCol, setRightCol] = useState(loadRightCol)
-  const midColRef = useRef<HTMLDivElement | null>(null)
-  const dragBase = useRef({ cell: 0, right: 0, midWidth: 0 })
+  const [leftCollapsed, setLeftCollapsed] = useState(false)
+  const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [leftCol, setLeftCol] = useState(() => loadColumnWidth(LEFT_COL_KEY))
+  const [rightCol, setRightCol] = useState(() => loadColumnWidth(RIGHT_COL_KEY))
+  const focused = leftCollapsed && rightCollapsed
+  const leftWidth = leftCollapsed ? 0 : leftCol
+  const rightWidth = rightCollapsed ? 0 : rightCol
+  const columnDrag = useRef({ left: 0, right: 0 })
 
   useEffect(() => {
-    localStorage.setItem(RIGHT_COL_KEY, String(rightCol))
-  }, [rightCol])
-
-  // Give up right-column width first when the viewport can no longer fit the middle column.
-  useEffect(() => {
-    const mid = midColRef.current
-    if (!mid || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => {
-      const deficit = MID_COL_MIN - mid.offsetWidth
-      if (deficit > 0) setRightCol((current) => Math.max(RIGHT_COL_MIN, current - deficit))
-    })
-    observer.observe(mid)
-    return () => observer.disconnect()
-  }, [])
+    try {
+      localStorage.setItem(LEFT_COL_KEY, String(leftCol))
+      localStorage.setItem(RIGHT_COL_KEY, String(rightCol))
+    } catch { /* Resizing still works without storage. */ }
+  }, [leftCol, rightCol])
 
   const beginColumnDrag = useCallback(() => {
-    dragBase.current = {
-      cell: boardCell,
-      right: rightCol,
-      midWidth: midColRef.current?.offsetWidth ?? MID_COL_MIN,
-    }
-  }, [boardCell, rightCol])
-
-  const dragBoardColumn = useCallback(
-    (dx: number) => {
-      const { cell, midWidth } = dragBase.current
-      const slack = Math.max(0, midWidth - MID_COL_MIN)
-      setBoardCell(Math.min(cell + dx / COLS, cell + slack / COLS))
-    },
-    [setBoardCell],
-  )
-
+    columnDrag.current = { left: leftWidth, right: rightWidth }
+  }, [leftWidth, rightWidth])
+  const dragLeftColumn = useCallback((dx: number) => {
+    setLeftCol(Math.max(SIDE_COL_MIN, Math.min(SIDE_COL_MAX, columnDrag.current.left + dx)))
+  }, [])
   const dragRightColumn = useCallback((dx: number) => {
-    const { right, midWidth } = dragBase.current
-    const slack = Math.max(0, midWidth - MID_COL_MIN)
-    setRightCol(clampRightCol(Math.min(right - dx, right + slack)))
+    setRightCol(Math.max(SIDE_COL_MIN, Math.min(SIDE_COL_MAX, columnDrag.current.right - dx)))
   }, [])
 
   useEffect(() => {
@@ -946,7 +933,7 @@ export function TetrisExperiment() {
     modelRuntime.serviceHello?.task !== brainControlTask
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6">
+    <div className="tetris-page mx-auto px-4 py-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <Link to="/" className="muted text-sm hover:text-white">
@@ -976,300 +963,305 @@ export function TetrisExperiment() {
         />
       </div>
 
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch xl:gap-2">
-        <div className="relative w-fit self-center xl:shrink-0 xl:self-start">
-          <Board state={state} cell={boardCell} onCellChange={setBoardCell} />
-          {cascadeFlash && (
-            <div className="pointer-events-none absolute inset-x-0 top-6 text-center">
-              <span className="inline-block rounded-full border border-[#f5a52466] bg-[#1a1520ee] px-3 py-1 text-sm font-semibold text-[#f5a524] shadow-lg">
-                {cascadeFlash}
-              </span>
-            </div>
-          )}
-        </div>
-
-        <ColumnResizer
-          label="棋盘宽度"
-          className="hidden xl:flex"
-          onDragStart={beginColumnDrag}
-          onDrag={dragBoardColumn}
-          onReset={() => setBoardCell(BOARD_DEFAULT_CELL)}
-        />
-
-        <div ref={midColRef} className="min-w-0 flex-1 space-y-4">
-          <Panel title="状态">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="分数" value={state.score} />
-              <Stat label="消行" value={state.lines} />
-              <Stat label="等级" value={state.level} />
-              <Stat label="重力" value={`${gravityDisplay.toFixed(2)} 格/秒`} />
-            </div>
-            <div className="mt-4 flex items-center gap-4">
-              <div>
-                <div className="muted mb-1 text-xs">下一块</div>
-                <NextPreview type={state.next} />
+      <div className="tetris-layout-tools" aria-label="布局设置">
+        <button className="btn" aria-expanded={!leftCollapsed} aria-controls="tetris-left-controls" onClick={() => setLeftCollapsed(v => !v)}>
+          <Icon name="panelLeft" size={16} />{leftCollapsed ? '展开左侧面板' : '收起左侧面板'}
+        </button>
+        <button className="btn" aria-pressed={focused} onClick={() => { setLeftCollapsed(!focused); setRightCollapsed(!focused) }}>
+          <Icon name="focus" size={16} />{focused ? '恢复两侧面板' : '专注棋盘'}
+        </button>
+        <button className="btn" aria-expanded={!rightCollapsed} aria-controls="tetris-right-controls" onClick={() => setRightCollapsed(v => !v)}>
+          <Icon name="panelRight" size={16} />{rightCollapsed ? '展开右侧面板' : '收起右侧面板'}
+        </button>
+        <label className="tetris-size-control">
+          <span>棋盘尺寸</span>
+          <input type="range" aria-label="棋盘尺寸" min={BOARD_MIN_CELL} max={BOARD_MAX_CELL} step={1} value={boardCell} onChange={event => setBoardCell(Number(event.target.value))} />
+          <output>{boardCell * COLS} × {boardCell * ROWS}</output>
+        </label>
+      </div>
+      <div className={`tetris-layout ${focused ? 'is-focused' : ''}`} style={{ '--board-width': `${boardCell * COLS}px`, '--left-col': `${leftWidth}px`, '--right-col': `${rightWidth}px` } as React.CSSProperties}>
+        <aside className="tetris-left" aria-label="游戏与控制设置">
+          <div id="tetris-left-controls" className="tetris-side-content space-y-4" hidden={leftCollapsed}>
+            <Panel icon="grid" title="状态">
+              <div className="grid grid-cols-2 gap-3">
+                <Stat label="分数" value={state.score} />
+                <Stat label="消行" value={state.lines} />
+                <Stat label="等级" value={state.level} />
+                <Stat label="重力" value={`${gravityDisplay.toFixed(2)} 格/秒`} />
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() =>
-                    setState((s) => {
-                      const next = { ...s, paused: !s.paused }
-                      stateRef.current = next
-                      loggerRef.current.log('pause', { paused: next.paused })
-                      return next
-                    })
-                  }
-                >
-                  {state.paused ? '继续' : '暂停'}
-                </button>
-                <button type="button" className="btn btn-primary" onClick={restart}>
-                  重开
-                </button>
-              </div>
-            </div>
-          </Panel>
-
-          <Panel title="压力 ↔ 下落速度">
-            <p className="muted mb-3 text-sm">
-              方块按亚格子连续平滑下落。默认：压力越大，下落越快。
-            </p>
-            <div className="mb-3 flex gap-2">
-              {(['challenge', 'regulate'] as GravityMode[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`btn ${cfg.mode === m ? 'btn-primary' : ''}`}
-                  onClick={() => setCfg((c) => ({ ...c, mode: m }))}
-                >
-                  {m === 'challenge' ? '挑战（压↑速↑）' : '调节模式 (PI)'}
-                </button>
-              ))}
-            </div>
-            {cfg.mode === 'regulate' ? (
-              <div className="space-y-3">
-                <Slider
-                  label="目标压力"
-                  value={cfg.setpoint}
-                  min={10}
-                  max={90}
-                  step={1}
-                  onChange={(v) => setCfg((c) => ({ ...c, setpoint: v }))}
-                />
-                <Slider
-                  label="Kp"
-                  value={cfg.kp}
-                  min={0.005}
-                  max={0.15}
-                  step={0.005}
-                  format={(v) => v.toFixed(3)}
-                  onChange={(v) => setCfg((c) => ({ ...c, kp: v }))}
-                />
-                <Slider
-                  label="Ki"
-                  value={cfg.ki}
-                  min={0}
-                  max={0.03}
-                  step={0.001}
-                  format={(v) => v.toFixed(3)}
-                  onChange={(v) => setCfg((c) => ({ ...c, ki: v }))}
-                />
-              </div>
-            ) : (
-              <p className="muted text-sm">线性偏加速曲线：低压可玩，高压明显加快。</p>
-            )}
-            <div className="mt-3 space-y-3">
-              <Slider
-                label="最小重力"
-                value={cfg.minGravity}
-                min={0.2}
-                max={4}
-                step={0.1}
-                format={(v) => `${v.toFixed(1)} 格/秒`}
-                onChange={(v) => setCfg((c) => ({ ...c, minGravity: v }))}
-              />
-              <Slider
-                label="最大重力"
-                value={cfg.maxGravity}
-                min={2}
-                max={20}
-                step={0.5}
-                format={(v) => `${v.toFixed(1)} 格/秒`}
-                onChange={(v) => setCfg((c) => ({ ...c, maxGravity: v }))}
-              />
-              <Slider
-                label="速度平滑"
-                value={cfg.smooth}
-                min={0.02}
-                max={0.5}
-                step={0.01}
-                format={(v) => v.toFixed(2)}
-                onChange={(v) => setCfg((c) => ({ ...c, smooth: v }))}
-              />
-            </div>
-          </Panel>
-
-          <RlAgentPanel
-            enabled={rlEnabled}
-            onEnabledChange={setRlEnabled}
-            collabEnabled={collabEnabled}
-            onCollabChange={(value) => void enableCollab(value)}
-            followEnabled={followEnabled}
-            onFollowChange={(value) => void enableFollow(value)}
-            followMoves={followMoves}
-            onFollowMovesChange={(value) => setFollowMoves(clampFollowMoves(value))}
-            followSteps={followSteps}
-            onFollowStepsChange={(value) => setFollowSteps(clampFollowSteps(value))}
-            followHumanCount={followHumanCount}
-            lastAction={lastRlAction}
-            latencyMs={rlLatencyMs}
-          />
-
-          <Panel title="SMR 控制">
-            <label className="mb-3 grid gap-1 text-sm">脑控任务
-              <select className="input" aria-label="脑控任务" value={brainControlTask}
-                disabled={miControlEnabled || smrEnsuring || modelLocked}
-                onChange={event => selectBrainTask(event.target.value)}>
-                <option value="smr_control">传统 SMR · 使用训练页面的线性头</option>
-                <option value="gaze_smr">眼动辅助 SMR · 选择 active 或历史线性头</option>
-              </select>
-              <span className="muted text-xs">先关闭脑控并结束录制，再切换任务；两种任务的预测不会混用。</span>
-            </label>
-            <label className="acq-check mb-3 flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={miControlEnabled}
-                disabled={rlEnabled || (!miControlEnabled && modelLocked)}
-                onChange={(event) => void enableSmrControl(event.target.checked)}
-              />
-              用 SMR 头操控方块（与键盘并行{collabEnabled ? '；协作时只左右' : followEnabled ? '；跟手旋转不占次数' : ''}）
-            </label>
-            <p className="muted m-0 mb-3 text-sm">
-              {brainControlTask === 'gaze_smr' ? '方向左/右 → 左右移动 · 上 → 旋转 · 下 → 静止；二分类仅控制左右。' : '左手 → 左移 · 右手 → 右移 · 双手 → 旋转 · 休息 → 静止。'}勾选后拉起已拟合、冻结的
-              {brainControlTask}，每 0.1 秒送来一帧重叠窗；默认多数投票后再动手，不在线微调
-              {collabEnabled
-                ? '。协作模式下手脑旋转会被忽略；I 只在已有深井时才竖放，空盘保持横放。'
-                : followEnabled
-                  ? '。跟手：人左右 m 次后教师走 n 步；旋转不占次数。'
-                  : '。'}
-            </p>
-            {smrEnsureError ? (
-              <p className="mb-3 text-sm" style={{ color: 'var(--danger)' }}>
-                {smrEnsureError}
-              </p>
-            ) : null}
-            {smrHeadWrong ? (
-              <p className="mb-3 text-sm" style={{ color: 'var(--warn)' }}>
-                当前模型任务与所选任务不一致（{modelRuntime.serviceHello?.task ?? modelRuntime.latestPrediction?.task ?? '未知'}）。
-                <button
-                  type="button"
-                  className="btn ml-2"
-                  disabled={smrEnsuring}
-                  onClick={() => void enableSmrControl(true)}
-                >
-                  切换到 {brainControlTask}
-                </button>
-              </p>
-            ) : null}
-            <div className="mb-3">
-              <TemporalFilterControls config={temporalConfig} onChange={setTemporalConfig} compact />
-            </div>
-            <div className="rounded-xl border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-sm">
-              <div className="muted text-xs">最近 SMR 动作</div>
-              <div className="font-mono text-xs">{lastMiAction}</div>
-              {(smrDecision ?? smrPrediction) ? (
-                <div className="mt-2 space-y-1">
-                  {(smrDecision?.classNames ?? smrPrediction!.class_names).map((name, index) => {
-                    const value =
-                      smrDecision?.probabilities[index] ?? smrPrediction!.probabilities[index] ?? 0
-                    return (
-                      <div key={`${name}-${index}`}>
-                        <div className="mb-0.5 flex justify-between text-xs">
-                          <span>{describeMiControlAction(miControlActionForClassName(name))}</span>
-                          <span className="muted">{(value * 100).toFixed(0)}%</span>
-                        </div>
-                        <div className="h-1.5 overflow-hidden rounded-full" style={{ background: 'var(--panel-2)' }}>
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${Math.max(0, Math.min(100, value * 100))}%`,
-                              background: 'var(--accent)',
-                            }}
-                          />
-                        </div>
-                      </div>
-                    )
-                  })}
+              <div className="mt-4 flex items-center gap-4">
+                <div>
+                  <div className="muted mb-1 text-xs">下一块</div>
+                  <NextPreview type={state.next} />
                 </div>
-              ) : null}
-            </div>
-            <div className="mt-4">
-              <ModelServicePanel key={brainControlTask} embedded reveTask={brainControlTask} liveStepSec={TETRIS_LIVE_STEP_SEC} />
-            </div>
-          </Panel>
 
-          <Panel title="实时曲线">
-            <LineChart
-              data={trace}
-              xKey="t"
-              dualAxis
-              series={[
-                { key: 'stress', name: '压力', color: '#f5a524', yAxisId: 'left' },
-                { key: 'gravity', name: '重力', color: '#5b8cff', yAxisId: 'right' },
-              ]}
+              </div>
+            </Panel>
+
+            <Panel icon="calibrate" title="压力 ↔ 下落速度">
+              <p className="muted mb-3 text-sm">
+                方块按亚格子连续平滑下落。默认：压力越大，下落越快。
+              </p>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {(['challenge', 'regulate'] as GravityMode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`btn ${cfg.mode === m ? 'btn-primary' : ''}`}
+                    onClick={() => setCfg((c) => ({ ...c, mode: m }))}
+                  >
+                    {m === 'challenge' ? '挑战（压↑速↑）' : '调节模式 (PI)'}
+                  </button>
+                ))}
+              </div>
+              {cfg.mode === 'regulate' ? (
+                <div className="space-y-3">
+                  <Slider
+                    label="目标压力"
+                    value={cfg.setpoint}
+                    min={10}
+                    max={90}
+                    step={1}
+                    onChange={(v) => setCfg((c) => ({ ...c, setpoint: v }))}
+                  />
+                  <Slider
+                    label="Kp"
+                    value={cfg.kp}
+                    min={0.005}
+                    max={0.15}
+                    step={0.005}
+                    format={(v) => v.toFixed(3)}
+                    onChange={(v) => setCfg((c) => ({ ...c, kp: v }))}
+                  />
+                  <Slider
+                    label="Ki"
+                    value={cfg.ki}
+                    min={0}
+                    max={0.03}
+                    step={0.001}
+                    format={(v) => v.toFixed(3)}
+                    onChange={(v) => setCfg((c) => ({ ...c, ki: v }))}
+                  />
+                </div>
+              ) : (
+                <p className="muted text-sm">线性偏加速曲线：低压可玩，高压明显加快。</p>
+              )}
+              <div className="mt-3 space-y-3">
+                <Slider
+                  label="最小重力"
+                  value={cfg.minGravity}
+                  min={0.2}
+                  max={4}
+                  step={0.1}
+                  format={(v) => `${v.toFixed(1)} 格/秒`}
+                  onChange={(v) => setCfg((c) => ({ ...c, minGravity: v }))}
+                />
+                <Slider
+                  label="最大重力"
+                  value={cfg.maxGravity}
+                  min={2}
+                  max={20}
+                  step={0.5}
+                  format={(v) => `${v.toFixed(1)} 格/秒`}
+                  onChange={(v) => setCfg((c) => ({ ...c, maxGravity: v }))}
+                />
+                <Slider
+                  label="速度平滑"
+                  value={cfg.smooth}
+                  min={0.02}
+                  max={0.5}
+                  step={0.01}
+                  format={(v) => v.toFixed(2)}
+                  onChange={(v) => setCfg((c) => ({ ...c, smooth: v }))}
+                />
+              </div>
+            </Panel>
+
+            <RlAgentPanel
+              enabled={rlEnabled}
+              onEnabledChange={setRlEnabled}
+              collabEnabled={collabEnabled}
+              onCollabChange={(value) => void enableCollab(value)}
+              followEnabled={followEnabled}
+              onFollowChange={(value) => void enableFollow(value)}
+              followMoves={followMoves}
+              onFollowMovesChange={(value) => setFollowMoves(clampFollowMoves(value))}
+              followSteps={followSteps}
+              onFollowStepsChange={(value) => setFollowSteps(clampFollowSteps(value))}
+              followHumanCount={followHumanCount}
+              lastAction={lastRlAction}
+              latencyMs={rlLatencyMs}
             />
-          </Panel>
-        </div>
 
-        <ColumnResizer
-          label="侧栏宽度"
-          className="hidden xl:flex"
-          onDragStart={beginColumnDrag}
-          onDrag={dragRightColumn}
-          onReset={() => setRightCol(RIGHT_COL_DEFAULT)}
-        />
+            <Panel icon="cursor" title="SMR 控制">
+              <label className="mb-3 grid gap-1 text-sm">脑控任务
+                <select className="input" aria-label="脑控任务" value={brainControlTask}
+                  disabled={miControlEnabled || smrEnsuring || modelLocked}
+                  onChange={event => selectBrainTask(event.target.value)}>
+                  <option value="smr_control">传统 SMR · 使用训练页面的线性头</option>
+                  <option value="gaze_smr">全屏 SMR · 选择 active 或历史线性头</option>
+                </select>
+                <span className="muted text-xs">先关闭脑控并结束录制，再切换任务；两种任务的预测不会混用。</span>
+              </label>
+              <label className="acq-check mb-3 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={miControlEnabled}
+                  disabled={rlEnabled || (!miControlEnabled && modelLocked)}
+                  onChange={(event) => void enableSmrControl(event.target.checked)}
+                />
+                用 SMR 头操控方块（与键盘并行{collabEnabled ? '；协作时只左右' : followEnabled ? '；跟手旋转不占次数' : ''}）
+              </label>
+              <p className="muted m-0 mb-3 text-sm">
+                {brainControlTask === 'gaze_smr' ? '方向左/右 → 左右移动 · 上 → 旋转 · 下 → 静止；二分类仅控制左右。' : '左手 → 左移 · 右手 → 右移 · 双手 → 旋转 · 休息 → 静止。'}勾选后拉起已拟合、冻结的
+                {brainControlTask}，每 0.1 秒送来一帧重叠窗；默认多数投票后再动手，不在线微调
+                {collabEnabled
+                  ? '。协作模式下手脑旋转会被忽略；I 只在已有深井时才竖放，空盘保持横放。'
+                  : followEnabled
+                    ? '。跟手：人左右 m 次后教师走 n 步；旋转不占次数。'
+                    : '。'}
+              </p>
+              {smrEnsureError ? (
+                <p className="mb-3 text-sm" style={{ color: 'var(--danger)' }}>
+                  {smrEnsureError}
+                </p>
+              ) : null}
+              {smrHeadWrong ? (
+                <p className="mb-3 text-sm" style={{ color: 'var(--warn)' }}>
+                  当前模型任务与所选任务不一致（{modelRuntime.serviceHello?.task ?? modelRuntime.latestPrediction?.task ?? '未知'}）。
+                  <button
+                    type="button"
+                    className="btn ml-2"
+                    disabled={smrEnsuring}
+                    onClick={() => void enableSmrControl(true)}
+                  >
+                    切换到 {brainControlTask}
+                  </button>
+                </p>
+              ) : null}
+              <div className="mb-3">
+                <TemporalFilterControls config={temporalConfig} onChange={setTemporalConfig} compact />
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[#0f1526] px-3 py-2 text-sm">
+                <div className="muted text-xs">最近 SMR 动作</div>
+                <div className="font-mono text-xs">{lastMiAction}</div>
+                {(smrDecision ?? smrPrediction) ? (
+                  <div className="mt-2 space-y-1">
+                    {(smrDecision?.classNames ?? smrPrediction!.class_names).map((name, index) => {
+                      const value =
+                        smrDecision?.probabilities[index] ?? smrPrediction!.probabilities[index] ?? 0
+                      return (
+                        <div key={`${name}-${index}`}>
+                          <div className="mb-0.5 flex justify-between text-xs">
+                            <span>{describeMiControlAction(miControlActionForClassName(name))}</span>
+                            <span className="muted">{(value * 100).toFixed(0)}%</span>
+                          </div>
+                          <div className="h-1.5 overflow-hidden rounded-full" style={{ background: 'var(--panel-2)' }}>
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${Math.max(0, Math.min(100, value * 100))}%`,
+                                background: 'var(--accent)',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-4">
+                <ModelServicePanel key={brainControlTask} embedded reveTask={brainControlTask} liveStepSec={TETRIS_LIVE_STEP_SEC} />
+              </div>
+            </Panel>
 
-        <div
-          className="min-w-0 space-y-4 xl:w-[var(--right-col)] xl:shrink-0"
-          style={{ '--right-col': `${rightCol}px` } as React.CSSProperties}
-        >
-          <StressPanel
-            stress={stress}
-            onChange={setStress}
-            mode={mode}
-            modeControls={
-              <SignalModeControls
-                mode={mode}
-                onModeChange={setMode}
-                driverFeature={driverFeature}
-                onDriverChange={setDriverFeature}
-                rangeMap={rangeMap}
-                onRangeMapChange={setRangeMap}
-                onRangeReset={resetRangeMap}
-                onRangeCapture={captureRangeFromWindow}
-                rangePreview={rangePreview}
+            <Panel icon="signal" title="实时曲线">
+              <LineChart
+                data={trace}
+                xKey="t"
+                dualAxis
+                series={[
+                  { key: 'stress', name: '压力', color: '#f5a524', yAxisId: 'left' },
+                  { key: 'gravity', name: '重力', color: '#5b8cff', yAxisId: 'right' },
+                ]}
               />
-            }
-          />
-          <FeatureMonitorPanel
-            compact
-            latest={features.latest}
-            history={features.history}
-            analyzing={features.analyzing}
-            enabledIds={features.enabledIds}
-            onEnabledChange={features.onEnabledChange}
-            note={
-              mode === 'live'
-                ? features.origin === 'live'
-                  ? `实时 EEG 调控中（${driverFeature}）。点「手动输入」接管。`
-                  : '已选实时 EEG，但尚未收到样本。请到采集页连接并开始采集。'
-                : mode === 'features'
-                  ? `演示数据调控中（${driverFeature}）→ 压力应持续波动。点「手动输入」接管。`
-                  : '手动模式：滑块控制难度。有实时流时特征面板显示真实 EEG。'
-            }
-          />
+            </Panel>
+          </div>
+          {!leftCollapsed && <ColumnResizer label="左侧面板宽度" className="tetris-divider tetris-divider-left" onDragStart={beginColumnDrag} onDrag={dragLeftColumn} onReset={() => setLeftCol(SIDE_COL_DEFAULT)} />}
+        </aside>
+        <div className="tetris-stage">
+          <div className="tetris-playback">
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                setState((s) => {
+                  const next = { ...s, paused: !s.paused }
+                  stateRef.current = next
+                  loggerRef.current.log('pause', { paused: next.paused })
+                  return next
+                })
+              }
+            >
+              <Icon name={state.paused ? 'play' : 'pause'} size={16} />{state.paused ? '继续' : '暂停'}
+            </button>
+            <button type="button" className="btn btn-primary" onClick={restart}>
+              <Icon name="reset" size={16} />重开
+            </button>
+          </div>
+          <div className="relative w-fit">
+            <Board state={state} cell={boardCell} onCellChange={setBoardCell} />
+            {cascadeFlash && (
+              <div className="pointer-events-none absolute inset-x-0 top-6 text-center">
+                <span className="inline-block rounded-full border border-[#f5a52466] bg-[#1a1520ee] px-3 py-1 text-sm font-semibold text-[#f5a524] shadow-lg">
+                  {cascadeFlash}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
+        <aside className="tetris-right" aria-label="压力与 EEG">
+          {!rightCollapsed && <ColumnResizer label="右侧面板宽度" className="tetris-divider tetris-divider-right" onDragStart={beginColumnDrag} onDrag={dragRightColumn} onReset={() => setRightCol(SIDE_COL_DEFAULT)} />}
+          <div id="tetris-right-controls" className="tetris-side-content space-y-4" hidden={rightCollapsed}>
+            <StressPanel
+              stress={stress}
+              onChange={setStress}
+              mode={mode}
+              modeControls={
+                <SignalModeControls
+                  mode={mode}
+                  onModeChange={setMode}
+                  driverFeature={driverFeature}
+                  preferredDriver="cognitive_load"
+                  onDriverChange={setDriverFeature}
+                  rangeMap={rangeMap}
+                  onRangeMapChange={setRangeMap}
+                  onRangeReset={resetRangeMap}
+                  onRangeCapture={captureRangeFromWindow}
+                  rangePreview={rangePreview}
+                />
+              }
+            />
+            <FeatureMonitorPanel
+              compact
+              latest={features.latest}
+              history={features.history}
+              analyzing={features.analyzing}
+              enabledIds={features.enabledIds}
+              onEnabledChange={features.onEnabledChange}
+              note={
+                mode === 'live'
+                  ? features.origin === 'live'
+                    ? `实时 EEG 调控中（${driverFeature}）。点「手动输入」接管。`
+                    : '已选实时 EEG，但尚未收到样本。请到采集页连接并开始采集。'
+                  : mode === 'features'
+                    ? `演示数据调控中（${driverFeature}）→ 压力应持续波动。点「手动输入」接管。`
+                    : '手动模式：滑块控制难度。有实时流时特征面板显示真实 EEG。'
+              }
+            />
+          </div>
+        </aside>
       </div>
     </div>
   )

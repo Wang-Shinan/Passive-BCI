@@ -16,7 +16,7 @@ export type ReveTaskOption = {
 }
 
 export const REVE_TASKS: readonly ReveTaskOption[] = [
-  { id: 'gaze_smr', label: '眼动辅助 SMR · 左 / 右 / 上 / 下', short: '眼动辅助 SMR', semantics: 'gaze_smr_direction_4', classNames: ['left', 'right', 'up', 'down'] },
+  { id: 'gaze_smr', label: '全屏 SMR · 左 / 右 / 上 / 下', short: '全屏 SMR', semantics: 'gaze_smr_direction_4', classNames: ['left', 'right', 'up', 'down'] },
   {
     id: 'passive_rating',
     label: '三类 · 任务一 / 任务二 / 任务三',

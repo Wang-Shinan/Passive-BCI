@@ -7,10 +7,10 @@ const TOOLS = [
     tag: 'H5 · Linear probing', accent: '#22d3ee',
   },
   {
-    path: '/smr-gaze',
-    title: '眼动辅助 SMR 采集',
-    blurb: '均衡方向试次、闭环光标反馈与个体化 REVE 线性头训练；也保留纯 EEG 眼动方向分类器。',
-    tag: '视线方向 · 采集与训练',
+    path: '/smr',
+    title: 'SMR 采集与光标控制',
+    blurb: '切换普通 SMR 和全屏 SMR，进行个体化适配、方向采集、模型训练和光标验证。',
+    tag: '运动想象 · 全屏任务',
     accent: '#f3cc62',
   },
   {
@@ -36,14 +36,6 @@ const TOOLS = [
       '只演示最稳的一轴：双手开合上升、主动放空下降。大光标连续控制，可打靶计分。适合现场接上冻结的 REVE 四分类头。',
     tag: '演示 · 双手↑ 休息↓',
     accent: '#e8b84a',
-  },
-  {
-    path: '/smr-adapt',
-    title: 'SMR 个体化适配',
-    blurb:
-      'Stieger 式光标：左手左、右手右、双手上、休息下。可用已拟合的 REVE 四分类或原来的 C3/C4 mu 驱动。SMR 头冻结，不在线微调。',
-    tag: 'Stieger SMR · REVE 冻结',
-    accent: '#c084fc',
   },
   {
     path: '/tetris-adapt',

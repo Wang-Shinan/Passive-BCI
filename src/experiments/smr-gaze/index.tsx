@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { LiveEegBadge } from '../../lib/eeg/LiveEegBadge'
 import { liveEegHub } from '../../lib/eeg/liveHub'
@@ -13,6 +13,8 @@ import { BASELINE_SEC, TARGET_SEC, gazeModel, connectGazeModel, gazePrediction, 
 import './smrGaze.css'
 import { CONTROL_SPEED_PER_SEC, CONTROL_TARGET_SEC, moveProbabilityCursor, reachedEdge, type CursorPosition } from './cursor'
 
+import type { SmrModeProps } from '../smr/types'
+
 type Phase = 'idle' | 'starting' | 'baseline' | 'target' | 'feedback' | 'control' | 'break' | 'done'
 type Mode = 'train' | 'validate' | 'feedback' | 'control' | 'preview'
 const FEEDBACK_SEC = 1.5
@@ -24,9 +26,12 @@ type ActiveSession = {
 }
 const MI = { left: '注视左侧，同时想象左手运动', right: '注视右侧，同时想象右手运动', up: '注视上方，同时想象双手运动', down: '注视下方，放松休息' }
 
-export function SmrGazePage() {
+export function SmrGazePage({ embedded = false, subjectId: sharedSubject, onSubjectChange, onBusyChange }: SmrModeProps = {}) {
   const eeg = useLiveEeg()
-  const [subject, setSubject] = useState(() => loadStoredSubjectId('S01'))
+  const [localSubject, setLocalSubject] = useState(() => loadStoredSubjectId('S01'))
+  const subject = sharedSubject ?? localSubject
+  const setSubject = onSubjectChange ?? setLocalSubject
+  const [operationBusy, setOperationBusy] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
   const [trial, setTrial] = useState<GazeTrial | null>(null)
   const [collection, setCollection] = useState('four')
@@ -55,6 +60,8 @@ export function SmrGazePage() {
   const logger = useRef(new SessionLogger('smr-gaze', subject))
   const running = !['idle', 'done'].includes(phase)
 
+  useLayoutEffect(() => { onBusyChange?.(running || operationBusy || fitting || savingExisting) }, [onBusyChange, running, operationBusy, fitting, savingExisting])
+
   const exitFullscreen = () => {
     if (document.fullscreenElement === arena.current) void document.exitFullscreen().catch(() => {})
   }
@@ -74,8 +81,8 @@ export function SmrGazePage() {
     setPhase('idle')
     setNotice(state?.mode === 'control' ? `${reason}；已结束持续光标控制。` : `${reason}；未完成试次不用于训练。`)
     exitFullscreen()
-    busy.current = true
-    void stopRecording().catch(e => setNotice(String(e))).finally(() => { if (!starting.current) busy.current = false })
+    busy.current = true; setOperationBusy(true)
+    void stopRecording().catch(e => setNotice(String(e))).finally(() => { if (!starting.current) { busy.current = false; setOperationBusy(false) } })
   }
   const setStage = (state: ActiveSession, next: Phase, now: number) => {
     state.phase = next
@@ -98,7 +105,7 @@ export function SmrGazePage() {
     active.current = null
     setPhase('done')
     exitFullscreen()
-    busy.current = true
+    busy.current = true; setOperationBusy(true)
     logger.current.log('session_end', { mode: state.mode, accepted: state.rows.length })
     try {
       await stopRecording()
@@ -121,7 +128,7 @@ export function SmrGazePage() {
       } else if (state.control) setNotice(`边靶控制完成：命中 ${state.control.hits}/${state.plan.length}。数据已保存，不自动用于训练。`)
       else setNotice('预览完成。')
     } catch (error) { setNotice(String(error)) }
-    finally { busy.current = false; setFitting(false) }
+    finally { busy.current = false; setOperationBusy(false); setFitting(false) }
   }
 
   const advanceTrial = (state: ActiveSession, now: number) => {
@@ -134,15 +141,15 @@ export function SmrGazePage() {
 
   const finishExistingRecording = async () => {
     if (busy.current || active.current) return
-    busy.current = true
+    busy.current = true; setOperationBusy(true)
     setSavingExisting(true)
     setNotice('正在保存当前录制…')
     try {
       const result = await stopExperimentRecording()
-      setNotice(`${result.message}；EEG 连接保持，可开始新的眼动任务。`)
+      setNotice(`${result.message}；EEG 连接保持，可开始新的全屏 SMR 任务。`)
     } catch (error) {
       setNotice(`保存失败：${error instanceof Error ? error.message : String(error)}`)
-    } finally { busy.current = false; setSavingExisting(false) }
+    } finally { busy.current = false; setOperationBusy(false); setSavingExisting(false) }
   }
 
   const recenter = () => {
@@ -162,7 +169,7 @@ export function SmrGazePage() {
     if (nextMode !== 'preview' && (!eeg.live || eeg.meta.device === 'demo')) {
       setNotice('请先连接真实 EEG 并开始采集。'); return
     }
-    if (recorderIsActive()) { setNotice('当前已有录制，请先点「保存并结束当前录制」，再开始眼动任务；无需停止 EEG 采集。'); return }
+    if (recorderIsActive()) { setNotice('当前已有录制，请先点「保存并结束当前录制」，再开始全屏 SMR 任务；无需停止 EEG 采集。'); return }
     if (!subject.trim()) { setNotice('请填写被试编号。'); return }
     const channels = [...liveEegHub.meta.channelNames]
     const hz = liveEegHub.ring.sampleRate
@@ -173,7 +180,7 @@ export function SmrGazePage() {
     if (nextMode === 'train' && collection === 'four' && model?.activeClasses?.length === 2) {
       setNotice('当前为左右二分类头，请选择左右采集；四方向闭环采集需要先加载四方向头。'); return
     }
-    busy.current = true
+    busy.current = true; setOperationBusy(true)
     starting.current = true
     const token = ++generation.current
     setPhase('starting'); setMode(nextMode); setNotice(''); setReport(null); setAccepted(0); setRejected(0); setPrediction(null); setFeedbackError('')
@@ -225,7 +232,7 @@ export function SmrGazePage() {
       setPhase('idle'); exitFullscreen()
       setNotice(error instanceof Error ? error.message : String(error))
       await stopRecording()
-    } finally { starting.current = false; busy.current = false }
+    } finally { starting.current = false; busy.current = false; setOperationBusy(false) }
   }
 
   const tick = useEffectEvent(() => {
@@ -383,9 +390,9 @@ export function SmrGazePage() {
   }
 
   return (
-    <main className="gaze-page">
-      <Link to="/smr-adapt">← SMR 适配</Link> · <Link to="/gaze-smr-tetris">眼动 SMR 俄罗斯方块</Link> · <Link to="/gaze-tetris">眼动版俄罗斯方块</Link>
-      <h1>REVE 眼动辅助 SMR</h1>
+    <main className={embedded ? "gaze-page smr-protocol" : "gaze-page"}>
+      {!embedded && <><Link to="/smr-adapt">← SMR 适配</Link> · </>}<Link to="/gaze-smr-tetris">全屏 SMR 俄罗斯方块</Link> · <Link to="/gaze-tetris">眼动版俄罗斯方块</Link>
+      {embedded ? <h2>全屏 SMR · 采集、训练与验证</h2> : <h1>REVE 全屏 SMR</h1>}
       <p>采集时实时控制蓝色光标：中央准备 3 秒，亮边后有 12 秒将光标移到目标边。左：注视＋左手运动想象；右：注视＋右手运动想象；上：注视＋双手运动想象；下：注视＋放松休息。</p>
       <LiveEegBadge />
       <div className="gaze-controls">
@@ -403,7 +410,7 @@ export function SmrGazePage() {
         {!running && (recorderIsActive() || savingExisting) ? <button className="btn" disabled={savingExisting} onClick={() => void finishExistingRecording()}>{savingExisting ? '正在保存…' : '保存并结束当前录制'}</button> : null}
       </div>
       <p className="muted">闭环采集：准备 3 秒 → 实时控球 12 秒 → 结果 1.5 秒。左右共 20／40 次，分三组（8＋8＋4／16＋16＋8）；四方向共 48 次。组间休息，完成后自动 LP。末组为带反馈留出评估，不是独立验证。</p>
-      <p className="muted">每次只亮一条黄色边：哪边亮，就朝哪边进行眼动辅助 SMR。「光标反馈」在 6 秒保持后显示一次预测；「持续光标控制」在 {CONTROL_TARGET_SEC} 秒内用蓝环碰到亮边，其他边不计分。</p>
+      <p className="muted">每次只亮一条黄色边：哪边亮，就朝哪边进行全屏 SMR。「光标反馈」在 6 秒保持后显示一次预测；「持续光标控制」在 {CONTROL_TARGET_SEC} 秒内用蓝环碰到亮边，其他边不计分。</p>
       <p className="muted">持续控制共 {model?.activeClasses?.length === 2 ? 20 : 16} 轮，每轮中央准备 3 秒、亮边 {CONTROL_TARGET_SEC} 秒、结果 1.5 秒。移动速度已调至原来的 3 倍。命中后保持至本轮结束，再回中开始下一轮。蓝环由 REVE＋LP 的实时概率驱动；可点「回中准备」重试当前目标。</p>
       {notice ? <p role="status">{notice}</p> : null}
       <div ref={arena} className="gaze-arena" aria-label="全屏注视任务">

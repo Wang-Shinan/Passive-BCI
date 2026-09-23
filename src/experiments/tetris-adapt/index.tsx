@@ -116,7 +116,7 @@ function poseFromPiece(piece: Piece) {
   return { x: piece.x, y: piece.y, rot: piece.rot, cells: occupiedCells(piece) }
 }
 
-export function TetrisAdaptPage() {
+export function TetrisAdaptPage({ autoStartModel = true }: { autoStartModel?: boolean } = {}) {
   const [subjectId, setSubjectId] = useState(() => loadStoredSubjectId('S01'))
   const [planId, setPlanId] = useState<PlanId>('quick')
   const [session, setSession] = useState<SessionState>(() =>
@@ -172,7 +172,7 @@ export function TetrisAdaptPage() {
             if (status.owned || cursorDrive !== 'reve') return
           }
         }
-        if (cursorDrive !== 'reve') return
+        if (cursorDrive !== 'reve' || !autoStartModel) return
         setNotice('正在启动 REVE SMR 头（首次加载权重可能要一两分钟）…')
         const result = await ensureModelService({
           backend: 'reve',
@@ -197,7 +197,7 @@ export function TetrisAdaptPage() {
       }
     })()
     return () => ac.abort()
-  }, [cursorDrive])
+  }, [cursorDrive, autoStartModel])
 
   const montage = useMemo(
     () => resolveLaplacianMontage(eeg.meta.channelNames),

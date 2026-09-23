@@ -1,0 +1,141 @@
+/* Shared preview UI theme. The normal application entry remains unchanged. */
+html[data-preview-theme='light'] {
+  color-scheme: light;
+  --bg: #faf9f5;
+  --panel: #fffefa;
+  --panel-2: #f2f0e9;
+  --border: #d5cec2;
+  --text: #28251f;
+  --muted: #6e685f;
+  --accent: #a74728;
+  --accent-2: #286b4b;
+  --warn: #966013;
+  --danger: #b13232;
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* Theme changes must update foreground and background in the same frame. */
+html[data-preview-theme] .btn { transition: transform 80ms ease; }
+html[data-preview-theme] .schulte-cell { transition: transform 80ms ease; }
+
+.preview-theme-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 52px;
+  padding: 9px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+}
+.preview-theme-bar a:hover { color: var(--accent); }
+.preview-theme-switch { display: inline-flex; gap: 2px; padding: 3px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; }
+.preview-theme-switch button { background: transparent; color: var(--muted); border: 1px solid transparent; border-radius: 3px; font-size: 11px; padding: 5px 10px; line-height: 1.4; cursor: pointer; }
+.preview-theme-switch button[aria-pressed='true'] { color: #fff; background: var(--accent); border-color: var(--accent); }
+.experiment-directory[data-theme='dark'] .preview-theme-switch button[aria-pressed='true'] { color: #18243c; }
+.preview-theme-switch button:hover:not([aria-pressed='true']) { color: var(--accent); }
+.preview-theme-switch button:focus-visible, .preview-theme-bar a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+html[data-preview-theme='light'] .panel { background: var(--panel); box-shadow: none; }
+html[data-preview-theme='light'] :is(.input, .select, .chip) { background: var(--panel); }
+html[data-preview-theme='light'] .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+html[data-preview-theme='light'] .btn-primary:hover { background: #903c21; border-color: #903c21; }
+html[data-preview-theme='light'] input { accent-color: var(--accent); }
+
+/* Legacy utility classes used by configuration, logs, and result panels.
+   Explicit matching avoids changing canvas boards or color-coded stimuli. */
+html[data-preview-theme='light'] :is(
+  [class~='bg-[#0f1526]'], [class~='bg-[#0d1425]'],
+  [class~='bg-[#0c1220]'], [class~='bg-[#0f1628]'],
+  [class~='bg-[#10182b]'], [class~='bg-[#0a0f18]']
+) { background-color: var(--panel-2); }
+html[data-preview-theme='light'] [class~='border-[#2a3550]'] { border-color: var(--border); }
+html[data-preview-theme='light'] :is([class~='text-[#94a3b8]'], [class~='text-[#cbd5e1]']) { color: var(--muted); }
+html[data-preview-theme='light'] .text-white { color: var(--text); }
+html[data-preview-theme='light'] [class~='hover:text-white']:hover { color: var(--accent); }
+
+/* Chart axes and tooltips follow the UI; series retain their identities. */
+html[data-preview-theme='light'] .recharts-cartesian-grid line { stroke: var(--border); }
+html[data-preview-theme='light'] .recharts-cartesian-axis :is(line, path) { stroke: var(--muted); }
+html[data-preview-theme='light'] .recharts-cartesian-axis text { fill: var(--muted); }
+html[data-preview-theme='light'] .recharts-default-tooltip {
+  background: var(--panel) !important;
+  border-color: var(--border) !important;
+  color: var(--text);
+}
+
+/* Drawing controls and transcripts; pen colors and the drawing surface stay fixed. */
+html[data-preview-theme='light'] :is(.draw-guess-item, .draw-turn, .draw-md, .draw-feedback) { background: var(--panel); border-color: var(--border); color: var(--text); }
+html[data-preview-theme='light'] .draw-guess-item.hit { background: #eaf2eb; border-color: var(--accent-2); }
+html[data-preview-theme='light'] .draw-turn.user { background: #fbf0e8; border-color: #d9b29b; }
+html[data-preview-theme='light'] .draw-turn.streaming { border-color: var(--accent); }
+html[data-preview-theme='light'] .draw-turn .draw-md { background: transparent; }
+html[data-preview-theme='light'] .draw-stream { color: var(--text); }
+html[data-preview-theme='light'] .draw-caret { background: var(--accent); }
+html[data-preview-theme='light'] .draw-md :is(code, pre) { background: var(--panel-2); border-color: var(--border); }
+html[data-preview-theme='light'] .draw-md pre code { background: transparent; }
+html[data-preview-theme='light'] .draw-md blockquote { border-color: var(--accent); color: var(--muted); }
+html[data-preview-theme='light'] .draw-raw-error { color: var(--danger); background: #fbeeea; border-color: #dbb1a8; }
+html[data-preview-theme='light'] .draw-word-pill { background: #f2dfd2; border-color: #d9b29b; color: #963d22; }
+html[data-preview-theme='light'] .draw-swatch.active { box-shadow: 0 0 0 2px var(--accent); }
+html[data-preview-theme='light'] :is(.jump-hud, .dino-hud) > div { background: var(--panel-2); }
+html[data-preview-theme='light'] .smrud-back { opacity: 1; }
+html[data-preview-theme='light'] .smrud-gain { background: var(--panel); }
+
+/* Number tasks use the light palette while keeping success/error meanings. */
+html[data-preview-theme='light'] .schulte-cell { color: var(--text); background: var(--panel); border-color: var(--border); }
+html[data-preview-theme='light'] .schulte-cell.is-flash-ok { background: #e0f0e5; border-color: var(--accent-2); }
+html[data-preview-theme='light'] .schulte-cell.is-flash-bad { background: #f9e3df; border-color: var(--danger); }
+
+/* Fixed dark presentation surfaces use their own foreground tokens so labels
+   and controls remain readable without recoloring task targets or canvas data. */
+html[data-preview-theme='light'] :is(.smr-arena, .smrud-arena-wrap, .gaze-arena, .ta-well-frame, .flash-fullscreen, [class~='bg-[#080d1a]']) {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --panel: #141b2d;
+  --panel-2: #1a2338;
+  --border: #2a3550;
+  --text: #e8eefc;
+  --muted: #9aa8c7;
+  --accent: #5b8cff;
+  --accent-2: #38d39f;
+  --warn: #f5a524;
+  --danger: #ff5d6c;
+  color: var(--text);
+}
+
+/* Acquisition already has a light workstation layout; align its neutral palette. */
+html[data-preview-theme='light'] .acq-omni {
+  --omni-paper: #faf9f5;
+  --omni-panel: #fffefa;
+  --omni-line: #d5cec2;
+  --omni-text: #28251f;
+  --omni-muted: #6e685f;
+  --omni-orange: #a74728;
+  --omni-hot: #963d22;
+  --omni-wash: #f2dfd2;
+  color-scheme: light;
+}
+@media (max-width: 700px) {
+  .preview-theme-bar { padding-inline: 18px; }
+  .preview-theme-switch button { padding: 5px 8px; }
+}
+
+.preview-theme-switch button, .preview-theme-bar a { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+
+/* Brand assets follow the selected UI theme, independent of task stimuli. */
+.preview-brand-logo { display: inline-grid; grid-template-areas: 'logo'; width: 132px; aspect-ratio: 356 / 142; flex: 0 0 auto; vertical-align: middle; }
+.preview-brand-logo img { grid-area: logo; width: 100%; height: 100%; object-fit: contain; }
+.preview-brand-logo .preview-brand-dark { visibility: hidden; }
+html[data-preview-theme='dark'] .preview-brand-logo .preview-brand-light { visibility: hidden; }
+html[data-preview-theme='dark'] .preview-brand-logo .preview-brand-dark { visibility: visible; }
+html[data-preview-theme='dark'] .preview-theme-bar { background: #10151e; }
+.preview-theme-bar .preview-brand-home { gap: 16px; }
+.preview-brand-label { display: inline-flex; align-items: center; gap: 5px; border-left: 1px solid var(--border); padding-left: 16px; }
+@media (max-width: 500px) {
+  .preview-brand-logo { width: 116px; }
+  .preview-brand-label { display: none; }
+}

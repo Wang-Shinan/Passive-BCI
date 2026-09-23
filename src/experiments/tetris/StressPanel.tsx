@@ -77,7 +77,7 @@ export function StressPanel({
         onChange={onChange}
         disabled={featureDriven}
       />
-      <div className="mt-3 flex gap-1.5">
+      <div className="stress-levels mt-3 flex gap-1.5">
         {([1, 2, 3, 4, 5] as const).map((k) => {
           const value = STRESS_KEY_LEVELS[String(k)]!
           const active = Math.abs(stress - value) < 0.5

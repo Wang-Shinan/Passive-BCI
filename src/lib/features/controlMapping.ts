@@ -491,18 +491,18 @@ export function saveSignalMode(mode: SignalControlMode): void {
 /** Default control driver: S-tier rms. */
 export const DEFAULT_STRESS_DRIVER = 'rms'
 
-export function loadStressDriver(): string {
+export function loadStressDriver(defaultDriver = DEFAULT_STRESS_DRIVER, storageKey = STRESS_DRIVER_STORAGE_KEY): string {
   try {
-    const v = localStorage.getItem(STRESS_DRIVER_STORAGE_KEY)
+    const v = localStorage.getItem(storageKey)
     if (v && CONTROL_SIGNAL_OPTIONS.some((o) => o.id === v)) return v
   } catch {
     /* ignore */
   }
-  return DEFAULT_STRESS_DRIVER
+  return defaultDriver
 }
 
-export function saveStressDriver(id: string): void {
-  localStorage.setItem(STRESS_DRIVER_STORAGE_KEY, id)
+export function saveStressDriver(id: string, storageKey = STRESS_DRIVER_STORAGE_KEY): void {
+  localStorage.setItem(storageKey, id)
 }
 
 export function ema(prev: number, next: number, alpha = 0.18): number {

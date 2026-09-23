@@ -1,4 +1,4 @@
-# REVE 眼动辅助 SMR
+# REVE 全屏 SMR
 
 入口 `/#/smr-gaze`。连接真实 EEG 并开流，填写被试编号后开始采集。已有录制可用「保存并结束当前录制」保存，EEG 连接保持。鼠标在全屏中可见；Esc、停止、切后台或离开页面会结束当前录制。
 
@@ -34,7 +34,7 @@
 
 ## 游戏会话
 
-`/#/gaze-smr-tetris`：REVE＋LP 眼动辅助 SMR 游戏；`/#/gaze-tetris`：沿用浏览器保存的 EEG 眼动 LDA 模型的纯眼动游戏，无需运动想象。两者均使用已有俄罗斯方块引擎，场地水平居中，并分别保存 gaze-smr-tetris／gaze-tetris 会话。
+`/#/gaze-smr-tetris`：REVE＋LP 全屏 SMR 游戏；`/#/gaze-tetris`：沿用浏览器保存的 EEG 眼动 LDA 模型的纯眼动游戏，无需运动想象。两者均使用已有俄罗斯方块引擎，场地水平居中，并分别保存 gaze-smr-tetris／gaze-tetris 会话。
 
 左／右→横移，上→旋转，下→软下落。REVE 需要最大概率至少 0.55、与次大概率差至少 0.15；移动操作间隔 450 ms，旋转 900 ms。左右头只控制横移，旋转／下落可用按钮，日志区分 manual 与解码来源。
 

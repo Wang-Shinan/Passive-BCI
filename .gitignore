@@ -10,6 +10,7 @@ lerna-debug.log*
 # Dependencies / build
 node_modules/
 dist/
+dist-preview/
 dist-ssr/
 *.local
 .vite/

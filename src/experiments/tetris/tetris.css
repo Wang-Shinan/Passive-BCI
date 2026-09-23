@@ -1,0 +1,40 @@
+.tetris-page { max-width: 1680px; }
+.tetris-layout-tools { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin: 20px 0 16px; }
+.tetris-layout-tools .btn { font-size: 12px; padding: 7px 11px; }
+/* Oversized boards keep their selected size and create normal page scroll. */
+.tetris-layout { display: grid; min-width: calc(var(--left-col) + var(--right-col) + var(--board-width) + 48px); grid-template-columns: var(--left-col) minmax(0, 1fr) var(--right-col); gap: 16px; align-items: start; overflow-wrap: anywhere; }
+.tetris-left, .tetris-right { position: relative; min-width: 0; }
+.tetris-stage { min-width: calc(var(--board-width) + 16px); display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.tetris-playback { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.tetris-playback .btn { font-size: 13px; padding: 7px 12px; }
+.tetris-layout [hidden] { display: none !important; }
+.tetris-layout .panel { min-width: 0; }
+.tetris-layout .btn { min-width: 0; }
+.tetris-layout .font-mono { overflow-wrap: anywhere; }
+@media (min-width: 1100px) {
+  .tetris-side-content { max-height: calc(100dvh - 100px); overflow-y: auto; scrollbar-width: thin; padding: 0 3px 10px; }
+}
+@media (max-width: 1099px) {
+  .tetris-layout { min-width: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .tetris-stage { grid-column: 1 / -1; grid-row: 1; }
+  .tetris-left { grid-column: 1; grid-row: 2; }
+  .tetris-right { grid-column: 2; grid-row: 2; }
+}
+@media (max-width: 650px) {
+  .tetris-layout { grid-template-columns: minmax(0, 1fr); }
+  .tetris-left { grid-column: 1; grid-row: 2; }
+  .tetris-right { grid-column: 1; grid-row: 3; }
+  .tetris-layout-tools { gap: 6px; }
+  .tetris-layout-tools .btn { padding: 6px 8px; }
+}
+
+.tetris-size-control { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted); }
+.tetris-size-control input { width: 120px; max-width: 100%; accent-color: var(--accent); }
+.tetris-size-control output { min-width: 90px; font-variant-numeric: tabular-nums; }
+
+.tetris-divider { position: absolute; top: 0; bottom: 0; width: 16px; }
+.tetris-divider-left { right: -16px; }
+.tetris-divider-right { left: -16px; }
+@media (max-width: 1099px) { .tetris-divider { display: none; } }
+
+.tetris-layout .stress-levels .btn { flex-direction: column; gap: 0; padding: 6px 2px; white-space: nowrap; }

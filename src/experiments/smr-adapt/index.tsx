@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { LiveEegBadge } from '../../lib/eeg/LiveEegBadge'
 import { liveEegHub } from '../../lib/eeg/liveHub'
@@ -62,6 +62,7 @@ import {
   type LaplacianMontage,
 } from './smrControl'
 import './smrAdapt.css'
+import type { SmrModeProps } from '../smr/types'
 
 type CursorDrive = 'reve' | 'features'
 
@@ -95,8 +96,12 @@ function demoControl(target: 'left' | 'right' | 'up' | 'down'): { zH: number; zV
   return { zH: n() * 0.3, zV: -1.35 + n() }
 }
 
-export function SmrAdaptPage() {
-  const [subjectId, setSubjectId] = useState(() => loadStoredSubjectId('S01'))
+export function SmrAdaptPage({ autoStartModel = true, embedded = false, subjectId: sharedSubject, onSubjectChange, onBusyChange }: SmrModeProps & { autoStartModel?: boolean } = {}) {
+  const [localSubject, setLocalSubject] = useState(() => loadStoredSubjectId('S01'))
+  const subjectId = sharedSubject ?? localSubject
+  const setSubjectId = onSubjectChange ?? setLocalSubject
+  const [starting, setStarting] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [planId, setPlanId] = useState<PlanId>('quick')
   const [session, setSession] = useState<SessionState>(() =>
     createSession(PLANS.quick, randomSeed()),
@@ -145,7 +150,7 @@ export function SmrAdaptPage() {
             if (status.owned || cursorDrive !== 'reve') return
           }
         }
-        if (cursorDrive !== 'reve') return
+        if (cursorDrive !== 'reve' || !autoStartModel) return
         setNotice('正在启动 REVE SMR 头（首次加载权重可能要一两分钟）…')
         const result = await ensureModelService({
           backend: 'reve',
@@ -170,7 +175,7 @@ export function SmrAdaptPage() {
       }
     })()
     return () => ac.abort()
-  }, [cursorDrive])
+  }, [cursorDrive, autoStartModel])
 
   const montage = useMemo(
     () => resolveLaplacianMontage(eeg.meta.channelNames),
@@ -180,6 +185,7 @@ export function SmrAdaptPage() {
   if (live) sawLiveRef.current = true
   const trial = currentTrial(session)
   const running = session.phase !== 'idle' && session.phase !== 'done'
+  useLayoutEffect(() => { onBusyChange?.(running || starting || saving) }, [onBusyChange, running, starting, saving])
   const scores = useMemo(() => scoresByTask(session.trials), [session.trials])
   const hint = useMemo(() => scoreHint(scores), [scores])
   const saved = loadSmrProfile(subjectId)
@@ -189,46 +195,52 @@ export function SmrAdaptPage() {
   }
 
   const startRound = async () => {
-    horizNorm.current = new BalancedNorm()
-    vertNorm.current = new BalancedNorm()
-    warmupH.current = { n: 0, mean: 0, m2: 0 }
-    warmupV.current = { n: 0, mean: 0, m2: 0 }
-    temporalFilterRef.current.reset()
-    sawLiveRef.current = live
-    setHorizFlipped(false)
-    const seed = randomSeed()
-    loggerRef.current.clear()
-    const notes: string[] = []
-    if (live) {
-      const rec = await startExperimentRecording({
-        experiment: 'smr-adapt',
-        subjectId,
-        seed,
+    if (running || starting || saving) return
+    setStarting(true)
+    try {
+      horizNorm.current = new BalancedNorm()
+      vertNorm.current = new BalancedNorm()
+      warmupH.current = { n: 0, mean: 0, m2: 0 }
+      warmupV.current = { n: 0, mean: 0, m2: 0 }
+      temporalFilterRef.current.reset()
+      sawLiveRef.current = live
+      setHorizFlipped(false)
+      const seed = randomSeed()
+      loggerRef.current.clear()
+      const notes: string[] = []
+      if (live) {
+        const rec = await startExperimentRecording({
+          experiment: 'smr-adapt',
+          subjectId,
+          seed,
+        })
+        notes.push(rec.message)
+      } else {
+        notes.push('未开流，使用演示光标（不写 REVE / 不落盘）')
+      }
+      const next = startSession(createSession(PLANS[planId], seed, performance.now()), performance.now())
+      setSession(next)
+      setCursor(resetCursor())
+      loggerRef.current.log('session_start', {
+        planId,
+        seed: next.seed,
+        trials: next.trials.length,
+        live,
+        cursorDrive,
+        montage: montage
+          ? { c3: montage.neighborNamesC3, c4: montage.neighborNamesC4 }
+          : null,
       })
-      notes.push(rec.message)
-    } else {
-      notes.push('未开流，使用演示光标（不写 REVE / 不落盘）')
-    }
-    const next = startSession(createSession(PLANS[planId], seed, performance.now()), performance.now())
-    setSession(next)
-    setCursor(resetCursor())
-    loggerRef.current.log('session_start', {
-      planId,
-      seed: next.seed,
-      trials: next.trials.length,
-      live,
-      cursorDrive,
-      montage: montage
-        ? { c3: montage.neighborNamesC3, c4: montage.neighborNamesC4 }
-        : null,
-    })
-    setNotice(
-      live
-        ? cursorDrive === 'features'
-          ? `C3/C4 mu 驱动光标。${notes.filter(Boolean).join(' ')}`
-          : `REVE 驱动光标；SMR 头冻结，不在线微调。${notes.filter(Boolean).join(' ')}`
-        : notes.join(' '),
-    )
+      setNotice(
+        live
+          ? cursorDrive === 'features'
+            ? `C3/C4 mu 驱动光标。${notes.filter(Boolean).join(' ')}`
+            : `REVE 驱动光标；SMR 头冻结，不在线微调。${notes.filter(Boolean).join(' ')}`
+          : notes.join(' '),
+      )
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally { setStarting(false) }
   }
 
   const persist = useCallback((state: SessionState, montageNow: LaplacianMontage | null) => {
@@ -279,9 +291,10 @@ export function SmrAdaptPage() {
         setCursor(resetCursor())
         if (next.phase === 'done') {
           persist(next, montage)
+          setSaving(true)
           void stopExperimentRecording().then((result) => {
             if (result.message) setNotice(result.message)
-          })
+          }).catch(error => setNotice(String(error))).finally(() => setSaving(false))
         }
         return
       }
@@ -369,14 +382,14 @@ export function SmrAdaptPage() {
         : ''
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
+    <div className={embedded ? "smr-protocol" : "mx-auto max-w-6xl px-6 py-8"}>
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link to="/" className="muted text-sm hover:text-[var(--text)]">
+          {!embedded && <Link to="/" className="muted text-sm hover:text-[var(--text)]">
             ← 返回首页
-          </Link>
-          <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">SMR 个体化适配</h1>
-          <Link to="/smr-gaze" className="btn mt-3">全屏视线方向采集 · 解码眼动伪迹</Link>
+          </Link>}
+          {embedded ? <h2>运动想象 · 个体化适配</h2> : <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">SMR 个体化适配</h1>}
+          {!embedded && <Link to="/smr-gaze" className="btn mt-3">全屏 SMR 采集</Link>}
           <p className="muted mt-1 max-w-2xl text-sm">
             Stieger 式连续光标：左手左、右手右、双手上、休息下。光标可选 REVE 四分类或原来的 C3/C4 mu。SMR 头冻结，不在线微调。只展示上下可去{' '}
             <Link to="/smr-ud" style={{ color: 'var(--accent)' }}>
@@ -449,7 +462,7 @@ export function SmrAdaptPage() {
                   key={id}
                   type="button"
                   className="btn"
-                  disabled={running}
+                  disabled={running || starting || saving}
                   onClick={() => {
                     setPlanId(id)
                     setSession(createSession(PLANS[id], randomSeed()))
@@ -493,7 +506,7 @@ export function SmrAdaptPage() {
                 <TemporalFilterControls config={temporalConfig} onChange={setTemporalConfig} compact />
               </div>
             ) : null}
-            <button type="button" className="btn btn-primary" disabled={running} onClick={begin}>
+            <button type="button" className="btn btn-primary" disabled={running || starting || saving} onClick={begin}>
               {session.phase === 'done' ? '再做一轮' : '开始适配'}
             </button>
             {notice ? <p className="muted mb-0 mt-3 text-sm">{notice}</p> : null}

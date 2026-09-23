@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   DEMO_ENVELOPE_DRIVER,
-  DEFAULT_STRESS_DRIVER,
   adaptProfileForDriver,
   applyRangeMap,
   defaultRangeForDriver,
@@ -33,18 +32,14 @@ const DISPLAY_HIST = 80
  */
 export function useStressControl(opts?: {
   initial?: number
+  defaultDriver?: string
+  driverStorageKey?: string
   manualModulators?: (stress: number) => FeatureModulators
 }) {
   const initial = opts?.initial ?? 40
   const [mode, setModeState] = useState<SignalControlMode>(() => loadSignalMode())
-  const [driverFeature, setDriverFeatureState] = useState(() => {
-    const d = loadStressDriver()
-    if (d === 'cognitive_load') {
-      saveStressDriver(DEFAULT_STRESS_DRIVER)
-      return DEFAULT_STRESS_DRIVER
-    }
-    return d
-  })
+  const driverStorageKey = opts?.driverStorageKey
+  const [driverFeature, setDriverFeatureState] = useState(() => loadStressDriver(opts?.defaultDriver, driverStorageKey))
   const [rangeMap, setRangeMapState] = useState<FeatureRangeMap>(() => loadRangeMap(driverFeature))
   const [manualStress, setManualStress] = useState(initial)
   const [featureStress, setFeatureStress] = useState(initial)
@@ -66,12 +61,12 @@ export function useStressControl(opts?: {
 
   const setDriverFeature = useCallback((id: string) => {
     setDriverFeatureState(id)
-    saveStressDriver(id)
+    saveStressDriver(id, driverStorageKey)
     const next = loadRangeMap(id)
     setRangeMapState(next)
     rangeRef.current = next
     displayHistRef.current = []
-  }, [])
+  }, [driverStorageKey])
 
   const setRangeMap = useCallback((next: FeatureRangeMap) => {
     setRangeMapState(next)

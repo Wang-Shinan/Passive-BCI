@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:preview": "vite --config vite.preview.config.ts",
+    "build:preview": "tsc -b && vite build --config vite.preview.config.ts",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",

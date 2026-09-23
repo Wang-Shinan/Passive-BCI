@@ -126,8 +126,8 @@ export function GazeTetrisPage({ eyeOnly = false }: { eyeOnly?: boolean }) {
     return ()=>{ mounted.current=false; document.removeEventListener('visibilitychange',hidden); active.current?.logger.log('session_abort',{reason:'离开页面'}); active.current=null; if(owned.current){owned.current=false;void stopExperimentRecording()} }
   },[])
   return <main className="gaze-tetris-page">
-    <nav><Link to="/tetris">协作 Tetris（下→静止）</Link> · <Link to="/smr-gaze">← 眼动 SMR 采集</Link> · <Link to={eyeOnly?'/gaze-smr-tetris':'/gaze-tetris'}>{eyeOnly?'眼动 SMR 版':'纯眼动版'}</Link></nav>
-    <h1>{eyeOnly?'眼动版':'眼动辅助 SMR'}俄罗斯方块</h1>
+    <nav><Link to="/tetris">协作 Tetris（下→静止）</Link> · <Link to="/smr-gaze">← 全屏 SMR 采集</Link> · <Link to={eyeOnly?'/gaze-smr-tetris':'/gaze-tetris'}>{eyeOnly?'全屏 SMR 版':'纯眼动版'}</Link></nav>
+    <h1>{eyeOnly?'眼动版':'全屏 SMR'}俄罗斯方块</h1>
     <p>{eyeOnly?'使用已保存的 EEG 眼动 LDA，注视方向即可；无需运动想象。':'REVE＋LP：左手→左移，右手→右移，双手→旋转，休息→下落，同时注视对应方向。'}</p>
     <p>左右二分类模型只控制左右；旋转与下落可用下方按钮。游戏操作单独记录，不当作采集指令标签。</p>
     <LiveEegBadge />

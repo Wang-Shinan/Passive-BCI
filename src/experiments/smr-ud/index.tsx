@@ -49,7 +49,7 @@ function snapCenter(yRef: { current: number }, setY: (y: number) => void, setTra
   setTrail([UD_CENTER_Y])
 }
 
-export function SmrUdPage() {
+export function SmrUdPage({ autoStartModel = true }: { autoStartModel?: boolean } = {}) {
   const [y, setY] = useState(UD_CENTER_Y)
   const [trail, setTrail] = useState<number[]>([UD_CENTER_Y])
   const [zV, setZV] = useState(0)
@@ -93,6 +93,7 @@ export function SmrUdPage() {
             if (status.owned) return
           }
         }
+        if (!autoStartModel) return
         await ensureModelService({
           backend: 'reve',
           task: 'smr_control',
@@ -113,7 +114,7 @@ export function SmrUdPage() {
       }
     })()
     return () => ac.abort()
-  }, [])
+  }, [autoStartModel])
 
   const montage = useMemo(
     () => resolveLaplacianMontage(eeg.meta.channelNames),

@@ -20,7 +20,7 @@ import {
 
 export const BOARD_DEFAULT_CELL = 28
 export const BOARD_MIN_CELL = 16
-export const BOARD_MAX_CELL = 52
+export const BOARD_MAX_CELL = 96
 
 const CELL_KEY = 'passive-bci.tetris-cell'
 
@@ -34,7 +34,7 @@ function loadCell(): number {
   return Number.isFinite(raw) && raw > 0 ? clampBoardCell(raw) : BOARD_DEFAULT_CELL
 }
 
-/** Board cell size in px, shared so column splitters can resize the board too. */
+/** Preferred board cell size in px, shared by the resize handle and size control. */
 export function useBoardCell() {
   const [cell, setCell] = useState(loadCell)
 
@@ -53,9 +53,11 @@ export function Board({
   state,
   cell,
   onCellChange,
+  maxCell = BOARD_MAX_CELL,
 }: {
   state: GameState
   cell: number
+  maxCell?: number
   onCellChange: (next: number) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -191,7 +193,7 @@ export function Board({
         role="slider"
         aria-label="棋盘大小"
         aria-valuemin={BOARD_MIN_CELL}
-        aria-valuemax={BOARD_MAX_CELL}
+        aria-valuemax={maxCell}
         aria-valuenow={cell}
         tabIndex={0}
         onPointerDown={onPointerDown}

@@ -158,3 +158,14 @@ a {
 .flash-fullscreen-card {
   animation: flashFadeIn 200ms ease-out;
 }
+
+/* Fixed contrast for letter/fixation stimuli, independent of the surrounding UI. */
+.experiment-stimulus {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --text: #e8eefc;
+  --muted: #9aa8c7;
+  --border: #2a3550;
+  color: var(--text);
+  background: var(--bg);
+}

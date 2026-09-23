@@ -83,7 +83,7 @@ try {
   recording=false;await page.getByRole('button',{name:'Fixture finish',exact:true}).click()
   await page.getByLabel('脑控任务',{exact:true}).selectOption('gaze_smr')
   await picker.selectOption('gaze-smr/20260917T120000Z/head.pt')
-  await page.getByRole('button',{name:'启动 眼动辅助 SMR',exact:true}).click()
+  await page.getByRole('button',{name:'启动 全屏 SMR',exact:true}).click()
   await page.getByText(/已运行：gaze-smr/).waitFor()
   assert.equal(launches.at(-1).headId,'gaze-smr/20260917T120000Z/head.pt')
   await page.screenshot({path:'test-results/tetris-controls.png',fullPage:true})
@@ -91,7 +91,7 @@ try {
   await page.getByText(/已运行：未运行/).waitFor()
   console.log('[ui] historical gaze head applied')
   holdNext=true
-  await page.getByRole('button',{name:'启动 眼动辅助 SMR',exact:true}).click()
+  await page.getByRole('button',{name:'启动 全屏 SMR',exact:true}).click()
   for(let i=0;i<100&&!release;i++) await page.waitForTimeout(20)
   assert.ok(release,'pending launch not observed')
   await page.getByRole('button',{name:'停止服务（不自动重连）',exact:true}).click()

@@ -1,0 +1,10 @@
+.smr-workspace { max-width: 1152px; margin: 0 auto; padding: 32px 24px; }
+.smr-workspace-header { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.smr-workspace-header h1 { display: flex; align-items: center; gap: 10px; margin: 12px 0 20px; font-size: 24px; font-weight: 600; }
+.smr-mode-switch { display: flex; flex-wrap: wrap; gap: 8px; }
+.smr-mode-switch .btn { display: inline-flex; align-items: center; gap: 8px; }
+.smr-mode-switch [aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.smr-mode-note { margin: 12px 0 0; font-size: 13px; }
+.smr-workspace .smr-protocol { max-width: none; margin: 0; padding: 0; }
+.smr-protocol h2 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
+@media (max-width: 600px) { .smr-workspace { padding: 24px 16px; } }
