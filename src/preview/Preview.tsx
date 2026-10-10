@@ -46,7 +46,7 @@ export default function Preview() {
         <nav>
           <button className={group === 'all' ? 'active' : ''} onClick={() => selectGroup('all')}><Icon name="grid" size={17} />全部入口</button>
           <button className={group === 'experiments' ? 'active' : ''} onClick={() => selectGroup('experiments')}><Icon name="memory" size={17} />实验范式 <small>{experiments.length}</small></button>
-          <button className={group === 'smr' ? 'active' : ''} onClick={() => selectGroup('smr')}><Icon name="target" size={17} />SMR 与眼动 <small>{smrExperiments.length}</small></button>
+          <button className={group === 'smr' ? 'active' : ''} onClick={() => selectGroup('smr')}><Icon name="target" size={17} />光标控制 <small>{smrExperiments.length}</small></button>
           <div className="ed-nav-divider" />
           {tools.map(item => <Link key={item.path} to={item.path}><Icon name={item.icon} size={17} />{item.name}</Link>)}
         </nav>
@@ -59,12 +59,11 @@ export default function Preview() {
           <span className="ed-breadcrumb"><span className="ed-topbar-project">Passive BCI / </span>实验目录</span>
           <div className="ed-topbar-actions">
             <ThemeSwitch />
-            <a href="/" className="ed-original">原版首页 ↗</a>
           </div>
         </header>
         <div className="ed-content">
           <div className="ed-title-row">
-            <h1>{group === 'smr' ? 'SMR 与眼动' : group === 'experiments' ? '实验范式' : '实验与工具'}</h1>
+            <h1>{group === 'smr' ? '光标控制' : group === 'experiments' ? '实验范式' : '实验与工具'}</h1>
             <input type="search" aria-label="搜索实验与工具" placeholder="搜索名称或功能" value={query} onChange={event => setQuery(event.target.value)} />
           </div>
           <div className="ed-page-note">点击入口打开完整页面。页面中的开始、录制和训练操作按原有功能执行。</div>
@@ -75,8 +74,8 @@ export default function Preview() {
             </section>
           )}
           {group !== 'experiments' && visibleSmr.length > 0 && (
-            <section className="ed-section" aria-label="SMR 与眼动">
-              {group === 'all' && <h2><Icon name="target" size={17} />SMR 与眼动 <small>{visibleSmr.length}</small></h2>}
+            <section className="ed-section" aria-label="光标控制">
+              {group === 'all' && <h2><Icon name="target" size={17} />光标控制 <small>{visibleSmr.length}</small></h2>}
               <div className="ed-grid">{visibleSmr.map(item => <Entry key={item.path} item={item} />)}</div>
             </section>
           )}

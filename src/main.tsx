@@ -2,6 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import App from './App'
+import Preview from './preview/Preview'
+import { ExperimentThemeBar, PreviewThemeProvider } from './preview/Theme'
+import './preview/preview.css'
+import './preview/theme.css'
 import { AppErrorBoundary, installClientDiagnostics } from './lib/clientDiagnostics'
 
 const disposeDiagnostics = installClientDiagnostics()
@@ -9,6 +13,10 @@ if (import.meta.hot) import.meta.hot.dispose(disposeDiagnostics)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AppErrorBoundary><App /></AppErrorBoundary>
+    <AppErrorBoundary>
+      <PreviewThemeProvider>
+        <App home={<Preview />} pageHeader={<ExperimentThemeBar />} />
+      </PreviewThemeProvider>
+    </AppErrorBoundary>
   </StrictMode>,
 )

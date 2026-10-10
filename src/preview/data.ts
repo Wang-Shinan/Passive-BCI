@@ -22,10 +22,8 @@ export const experiments: DirectoryEntry[] = [
 
 export const smrExperiments: DirectoryEntry[] = [
   { icon: 'cursor', path: '/smr', name: 'SMR 采集与光标控制', description: '切换普通 SMR 或全屏 SMR；包含个体化适配、方向采集、训练与验证。', requirement: '普通模式可预览；全屏 SMR 采集需真实 EEG 与对应模型。' },
-  { icon: 'vertical', path: '/smr-ud', name: 'SMR 上下控制', description: '双手想象上升、主动放空下降；单轴光标打靶。', requirement: '需对应的 EEG 信号与控制配置。' },
   { icon: 'calibrate', path: '/tetris-adapt', name: '方块 SMR 适配', description: '左右、旋转、下落动作练习与窄井任务；脚想象只采标签。', requirement: '四分类头保持冻结。' },
   { icon: 'signal', path: '/gaze-smr-tetris', name: '全屏 SMR 俄罗斯方块', description: '使用 REVE 方向头控制方块：左移、右移、旋转、软降。', requirement: '真实 EEG；本被试的 gaze_smr 头。' },
-  { icon: 'eye', path: '/gaze-tetris', name: '眼动版俄罗斯方块（旧 LDA）', description: '从 EEG 中分类注视方向并控制方块，无需运动想象；不使用摄像头。', requirement: '真实 EEG；浏览器中已保存本被试、同通道与采样率的旧 LDA 模型。', legacy: true },
 ]
 
 export const tools: DirectoryEntry[] = [
