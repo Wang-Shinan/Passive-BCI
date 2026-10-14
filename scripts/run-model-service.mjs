@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolveReveLoraArgs } from './reve-launch-options.mjs'
+import { resolveReveLoraArgs, resolveReveHeadMode } from './reve-launch-options.mjs'
 
 const passiveRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const condaEnvName = 'bci-dayloop'
@@ -75,10 +75,8 @@ function argValue(flag) {
 function defaultStateFile(task) {
   if (task === 'gaze_smr') return path.join(passiveRoot, 'recordings', '.reve-heads', 'gaze_smr_active.pt')
   if (task === 'smr_control') {
-    // Live now: 0825pm joint LoRA + LP head refit on today's BCIGo session.
-    // Previous default (0825pm hop01 LoRA + serving-refit head): recordings/.reve-heads/smr_control_s02_0825pm_4class_livehead.pt
-    // Previous default (0821 LoRA): recordings/.reve-heads/smr_control_s02_4class_livehead.pt
-    return path.join(passiveRoot, 'recordings', '.reve-heads', 'smr_control_s02_0825pm_joint_4class_livehead.pt')
+    // The former both-hand head is incompatible with the tongue protocol.
+    return path.join(passiveRoot, 'recordings', '.reve-heads', 'smr_control_tongue.pt')
   }
   return undefined
 }
@@ -112,13 +110,25 @@ function main() {
   const host = process.env.MODEL_SERVICE_HOST || '127.0.0.1'
   const pkg = process.env.MODEL_PACKAGE
   const backend = (argValue('--backend') || process.env.MODEL_BACKEND || '').trim().toLowerCase()
+  const omniEndpoint = argValue('--omni-endpoint') || process.env.MODEL_OMNI_ENDPOINT
+  const omniChannels = argValue('--omni-channels') || process.env.MODEL_OMNI_CHANNELS
+  if (omniEndpoint || omniChannels) {
+    if (backend !== 'reve' || pkg) throw new Error('Omni SDK direct input requires --backend reve')
+    if (!omniEndpoint || !omniChannels) throw new Error('Set both --omni-endpoint and --omni-channels (CH1..CH8 electrode order)')
+  }
   const task = argValue('--task') || process.env.MODEL_REVE_TASK || 'passive_rating'
   const stepSec = argValue('--step-sec') || process.env.MODEL_STEP_SEC || defaultStepSec(task)
-  const requestedStateFile = argValue('--state-file') ||
+  const { freshHead, checkpointHead } = resolveReveHeadMode({ task, argv: process.argv.slice(2), env: process.env })
+  if (freshHead && task === 'gaze_smr') throw new Error('gaze_smr requires a fitted subject head; fresh-head is for SMR plumbing only')
+  const requestedStateFile = argValue('--state-file') || (!freshHead && !checkpointHead &&
     (task === 'gaze_smr' ? defaultStateFile(task) : process.env.MODEL_STATE_FILE || defaultStateFile(task))
+  )
   const stateFile = requestedStateFile ? path.resolve(ncc, requestedStateFile) : undefined
   const loraArgs = backend === 'reve' && !pkg
-    ? resolveReveLoraArgs({ task, stateFile, ncc, argv: process.argv.slice(2), env: process.env }) : []
+    ? resolveReveLoraArgs({ task, stateFile, ncc, argv: [...process.argv.slice(2), ...(checkpointHead ? ['--checkpoint-head'] : [])], env: process.env }) : []
+  if (checkpointHead && (backend !== 'reve' || pkg || !loraArgs.includes('--lora-checkpoint'))) {
+    throw new Error('checkpoint-head requires an explicit REVE LoRA checkpoint')
+  }
   const strategy =
     argValue('--strategy') ||
     (task === 'smr_control' || task === 'gaze_smr' ? defaultStrategy(task) : process.env.MODEL_STRATEGY || defaultStrategy(task))
@@ -154,6 +164,10 @@ function main() {
           ...(stepSec ? ['--step-sec', String(stepSec)] : []),
           ...(stateFile ? ['--state-file', stateFile] : []),
           ...loraArgs,
+          ...(omniEndpoint ? ['--omni-endpoint', omniEndpoint, '--omni-channels', omniChannels] : []),
+          ...(omniEndpoint && process.argv.includes('--omni-relay') ? ['--omni-relay'] : []),
+          ...(omniEndpoint && argValue('--omni-electrodes') ? ['--omni-electrodes', argValue('--omni-electrodes')] : []),
+          ...(omniEndpoint && argValue('--omni-positions') ? ['--omni-positions', argValue('--omni-positions')] : []),
           ...(process.env.MODEL_TCP_HOST ? ['--tcp-host', process.env.MODEL_TCP_HOST] : []),
           ...(process.env.MODEL_TCP_PORT ? ['--tcp-port', process.env.MODEL_TCP_PORT] : []),
           ...(process.env.MODEL_NO_TCP === '1' ? ['--no-tcp'] : []),
@@ -173,6 +187,8 @@ function main() {
   if (pkg) {
     console.log(`[model-service] runtime package=${pkg}`)
   } else if (backend === 'reve') {
+    if (freshHead && !stateFile) console.warn('[model-service] Untrained task head: uniform probabilities. Pipeline check only; collect labeled EEG and fit a head before model-driven control.')
+    if (checkpointHead && !stateFile) console.log('[model-service] Using the LoRA checkpoint linear head as initialization; source classes are reported by the model service.')
     console.log(
       `[model-service] backend=reve，启动本地 REVE（2s 窗${stepSec ? ` / ${stepSec}s 步` : ''}，task=${task}，strategy=${strategy}）…`,
     )

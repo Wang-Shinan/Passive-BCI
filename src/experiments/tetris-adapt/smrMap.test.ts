@@ -7,15 +7,15 @@ import {
   smrDirFromClassName,
 } from './smrMap'
 
-const NAMES = ['left_hand', 'right_hand', 'both_hand', 'rest'] as const
+const NAMES = ['left_hand', 'right_hand', 'tongue', 'rest'] as const
 
 describe('SMR action mapping', () => {
   it('maps REVE class names onto tetris-adapt directions', () => {
     expect(smrDirFromClassName('left_hand')).toBe('left')
     expect(smrDirFromClassName('right_hand')).toBe('right')
-    expect(smrDirFromClassName('both_hand')).toBe('up')
+    expect(smrDirFromClassName('tongue')).toBe('up')
     expect(smrDirFromClassName('rest')).toBe('down')
-    expect(overlapActionFromClassName('both_hand')).toBe('rotate')
+    expect(overlapActionFromClassName('tongue')).toBe('rotate')
     expect(overlapActionFromClassName('rest')).toBe('down')
     expect(overlapActionFromClassName('feet')).toBeNull()
   })

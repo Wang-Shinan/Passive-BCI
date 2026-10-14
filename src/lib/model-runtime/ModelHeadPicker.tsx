@@ -10,14 +10,17 @@ export function ModelHeadPicker({ task, disabled = false }: { task: string; disa
   const [loading, setLoading] = useState(false)
   const refresh = async (signal?: AbortSignal) => {
     setLoading(true); setError('')
-    try { setHeads(await fetchModelHeads(signal)) }
+    try {
+      const result = await fetchModelHeads(signal)
+      if (!signal?.aborted) setHeads(result)
+    }
     catch (e) { if (!signal?.aborted) setError(String(e)) }
     finally { if (!signal?.aborted) setLoading(false) }
   }
-  useEffect(() => { const c = new AbortController(); void refresh(c.signal); return () => c.abort() }, [])
+  useEffect(() => { const c = new AbortController(); void refresh(c.signal); return () => c.abort() }, [headId, task])
   return <div className="space-y-2">
     <HeadSelector heads={heads} task={task} value={headId} disabled={disabled || locked || loading}
-      defaultLabel={task === 'gaze_smr' ? '当前激活 gaze 头及其报告' : '默认配置'}
+      defaultLabel={task === 'gaze_smr' ? '当前激活 gaze 头及其报告' : task === 'smr_control' ? 'LoRA 自带线性头（新被试默认）' : '默认配置'}
       onChange={id => { try { selectModelHeadPreference(task, id); setError('') } catch (e) { setError(String(e)) } }} />
     <button className="btn" disabled={disabled || locked || loading} onClick={() => void refresh()}>{loading ? '读取中…' : '刷新线性头'}</button>
     {error && <p role="alert" className="text-sm">{error}</p>}

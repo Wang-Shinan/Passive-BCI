@@ -30,6 +30,8 @@ npm run dev:preview
 - <http://127.0.0.1:5174/preview.html#/nback>：原 N-back 页面。
 - <http://127.0.0.1:5174/preview.html#/tetris>：原俄罗斯方块页面。
 - <http://127.0.0.1:5174/preview.html#/smr-gaze>：原全屏 SMR 采集页。
+- <http://127.0.0.1:5174/preview.html#/smr-acquisition>：独立 SMR 分组采集与训练页，默认四方向分组及自动 probing。
+- <http://127.0.0.1:5174/preview.html#/jaw-clench>：独立咬牙／放松采集页；全屏提示、二分类事件与 EEG 同步录制，参数放在实验员面板，无设备可预览。
 - <http://127.0.0.1:5174/>：原版首页，用于对照。
 
 原预览的 `#overview`、`#smr` 等链接在载入时自动转换到新目录或真实路由。

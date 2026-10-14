@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { acceptsBrainPrediction, normalizeBrainControlTask } from '../src/experiments/tetris/brainControlTask.ts'
 
 function fixture(task = 'smr_control') {
-  const class_names = task === 'smr_control' ? ['left_hand', 'right_hand', 'both_hand', 'rest'] : ['left', 'right', 'up', 'down']
+  const class_names = task === 'smr_control' ? ['left_hand', 'right_hand', 'tongue', 'rest'] : ['left', 'right', 'up', 'down']
   const hello = { model_type: 'reve', task, class_names, model_revision: 'head-1' }
   const prediction = { task, class_names, probabilities: [.7, .1, .1, .1], model_revision: 'head-1', received_at_ms: 1000 }
   return { task, hello, prediction }
@@ -23,7 +23,9 @@ test('the UI-selected task cannot consume another task or mock service', () => {
 })
 test('class order and explicit output semantics are checked', () => {
   const f = fixture()
-  assert.equal(acceptsBrainPrediction(f.task, f.hello, { ...f.prediction, class_names: ['right_hand', 'left_hand', 'both_hand', 'rest'] }, 1100), false)
+  const legacy = ['left_hand', 'right_hand', 'both_hand', 'rest']
+  assert.equal(acceptsBrainPrediction(f.task, { ...f.hello, class_names: legacy }, { ...f.prediction, class_names: legacy }, 1100), false)
+  assert.equal(acceptsBrainPrediction(f.task, f.hello, { ...f.prediction, class_names: ['right_hand', 'left_hand', 'tongue', 'rest'] }, 1100), false)
   assert.equal(acceptsBrainPrediction(f.task, f.hello, { ...f.prediction, output_semantics: 'gaze_smr_direction_4' }, 1100), false)
 })
 test('head switches cannot reuse a prediction from the previous revision', () => {

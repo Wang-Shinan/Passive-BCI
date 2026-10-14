@@ -72,6 +72,10 @@ export interface ChannelConfig {
   gains: number[]
   /** Display / montage labels (not sent to firmware). */
   labels: string[]
+  /** Optional electrode locations, independent of display labels. */
+  electrodeNames?: string[]
+  positionMode?: 'standard' | 'cartesian' | 'spherical'
+  positionCoordinates?: string[][]
   reference: ReferenceMode
 }
 

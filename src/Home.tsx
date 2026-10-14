@@ -2,6 +2,16 @@ import { Link } from 'react-router-dom'
 
 const TOOLS = [
   {
+    path: '/jaw-clench', title: '咬牙与放松采集',
+    blurb: '跟随全屏提示完成咬牙和放松，等量随机采集 EEG 与二分类标签。',
+    tag: '提示式采集 · 咬牙 / 放松', accent: '#f3cc62',
+  },
+  {
+    path: '/smr-acquisition', title: 'SMR 分组采集与训练',
+    blurb: '四方向随机采集；组间保存、训练分类头、评估并选择模型，就绪后继续下一组。',
+    tag: '分组采集 · 自动 probing', accent: '#34d399',
+  },
+  {
     path: '/training', title: '数据导出与 Linear Probing',
     blurb: '选择 SMR 录制、导出 H5、训练冻结 REVE 的线性头，查看后台日志和评估结果，再应用到模型。',
     tag: 'H5 · Linear probing', accent: '#22d3ee',
@@ -33,8 +43,8 @@ const TOOLS = [
     path: '/smr-ud',
     title: 'SMR 上下控制',
     blurb:
-      '只演示最稳的一轴：双手开合上升、主动放空下降。大光标连续控制，可打靶计分。适合现场接上冻结的 REVE 四分类头。',
-    tag: '演示 · 双手↑ 休息↓',
+      '只演示最稳的一轴：舌头运动想象上升、主动放空下降。大光标连续控制，可打靶计分。适合现场接上冻结的 REVE 四分类头。',
+    tag: '演示 · 舌头↑ 休息↓',
     accent: '#e8b84a',
   },
   {

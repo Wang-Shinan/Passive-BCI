@@ -27,6 +27,7 @@ export type { OmniDataBatch, OmniGapEvent, OmniHello, OmniMarkerEvent, OmniStrea
 export type OmniStatus = 'idle' | 'connecting' | 'live' | 'error' | 'closed'
 
 export interface OmniClientOptions {
+  endpoint?: string
   url?: string
   stream?: OmniStreamKind
   onStatus?: (status: OmniStatus, detail?: string) => void
@@ -72,15 +73,15 @@ export class OmniWsClient {
     this.closedByUser = false
     this.helloReceived = false
     this.pendingHeader = null
-    this.opts.onStatus?.('connecting', '正在连接 OmniBCI LSL 桥接…')
+    this.opts.onStatus?.('connecting', `正在连接 OmniBCI ${this.opts.endpoint ? 'SDK BLE' : 'LSL 桥接'}…`)
     this.connectTimer = setTimeout(() => {
       if (this.helloReceived || this.closedByUser) return
       this.opts.onStatus?.(
         'error',
-        '连接超时。请先在 OmniBCI 中开始测量并启用 LSL。',
+        this.opts.endpoint ? 'BLE 连接超时，请确认设备已开机且未被其他程序占用。' : '连接超时。请先在 OmniBCI 中开始测量并启用 LSL。',
       )
       this.disconnect()
-    }, 8_000)
+    }, this.opts.endpoint ? 30_000 : 8_000)
 
     let ws: WebSocket
     try {
@@ -95,7 +96,7 @@ export class OmniWsClient {
     this.ws = ws
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'subscribe', stream: this.opts.stream }))
+      ws.send(JSON.stringify({ type: 'subscribe', stream: this.opts.stream, ...(this.opts.endpoint ? { endpoint: this.opts.endpoint } : {}) }))
     }
 
     ws.onmessage = (ev) => {
@@ -111,7 +112,7 @@ export class OmniWsClient {
         this.clearConnectTimer()
         this.opts.onStatus?.(
           'error',
-          `无法连接 OmniBCI LSL 桥接（${this.opts.url}）。`,
+          `无法连接 OmniBCI ${this.opts.endpoint ? 'SDK BLE' : 'LSL 桥接'}（${this.opts.url}）。`,
         )
       }
     }
@@ -120,7 +121,7 @@ export class OmniWsClient {
       this.clearConnectTimer()
       this.ws = null
       this.pendingHeader = null
-      if (!this.closedByUser) this.opts.onStatus?.('closed', 'OmniBCI LSL 连接已断开')
+      if (!this.closedByUser) this.opts.onStatus?.('closed', `OmniBCI ${this.opts.endpoint ? 'SDK BLE' : 'LSL'} 连接已断开`)
     }
   }
 
@@ -163,7 +164,7 @@ export class OmniWsClient {
       const n = parsed.hello.channels.length
       this.opts.onStatus?.(
         'live',
-        `已连接 OmniBCI LSL · ${n} 通道 @ ${parsed.hello.sample_rate} Hz（${parsed.hello.stream}）`,
+        `已连接 OmniBCI ${this.opts.endpoint ? 'SDK BLE' : 'LSL'} · ${n} 通道 @ ${parsed.hello.sample_rate} Hz（${parsed.hello.stream}）`,
       )
       return
     }

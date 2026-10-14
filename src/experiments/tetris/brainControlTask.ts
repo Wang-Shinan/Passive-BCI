@@ -28,7 +28,7 @@ export function acceptsBrainPrediction(
   after = 0,
 ): boolean {
   if (!prediction || hello?.model_type !== 'reve' || hello.task !== task || prediction.task !== task) return false
-  const classes = task === 'smr_control' ? 'left_hand|right_hand|both_hand|rest' : 'left|right|up|down'
+  const classes = task === 'smr_control' ? 'left_hand|right_hand|tongue|rest' : 'left|right|up|down'
   const semantics = task === 'smr_control' ? 'smr_control_4' : 'gaze_smr_direction_4'
   if (prediction.class_names.join('|') !== classes || (hello.class_names && hello.class_names.join('|') !== classes)) return false
   if (prediction.output_semantics && prediction.output_semantics !== semantics) return false

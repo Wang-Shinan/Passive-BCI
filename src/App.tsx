@@ -14,6 +14,8 @@ import { SchulteExperiment } from './experiments/schulte'
 import { NBackExperiment } from './experiments/nback'
 import { OnlineLearnPage } from './experiments/online-learn'
 import { SmrPage } from './experiments/smr'
+import { SmrAcquisitionPage } from './experiments/smr-acquisition'
+import { JawClenchPage } from './experiments/jaw-clench'
 import { SmrUdPage } from './experiments/smr-ud'
 import { GazeTetrisPage } from './experiments/smr-gaze/GazeTetris'
 import { TetrisAdaptPage } from './experiments/tetris-adapt'
@@ -30,6 +32,8 @@ export default function App({ home, autoStartModels = true, pageHeader }: { home
         <Route path="/recordings" element={<RecordingsPage />} />
         <Route path="/online-learn" element={<OnlineLearnPage />} />
         <Route path="/smr" element={<SmrPage autoStartModel={autoStartModels} />} />
+        <Route path="/smr-acquisition" element={<SmrAcquisitionPage autoStartModel={autoStartModels} />} />
+        <Route path="/jaw-clench" element={<JawClenchPage />} />
         <Route path="/smr-adapt" element={<Navigate to="/smr?mode=smr" replace />} />
         <Route path="/smr-ud" element={<SmrUdPage autoStartModel={autoStartModels} />} />
         <Route path="/smr-gaze" element={<Navigate to="/smr?mode=gaze" replace />} />

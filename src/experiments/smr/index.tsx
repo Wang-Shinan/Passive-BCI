@@ -8,6 +8,7 @@ import { modelOperation } from '../../lib/model-runtime/modelOperation'
 import { loadStoredSubjectId } from '../../lib/ui/ExportButtons'
 import { Icon } from '../../lib/ui/Icon'
 import './smr.css'
+import { notifyModelSubjectChanged } from '../../lib/model-runtime/modelHeadPreference'
 
 export function SmrPage({ autoStartModel = true }: { autoStartModel?: boolean }) {
   const [params, setParams] = useSearchParams()
@@ -18,7 +19,7 @@ export function SmrPage({ autoStartModel = true }: { autoStartModel?: boolean })
   const locked = experimentBusy || modelLocked
   const changeSubject = (value: string) => {
     setSubject(value)
-    try { localStorage.setItem('passive-bci.subject-id', value) } catch { /* Storage may be unavailable. */ }
+    try { localStorage.setItem('passive-bci.subject-id', value); notifyModelSubjectChanged() } catch { /* Storage may be unavailable. */ }
   }
   const selectMode = (next: 'smr' | 'gaze') => {
     if (next === mode || experimentBusy || modelConfigurationLocked() || modelOperation.busy) return

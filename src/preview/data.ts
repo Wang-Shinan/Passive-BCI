@@ -21,12 +21,14 @@ export const experiments: DirectoryEntry[] = [
 ]
 
 export const smrExperiments: DirectoryEntry[] = [
+  { icon: 'training', path: '/smr-acquisition', name: 'SMR 分组采集与训练', description: '四方向随机采集；组间保存、训练分类头、评估并选择模型，再继续下一组。', requirement: '可演示；自动训练需真实 EEG 与本地冻结 REVE 四分类模型。' },
   { icon: 'cursor', path: '/smr', name: 'SMR 采集与光标控制', description: '切换普通 SMR 或全屏 SMR；包含个体化适配、方向采集、训练与验证。', requirement: '普通模式可预览；全屏 SMR 采集需真实 EEG 与对应模型。' },
   { icon: 'calibrate', path: '/tetris-adapt', name: '方块 SMR 适配', description: '左右、旋转、下落动作练习与窄井任务；脚想象只采标签。', requirement: '四分类头保持冻结。' },
   { icon: 'signal', path: '/gaze-smr-tetris', name: '全屏 SMR 俄罗斯方块', description: '使用 REVE 方向头控制方块：左移、右移、旋转、软降。', requirement: '真实 EEG；本被试的 gaze_smr 头。' },
 ]
 
 export const tools: DirectoryEntry[] = [
+  { icon: 'signal', path: '/jaw-clench', name: '咬牙与放松采集', description: '全屏提示咬牙／放松，等量随机录制 EEG 与二分类标签。', requirement: '可预览；录制需真实 EEG，无需模型。' },
   { icon: 'signal', path: '/acquisition', name: '采集调试', description: '设备连接、开流、波形、频谱、阻抗与通道配置。', requirement: 'OmniBCI / 博睿康 / BCIGo' },
   { icon: 'database', path: '/recordings', name: '会话库', description: '查看实际录制，编辑备注、下载与删除会话。', requirement: '读取本地 recordings 目录' },
   { icon: 'training', path: '/training', name: '数据导出与 Linear Probing', description: '从录制导出 H5，训练冻结 REVE 的线性头并查看评估。', requirement: '需配套后端与训练依赖' },

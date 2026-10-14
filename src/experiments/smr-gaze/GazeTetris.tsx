@@ -71,7 +71,7 @@ export function GazeTetrisPage({ eyeOnly = false }: { eyeOnly?: boolean }) {
       logger.log('session_start',{ protocol:`${experiment}-v1`,mode:'game',seed,channels,sampleRate:hz,
         decoder:eyeOnly?'eeg-gaze-regularized-diagonal-lda':'reve-lp',modelRevision:model?.modelRevision,headId:eyeOnly?null:headId || 'gaze_smr_active.pt',
         eyeModelCreatedAt:eye?.createdAt,activeClasses:model?.activeClasses ?? DIRECTIONS,predictionVisible:true,
-        instructions:eyeOnly?'注视希望操作的方向，无需运动想象':'注视方向并做对应运动想象：左手/右手/双手/休息',
+        instructions:eyeOnly?'注视希望操作的方向，无需运动想象':'注视方向并做对应运动想象：左手/右手/舌头/休息',
         actions:{left:'left',right:'right',up:'rotate',down:'softDrop'},labelsAre:'decoded_game_actions_not_ground_truth' })
       setGame(next); setRunning(true); setPaused(false); setNotice('注视中央准备 3 秒')
     } catch(e) {
@@ -128,7 +128,7 @@ export function GazeTetrisPage({ eyeOnly = false }: { eyeOnly?: boolean }) {
   return <main className="gaze-tetris-page">
     <nav><Link to="/tetris">协作 Tetris（下→静止）</Link> · <Link to="/smr-gaze">← 全屏 SMR 采集</Link> · <Link to={eyeOnly?'/gaze-smr-tetris':'/gaze-tetris'}>{eyeOnly?'全屏 SMR 版':'纯眼动版'}</Link></nav>
     <h1>{eyeOnly?'眼动版':'全屏 SMR'}俄罗斯方块</h1>
-    <p>{eyeOnly?'使用已保存的 EEG 眼动 LDA，注视方向即可；无需运动想象。':'REVE＋LP：左手→左移，右手→右移，双手→旋转，休息→下落，同时注视对应方向。'}</p>
+    <p>{eyeOnly?'使用已保存的 EEG 眼动 LDA，注视方向即可；无需运动想象。':'REVE＋LP：左手→左移，右手→右移，舌头→旋转，休息→下落，同时注视对应方向。'}</p>
     <p>左右二分类模型只控制左右；旋转与下落可用下方按钮。游戏操作单独记录，不当作采集指令标签。</p>
     <LiveEegBadge />
     {!eyeOnly && <ModelHeadPicker task="gaze_smr" disabled={running || busy} />}

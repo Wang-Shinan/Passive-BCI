@@ -10,7 +10,7 @@ import {
   type TemporalFilterConfig,
 } from './temporalEvidence'
 
-const NAMES = ['left_hand', 'right_hand', 'both_hand', 'rest']
+const NAMES = ['left_hand', 'right_hand', 'tongue', 'rest']
 
 function oneHotish(label: number, confidence: number, k = 4): number[] {
   const rest = (1 - confidence) / Math.max(1, k - 1)

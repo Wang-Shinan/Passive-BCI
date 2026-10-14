@@ -1,4 +1,5 @@
 import { operationGate } from './vite.operation-gate.ts'
+import { parseOmniModelSource, type OmniModelSource } from './vite.omni-source.ts'
 import { readGazeHead } from './vite.gaze-heads.ts'
 import type { GazeModelReport } from './src/lib/model-runtime/modelServiceTypes.ts'
 /**
@@ -24,6 +25,7 @@ import { listModelHeads, selectModelHead, modelHeadArgs } from './vite.model-hea
 export type ModelServiceBackend = 'reve' | 'mock'
 
 interface ManagedService {
+  omniSourceKey?: string
   configurationKey?: string | null
   modelRevision?: string | null
   gazeReport?: GazeModelReport | null
@@ -60,7 +62,7 @@ export interface EnsureResult {
 }
 
 const PORT = 8768
-const READY_PATTERN = /\[model-service\].*waiting for Passive BCI windows/i
+const READY_PATTERN = /\[model-service\].*waiting for (?:Passive BCI|Omni SDK) windows/i
 const TIMEOUT_MS: Record<ModelServiceBackend, number> = {
   reve: 180_000,
   mock: 25_000,
@@ -325,6 +327,7 @@ export function modelServiceManagerPlugin(): Plugin {
     task: string,
     stepSec: number,
     headId: string | null,
+    omniSource: OmniModelSource | null = null,
   ): Promise<EnsureResult> {
     if (state.starting) {
       return snapshot({ ok: false, message: '模型正在加载，请等待完成后再切换线性头' })
@@ -344,6 +347,8 @@ export function modelServiceManagerPlugin(): Plugin {
       const alive = Boolean(state.child && state.child.exitCode === null && !state.child.killed)
 
       const wantedTask = backend === 'reve' ? task : null
+      if (omniSource && backend !== 'reve') throw new Error('SDK 模型直连需要 REVE')
+      const omniSourceKey = JSON.stringify(omniSource)
       const hopOk = backend !== 'reve' || hopMatches(state.stepSec, stepSec)
       if (
         listening &&
@@ -351,6 +356,7 @@ export function modelServiceManagerPlugin(): Plugin {
         state.owned &&
         state.backend === backend &&
         state.task === wantedTask &&
+        (state.omniSourceKey ?? 'null') === omniSourceKey &&
         (state.headId ?? null) === (selected?.id ?? null) &&
         (state.configurationKey ?? null) === (selected?.configurationKey ?? null) &&
         hopOk &&
@@ -396,6 +402,7 @@ export function modelServiceManagerPlugin(): Plugin {
       state.logBuf = ''
       state.backend = backend
       state.task = wantedTask
+      state.omniSourceKey = omniSourceKey
       state.stepSec = backend === 'reve' ? stepSec : null
       state.headId = selected?.id ?? null
       state.configurationKey = selected?.configurationKey ?? null
@@ -408,6 +415,9 @@ export function modelServiceManagerPlugin(): Plugin {
       )
 
       const spawnArgs = [scriptPath, '--backend', backend]
+      if (omniSource) spawnArgs.push('--omni-relay', '--omni-endpoint', omniSource.endpoint, '--omni-channels', omniSource.channelNames.join(','))
+      if (omniSource?.electrodeNames) spawnArgs.push('--omni-electrodes', omniSource.electrodeNames.join(','))
+      if (omniSource?.electrodePositions) spawnArgs.push('--omni-positions', JSON.stringify(omniSource.electrodePositions))
       if (backend === 'reve') {
         spawnArgs.push('--task', task)
         spawnArgs.push('--step-sec', String(stepSec))
@@ -588,6 +598,7 @@ export function modelServiceManagerPlugin(): Plugin {
             parseReveTask(body.task),
             parseStepSec(body.stepSec ?? body.step_sec, parseReveTask(body.task)),
             typeof body.headId === 'string' && body.headId ? body.headId : null,
+            parseOmniModelSource(body.omniSource),
           )
           sendJson(res, result.ok ? 200 : 409, result)
           return

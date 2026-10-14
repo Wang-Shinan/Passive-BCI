@@ -97,8 +97,8 @@ describe('targets', () => {
 })
 
 describe('REVE bars', () => {
-  it('maps both_hand / rest onto the vertical axis', () => {
-    const names = ['left_hand', 'right_hand', 'both_hand', 'rest']
+  it('maps tongue / rest onto the vertical axis', () => {
+    const names = ['left_hand', 'right_hand', 'tongue', 'rest']
     const up = udBars(names, [0.05, 0.05, 0.8, 0.1])
     const down = udBars(names, [0.05, 0.05, 0.1, 0.8])
     expect(up.up).toBeCloseTo(0.8)
@@ -109,7 +109,7 @@ describe('REVE bars', () => {
   })
 
   it('still reads up/down when left/right dominate the softmax', () => {
-    const names = ['left_hand', 'right_hand', 'both_hand', 'rest']
+    const names = ['left_hand', 'right_hand', 'tongue', 'rest']
     const up = udBars(names, [0.45, 0.4, 0.12, 0.03])
     const down = udBars(names, [0.42, 0.43, 0.03, 0.12])
     const tie = udBars(names, [0.4, 0.4, 0.1, 0.1])

@@ -10,11 +10,58 @@ import {
   scoreHint,
   scoresByTask,
   startSession,
+  groupedPlan,
+  resumeGroup,
 } from './engine'
 import { canLabelSmrHead, labelIndexForTarget } from './labels'
 import type { TrialOutcome } from './smrControl'
+import { reveCursorAxes } from './smrControl'
+
+it('requires tongue imagery and never relabels the former both-hand class', () => {
+  expect(canLabelSmrHead(['left_hand', 'right_hand', 'tongue', 'rest'])).toBe(true)
+  expect(labelIndexForTarget(['left_hand', 'right_hand', 'tongue', 'rest'], 'up')).toBe(2)
+  for (const oldName of ['both_hand', 'both_hands', 'both-hand', 'bothhands']) {
+    expect(canLabelSmrHead(['left_hand', 'right_hand', oldName, 'rest'])).toBe(false)
+    expect(labelIndexForTarget(['left_hand', 'right_hand', oldName, 'rest'], 'up')).toBeNull()
+    expect(reveCursorAxes(['left_hand', 'right_hand', oldName, 'rest'], [0.1, 0.1, 0.1, 0.7])).toEqual({ zH: 0, zV: 0 })
+  }
+})
 
 describe('session plan', () => {
+  it('randomizes reproducibly with exactly equal directions within each group', () => {
+    const plan = groupedPlan(3, 20)
+    const trials = buildTrials(plan, 42)
+    expect(trials).toEqual(buildTrials(plan, 42))
+    expect(trials).not.toEqual(buildTrials(plan, 43))
+    for (const run of [1, 2, 3]) {
+      const group = trials.filter(t => t.run === run)
+      expect(group).toHaveLength(20)
+      expect(group.slice(0, 10).every(t => t.task === 'LR' && ['left', 'right'].includes(t.target))).toBe(true)
+      expect(group.slice(10).every(t => t.task === 'UD' && ['up', 'down'].includes(t.target))).toBe(true)
+      for (const direction of ['left', 'right', 'up', 'down']) {
+        expect(trials.filter(t => t.run === run && t.target === direction)).toHaveLength(5)
+      }
+    }
+    expect(() => groupedPlan(1, 7)).toThrow()
+    expect(() => groupedPlan(0, 20)).toThrow()
+    expect(buildTrials(PLANS.grouped, 42).every(t => t.task !== '2D')).toBe(true)
+  })
+
+  it('cannot advance across a group boundary without explicit resume', () => {
+    let session = createSession(groupedPlan(2, 4), 42)
+    session = { ...session, cursor: 3, phase: 'post' }
+    session = advancePhase(session, 100)
+    expect(session.phase).toBe('rest')
+    expect(currentTrial(session)?.run).toBe(2)
+    expect(advancePhase(session, 99999)).toEqual(session)
+    session = resumeGroup(session, 100000)
+    expect(session.phase).toBe('iti')
+    expect(session.phaseStartedAt).toBe(100000)
+    session = advancePhase({ ...session, cursor: 7, phase: 'post' }, 101000)
+    expect(session.phase).toBe('done')
+    expect(resumeGroup(session, 102000)).toEqual(session)
+  })
+
   it('builds balanced LR/UD trials for the quick plan', () => {
     const trials = buildTrials(PLANS.quick, 7)
     expect(trials).toHaveLength(40)
@@ -80,7 +127,7 @@ describe('session plan', () => {
 
 describe('REVE label mapping', () => {
   it('matches Stieger classes onto common MI names', () => {
-    const names = ['left_hand', 'right_hand', 'both_hand', 'rest']
+    const names = ['left_hand', 'right_hand', 'tongue', 'rest']
     expect(canLabelSmrHead(names)).toBe(true)
     expect(labelIndexForTarget(names, 'left')).toBe(0)
     expect(labelIndexForTarget(names, 'up')).toBe(2)

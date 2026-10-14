@@ -53,17 +53,20 @@ function ModelServiceLaunchBar({
   const proc = useAppliedModel()
   const [launchError, setLaunchError] = useState('')
   const [heads, setHeads] = useState<ModelHeadOption[]>([])
-  const [headsLoading, setHeadsLoading] = useState(false)
+  const [headsLoading, setHeadsLoading] = useState(true)
   const [headsError, setHeadsError] = useState('')
   const task = reveTask ?? 'passive_rating'
   const { headId: selectedHead, recording, busy: operationBusy } = useModelConfiguration(task)
   const taskHeads = heads.filter((head) => head.task === task || !head.task)
   const selectedOption = heads.find((head) => head.id === selectedHead && head.task === task)
-  const invalidHead = Boolean(selectedHead && (!selectedOption || !selectedOption.available))
+  const invalidHead = Boolean(!headsLoading && !headsError && selectedHead && (!selectedOption || !selectedOption.available))
   const refreshHeads = async (signal?: AbortSignal) => {
     setHeadsLoading(true)
     setHeadsError('')
-    try { setHeads(await fetchModelHeads(signal)) }
+    try {
+      const result = await fetchModelHeads(signal)
+      if (!signal?.aborted) setHeads(result)
+    }
     catch (error) { if (!signal?.aborted) setHeadsError(error instanceof Error ? error.message : String(error)) }
     finally { if (!signal?.aborted) setHeadsLoading(false) }
   }
@@ -71,7 +74,7 @@ function ModelServiceLaunchBar({
     const controller = new AbortController()
     void refreshHeads(controller.signal)
     return () => controller.abort()
-  }, [])
+  }, [selectedHead, task])
 
   const refresh = async (signal?: AbortSignal) => {
     try {
@@ -136,6 +139,7 @@ function ModelServiceLaunchBar({
   )
   const canStop = Boolean(proc?.owned || proc?.starting || operationBusy || busy)
   const starting = busy || operationBusy || Boolean(proc?.starting)
+  const defaultHeadLabel = task === 'smr_control' ? 'LoRA 自带线性头' : '默认配置'
   const loadedId = proc?.headId || ''
   const desiredId = selectedHead || (task === 'gaze_smr' ? 'gaze_smr_active.pt' : '')
   const pendingSelection = Boolean(proc?.running && (proc.task !== task || desiredId !== loadedId || (selectedOption?.configurationKey && selectedOption.configurationKey !== proc.configurationKey)))
@@ -145,7 +149,7 @@ function ModelServiceLaunchBar({
       <div className="flex flex-wrap items-center gap-2">
         <div style={{ minWidth: 220, maxWidth: '100%' }}>
           <HeadSelector heads={heads} task={task} value={selectedHead} disabled={recording || starting || headsLoading}
-            defaultLabel={task === 'gaze_smr' ? '当前激活 gaze 头及其报告' : '默认配置'}
+            defaultLabel={task === 'gaze_smr' ? '当前激活 gaze 头及其报告' : task === 'smr_control' ? 'LoRA 自带线性头（新被试默认）' : '默认配置'}
             onChange={(value) => {
               try { selectModelHeadPreference(task, value); setLaunchError('') }
               catch (error) { setLaunchError(String(error)) }
@@ -189,11 +193,11 @@ function ModelServiceLaunchBar({
             : details?.message || '开发服务可一键拉起本地模型'}
         </span>
       </div>
-      <p className="muted m-0 text-xs">已运行：{proc?.running ? proc?.headId || proc?.loadedHead || '默认模型' : '未运行'}。待应用：{selectedHead || '默认配置'}。{pendingSelection ? '选择尚未生效；点击应用后切换。' : '选择后点击启动按钮生效。'}</p>
+      <p className="muted m-0 text-xs">已运行：{proc?.running ? proc?.headId || proc?.loadedHead || defaultHeadLabel : '未运行'}。待应用：{selectedHead || defaultHeadLabel}。{pendingSelection ? '选择尚未生效；点击应用后切换。' : '选择后点击启动按钮生效。'}</p>
       {recording && <p role="status" className="muted m-0 text-xs">录制中：任务、模型和连接地址已锁定。停止服务会中断脑控，但不会删除录制。</p>}
       {selectedOption && <p className="muted m-0 text-xs">配套编码器：{selectedOption.encoderId} · {selectedOption.classes} 类。启动时自动匹配。</p>}
       {!headsLoading && !taskHeads.length && <p className="muted m-0 text-xs">当前任务暂无已保存线性头。将文件放入 recordings/.reve-heads 后刷新列表。</p>}
-      {(headsError || invalidHead) && <p className="m-0 text-xs" style={{ color: 'var(--danger)' }}>{headsError || selectedOption?.reason || '所选线性头不可用，请重新选择。'}</p>}
+      {(headsError || invalidHead) && <p className="m-0 text-xs" style={{ color: 'var(--danger)' }}>{headsError || selectedOption?.reason || '当前任务的列表中未找到所选分类头，请刷新列表或重新选择。'}</p>}
       {reveTask === 'smr_control' ? (
         <p className="m-0 text-xs" style={{ color: 'var(--warn)' }}>
           SMR 头冻结，不在线微调。光标仍可由 REVE 驱动。
@@ -304,6 +308,7 @@ export function ModelServicePanel({
         </span>
       </div>
 
+      {state.serviceHello?.warning && <p role="status" style={{ color: 'var(--warn)' }}>{state.serviceHello.warning}</p>}
       <div className={`${embedded ? 'grid gap-2 text-sm' : 'acq-statusbar'}`} style={{ position: 'static' }}>
         <span>
           模型 <strong>{state.serviceHello?.model_name ?? '—'}</strong>
@@ -327,7 +332,7 @@ export function ModelServicePanel({
           丢弃 <strong>{state.droppedWindows}/{state.droppedSourceBatches}</strong>
         </span>
         <span>
-          P50/P95 <strong>{latency(state.p50LatencyMs)} / {latency(state.p95LatencyMs)}</strong>
+          {state.serviceHello?.input_source === 'omni-sdk' ? 'SDK交付→推理' : '预处理与推理'} P50/P95 <strong>{latency(state.p50LatencyMs)} / {latency(state.p95LatencyMs)}</strong>
         </span>
         <span>
           预测{' '}

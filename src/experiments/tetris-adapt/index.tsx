@@ -700,7 +700,7 @@ export function TetrisAdaptPage({ autoStartModel = true }: { autoStartModel?: bo
           <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">方块 SMR 适配</h1>
           <p className="muted mt-1 max-w-2xl text-sm">
             完整井里先练左移、右移、旋转、下落，再采脚想象（速降，只打标签不控方块），然后在宽 5 / 宽 7 窄井上把红色落点叠到教师绿影。
-            左手← 右手→ 双手↻ 休息↓ 双脚速降。SMR 头仍是四分类，脚想象先只录 EEG。
+            左手← 右手→ 舌头↻ 休息↓ 双脚速降。SMR 头仍是四分类，脚想象先只录 EEG。
             {' · '}
             <Link to="/tetris" className="hover:text-[var(--text)]">
               去调试/对局页
@@ -905,7 +905,7 @@ export function TetrisAdaptPage({ autoStartModel = true }: { autoStartModel?: bo
         <p className="muted mt-0 text-sm">
           {cursorDrive === 'features'
             ? '按 C3/C4 Laplacian mu 驱动方块。没有特征时演示会自己靠近目标。SMR 头冻结，本页不向 REVE 打标签。'
-            : '由已拟合的 REVE 四分类驱动（左← 右→ 双手↻ 休息↓）。脚想象（feet → 速降）只写入 events，不进控制。没有预测时回退 C3/C4 mu。SMR 头冻结，不在线微调。'}
+            : '由已拟合的 REVE 四分类驱动（左← 右→ 舌头↻ 休息↓）。脚想象（feet → 速降）只写入 events，不进控制。没有预测时回退 C3/C4 mu。SMR 头冻结，不在线微调。'}
         </p>
         <p className="text-sm">
           当前预测 <strong>{runtime.latestPrediction?.class_name ?? '—'}</strong>

@@ -3,7 +3,7 @@ export type { ModelServiceBackend, ModelServiceEnsureResult, ModelHeadOption, Ga
 import { acqRuntime } from '../../acquisition/runtime'
 import { sessionHub } from '../session/sessionHub'
 import { modelOperation } from './modelOperation'
-import { preferredModelHead, saveModelHeadPreference } from './modelHeadPreference'
+import { currentModelSubject, preferredModelHead, saveModelHeadPreference } from './modelHeadPreference'
 export { preferredModelHead, subscribeModelHeadPreference } from './modelHeadPreference'
 
 let appliedModel: ModelServiceEnsureResult | null = null
@@ -63,7 +63,10 @@ export async function ensureModelService(options?: {
   signal?: AbortSignal
 }): Promise<ModelServiceEnsureResult> {
   if (modelConfigurationLocked()) throw new Error('录制期间不能启动、替换模型或改变步长；请先结束录制')
-  const headId = options?.headId ?? preferredModelHead(options?.task)
+  const subjectId = currentModelSubject()
+  const headId = options?.headId ?? preferredModelHead(options?.task, subjectId)
+  const sdkSource = options?.backend !== 'mock' && acqRuntime.device === 'omni' && acqRuntime.omniLink === 'sdk'
+  if (sdkSource && !acqRuntime.omni) throw new Error('请先在采集调试页连接 SDK BLE 设备')
   let epoch = mutationEpoch
   const result = await modelOperation.run(async signal => {
     epoch = ++mutationEpoch
@@ -73,6 +76,8 @@ export async function ensureModelService(options?: {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ backend: options?.backend ?? 'reve', task: options?.task,
         headId: options?.backend === 'mock' ? undefined : headId,
+        ...(sdkSource ? { omniSource: { endpoint: acqRuntime.omniSdkEndpoint, channelNames: acqRuntime.omniSdkChannelNames,
+          electrodeNames: acqRuntime.omniElectrodeNames, electrodePositions: acqRuntime.omniElectrodePositions } } : {}),
         stepSec: options?.stepSec, force: options?.force === true }), signal,
     })
     const body = await parseResult(res)
@@ -81,6 +86,10 @@ export async function ensureModelService(options?: {
   }, options?.signal)
   if (epoch !== mutationEpoch) throw new DOMException('模型操作已取消', 'AbortError')
   publishAppliedModel(result)
+  if (options?.task === 'smr_control' && options.backend !== 'mock') {
+    try { saveModelHeadPreference(options.task, headId, subjectId) }
+    catch (error) { console.warn(error) }
+  }
   return result
 }
 

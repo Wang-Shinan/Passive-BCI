@@ -5,8 +5,8 @@ import { fetchSessionList, type SessionSummary } from '../recordings/api'
 import { fetchModelHeads, type ModelHeadOption } from '../lib/model-runtime/modelServiceApi'
 import { HeadSelector } from '../lib/model-runtime/HeadSelector'
 
-type Job = { id: string; kind: 'export' | 'fit'; status: string; startedAt: string; error?: string; config: Record<string, unknown> }
-type Report = { shape?: number[]; classNames?: string[]; counts?: number[]; headId?: string; splitBy?: string
+type Job = { id: string; kind: 'export' | 'fit' | 'lora'; status: string; startedAt: string; error?: string; config: Record<string, unknown> }
+type Report = { shape?: number[]; classNames?: string[]; counts?: number[]; headId?: string; splitBy?: string; skipped?: boolean; reason?: string
   metrics?: Record<string, { count: number; accuracy: number; balancedAccuracy: number; confusion: number[][] }> }
 type Detail = { job: Job; log: string; report: Report | null }
 async function api<T>(url: string, body?: object): Promise<T> {
@@ -126,7 +126,7 @@ export function TrainingPage() {
     </div>
     <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_2fr]">
       <Panel title="任务历史">
-        <div className="max-h-96 space-y-2 overflow-auto">{jobs.map(job => <button key={job.id} className="btn block w-full text-left" onClick={() => { setSelectedJob(job.id); setDetail(null) }}>{job.kind === 'export' ? 'H5 导出' : 'Linear probing'} · {STATUS[job.status]}<span className="muted block text-xs">{new Date(job.startedAt).toLocaleString()} · {job.id.slice(0, 8)}</span></button>)}</div>
+        <div className="max-h-96 space-y-2 overflow-auto">{jobs.map(job => <button key={job.id} className="btn block w-full text-left" onClick={() => { setSelectedJob(job.id); setDetail(null) }}>{job.kind === 'export' ? 'H5 导出' : job.kind === 'lora' ? '轮末 LoRA' : 'Linear probing'} · {STATUS[job.status]}<span className="muted block text-xs">{new Date(job.startedAt).toLocaleString()} · {job.id.slice(0, 8)}</span></button>)}</div>
       </Panel>
       <Panel title="日志与结果">
         {!detail ? <p className="muted">选择任务查看。</p> : <>
@@ -134,9 +134,13 @@ export function TrainingPage() {
             <span className="chip">{STATUS[detail.job.status]}</span>
             {detail.job.status === 'running' && <button className="btn" disabled={submitting} onClick={() => void cancel()}>取消任务</button>}
             <a className="btn" href={artifact('log.txt')}>下载日志</a>
-            {detail.job.status === 'complete' && <><a className="btn" href={artifact('report.json')}>下载报告</a><a className="btn" href={artifact(detail.job.kind === 'export' ? 'dataset.h5' : 'head.pt')}>下载{detail.job.kind === 'export' ? ' H5' : '线性头'}</a></>}
+            {detail.job.status === 'complete' && <><a className="btn" href={artifact('report.json')}>下载报告</a>{!detail.report?.skipped && <>
+              <a className="btn" href={artifact(detail.job.kind === 'export' ? 'dataset.h5' : 'head.pt')}>下载{detail.job.kind === 'export' ? ' H5' : '分类头'}</a>
+              {detail.job.kind === 'lora' && <a className="btn" href={artifact('adapter.pt')}>下载配套 LoRA</a>}
+            </>}</>}
           </div>
           {detail.job.error && <p className="text-red-400">{detail.job.error}</p>}
+          {detail.report?.skipped && <p>{detail.report.reason}</p>}
           {detail.report?.shape && <p>H5 形状：{detail.report.shape.join(' × ')}（窗口 × 通道 × 采样点）</p>}
           {detail.report?.counts && <p>各类窗口数：{detail.report.classNames?.map((name, i) => `${name}: ${detail.report!.counts![i]}`).join(' · ')}</p>}
           {detail.report?.metrics && <div className="grid gap-3 sm:grid-cols-3">{Object.entries(detail.report.metrics).map(([name, metric]) => <div className="panel p-3" key={name}><strong>{name}</strong><p>{metric.count} 个窗口</p><p>正确率 {(metric.accuracy * 100).toFixed(1)}%</p><p>平衡正确率 {(metric.balancedAccuracy * 100).toFixed(1)}%</p></div>)}</div>}

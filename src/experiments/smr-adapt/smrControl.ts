@@ -1,4 +1,5 @@
 /** Stieger-style SMR cursor: C3/C4 Laplacian alpha → 2D velocity. */
+import { canLabelSmrHead } from './labels'
 
 export const SMR_WINDOW_SEC = 0.16
 export const SMR_ALPHA_CENTER_HZ = 12
@@ -205,7 +206,7 @@ export function smrFeatures(pC3: number, pC4: number): { horiz: number; vert: nu
 
 const RIGHT_NAMES = new Set(['right_hand', 'right'])
 const LEFT_NAMES = new Set(['left_hand', 'left'])
-const UP_NAMES = new Set(['both_hand', 'both_hands', 'both', 'up'])
+const UP_NAMES = new Set(['tongue', 'up'])
 const DOWN_NAMES = new Set(['rest', 'down', 'idle'])
 
 export type SmrClassMasses = {
@@ -219,6 +220,9 @@ export function smrClassMasses(
   classNames: readonly string[],
   probabilities: readonly number[],
 ): SmrClassMasses {
+  if (!canLabelSmrHead(classNames) || classNames.length !== probabilities.length) {
+    return { left: 0, right: 0, up: 0, down: 0 }
+  }
   let left = 0
   let right = 0
   let up = 0

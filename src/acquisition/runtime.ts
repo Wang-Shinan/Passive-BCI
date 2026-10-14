@@ -21,7 +21,7 @@ import {
 } from './liveCatchup'
 
 export type DeviceKind = 'omni' | 'neuracle' | 'bcigo'
-export type OmniLink = 'usb' | 'api'
+export type OmniLink = 'usb' | 'api' | 'sdk'
 export type ConnUi = 'idle' | 'connecting' | 'open' | 'streaming' | 'error' | 'unsupported' | 'demo'
 
 export type BridgeBatch = {
@@ -30,6 +30,8 @@ export type BridgeBatch = {
   channels: number
   sampleRate: number
   channelNames: string[]
+  electrodeNames?: string[]
+  electrodePositions?: number[][]
   unit: string
   packetLoss: number
   packetCount: number
@@ -62,6 +64,10 @@ export const acqRuntime = {
   bcigo: null as BcigoWsClient | null,
   omni: null as OmniWsClient | null,
   omniLink: 'api' as OmniLink,
+  omniSdkEndpoint: '',
+  omniSdkChannelNames: [] as string[],
+  omniElectrodeNames: undefined as string[] | undefined,
+  omniElectrodePositions: undefined as number[][] | undefined,
   streaming: false,
   lsb: channelLsbUv(defaultChannelConfig().gains),
   device: 'omni' as DeviceKind,

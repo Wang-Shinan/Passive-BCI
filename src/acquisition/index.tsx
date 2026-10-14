@@ -16,6 +16,7 @@ import {
   type OmniStreamKind,
 } from './omni/client'
 import { sequenceGaps } from './omni/protocol'
+import { omniElectrodePositions } from './omni/positions'
 import {
   CMD_START,
   CMD_STOP,
@@ -49,7 +50,7 @@ import { FftCanvas } from './FftCanvas'
 import { ImpedancePanel } from './ImpedancePanel'
 import { FeaturePanel } from './FeaturePanel'
 import { ChannelRail, ChannelSettingsDialog } from './ChannelRail'
-import { ensureBridge, probeNeuracleForward, probeOmniApi } from './bridgeApi'
+import { ensureBridge, probeNeuracleForward, probeOmniApi, discoverOmniSdk, type OmniSdkDevice } from './bridgeApi'
 import {
   acqRuntime,
   beginRawBridgeStream,
@@ -147,13 +148,13 @@ function isBridgeDevice(d: DeviceKind): boolean {
 }
 
 function usesBridgeStream(d: DeviceKind, omniLink: OmniLink): boolean {
-  return isBridgeDevice(d) || (d === 'omni' && omniLink === 'api')
+  return isBridgeDevice(d) || (d === 'omni' && omniLink !== 'usb')
 }
 
 function recordPrefix(d: DeviceKind, omniLink: OmniLink): string {
   if (d === 'neuracle') return 'neuracle_eeg'
   if (d === 'bcigo') return 'bcigo_eeg'
-  return omniLink === 'api' ? 'omni_eeg' : 'omni_ads1299'
+  return omniLink !== 'usb' ? 'omni_eeg' : 'omni_ads1299'
 }
 
 function streamingRecordDetail(d: DeviceKind, sink: RecordSinkKind, omniLink: OmniLink): string {
@@ -162,8 +163,8 @@ function streamingRecordDetail(d: DeviceKind, sink: RecordSinkKind, omniLink: Om
       ? '强脑 EEG'
       : d === 'neuracle'
         ? '博睿康 EEG'
-        : omniLink === 'api'
-          ? 'OmniBCI V19 μV'
+        : omniLink !== 'usb'
+          ? `OmniBCI ${omniLink === 'sdk' ? 'SDK BLE' : 'LSL'} μV`
           : '原始 48 字节帧'
   if (sink === 'disk') {
     return `采集中：${src} 边采边写入 recordings/<会话>/（原始 EEG + 游戏事件）。`
@@ -218,7 +219,11 @@ function bcigoWsUrl(): string {
   return `${proto}//${window.location.host}/ws/bcigo`
 }
 
-function omniWsUrl(): string {
+function omniWsUrl(sdk = false): string {
+  if (sdk) {
+    if (typeof window === 'undefined') return 'ws://127.0.0.1:8772/v1/stream'
+    return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/omni-sdk`
+  }
   if (typeof window === 'undefined') return `ws://127.0.0.1:${OMNI_API_PORT}/v1/stream`
   const host = window.location.hostname
   if (host === 'localhost' || host === '127.0.0.1') {
@@ -229,11 +234,11 @@ function omniWsUrl(): string {
 }
 
 function loadOmniLink(): OmniLink {
-  if (acqRuntime.omni) return 'api'
+  if (acqRuntime.omni) return acqRuntime.omniLink
   if (acqRuntime.transport.connected) return 'usb'
   try {
     const v = localStorage.getItem(OMNI_LINK_STORAGE_KEY)
-    if (v === 'usb' || v === 'api') return v
+    if (v === 'usb' || v === 'api' || v === 'sdk') return v
   } catch {
     /* ignore */
   }
@@ -252,6 +257,7 @@ function deviceDetail(d: DeviceKind, supported: boolean, omniLink: OmniLink = 'a
   if (d === 'bcigo') {
     return '连接强脑 BCIGo Wi‑Fi（点连接会自动启动本机桥接；基于 bcigo-sdk）。'
   }
+  if (omniLink === 'sdk') return '搜索并选择 ESP32 BLE 设备后连接，再点开始采集查看波形和录制。电极位置可稍后填写。'
   if (omniLink === 'api') {
     return '先在 OmniBCI 中开始测量并启用 LSL，再点连接。本页会自动启动 LSL 桥接并订阅 EEG 流。'
   }
@@ -280,6 +286,12 @@ function loadSavedConfig(): ChannelConfig {
         return (VALID_GAINS as readonly number[]).includes(g) ? g : 24
       }),
       labels,
+      electrodeNames: Array.isArray(parsed.electrodeNames)
+        ? Array.from({ length: CHANNELS }, (_, i) => String(parsed.electrodeNames?.[i] ?? '').trim())
+        : undefined,
+      positionMode: parsed.positionMode === 'cartesian' || parsed.positionMode === 'spherical' ? parsed.positionMode : 'standard',
+      positionCoordinates: Array.isArray(parsed.positionCoordinates) ? Array.from({ length: CHANNELS }, (_, i) =>
+        Array.from({ length: 3 }, (_, j) => String(parsed.positionCoordinates?.[i]?.[j] ?? ''))) : undefined,
       reference:
         Number(parsed.reference) === REFERENCE_SRB2 ? REFERENCE_SRB2 : REFERENCE_SRB1,
     }
@@ -314,6 +326,25 @@ export function AcquisitionDebugPage() {
   const [omniLink, setOmniLink] = useState<OmniLink>(() => loadOmniLink())
   const [omniStream, setOmniStream] = useState<OmniStreamKind>(() => loadOmniStream())
   const [omniProbe, setOmniProbe] = useState('')
+  const [sdkDevices, setSdkDevices] = useState<OmniSdkDevice[]>([])
+  const [sdkSearching, setSdkSearching] = useState(false)
+  const [sdkEndpoint, setSdkEndpoint] = useState(() => acqRuntime.omniSdkEndpoint || localStorage.getItem('passive-bci.omni-sdk-endpoint') || '')
+  const [sdkMessage, setSdkMessage] = useState('')
+  const searchSdk = async () => {
+    setSdkSearching(true)
+    setSdkMessage('正在搜索附近的 BLE 设备…')
+    try {
+      const found = await discoverOmniSdk()
+      setSdkDevices(found)
+      if (!found.some(d => d.endpoint === sdkEndpoint)) setSdkEndpoint(found.find(d => /omni/i.test(d.name))?.endpoint ?? '')
+      setSdkMessage(found.length ? `发现 ${found.length} 台设备，请选择后连接。` : '未发现设备，请确认已开机并开启蓝牙。')
+    } catch (error) { setSdkMessage(error instanceof Error ? error.message : String(error)) }
+    finally { setSdkSearching(false) }
+  }
+  useEffect(() => {
+    acqRuntime.omniSdkEndpoint = sdkEndpoint
+    localStorage.setItem('passive-bci.omni-sdk-endpoint', sdkEndpoint)
+  }, [sdkEndpoint])
   const [status, setStatus] = useState<ConnUi>(() => {
     if (acqRuntime.status !== 'idle') return acqRuntime.status
     if (device === 'omni' && loadOmniLink() === 'usb') return supported ? 'idle' : 'unsupported'
@@ -1048,6 +1079,8 @@ export function AcquisitionDebugPage() {
   }
 
   const connectOmniApi = () => {
+    const sdk = omniLink === 'sdk'
+    if (sdk && !sdkEndpoint) { setDetail('请先搜索并选择 BLE 设备。'); return }
     void (async () => {
       stopDemo()
       omniRef.current?.disconnect()
@@ -1058,15 +1091,15 @@ export function AcquisitionDebugPage() {
       bcigoRef.current = null
       acqRuntime.bcigo = null
       acqRuntime.device = 'omni'
-      acqRuntime.omniLink = 'api'
+      acqRuntime.omniLink = sdk ? 'sdk' : 'api'
       resetBuffers(CHANNELS)
       acqRuntime.status = 'connecting'
       liveEegHub.configure({ device: 'omni', sampleRate: FS, channelNames: [...cfg.labels] })
-      liveEegHub.markConnecting('正在启动 OmniBCI LSL 桥接…')
+      liveEegHub.markConnecting(sdk ? '正在连接 SDK BLE…' : '正在启动 OmniBCI LSL 桥接…')
       setStatus('connecting')
-      setDetail('正在启动 OmniBCI LSL 桥接…')
+      setDetail(sdk ? '正在连接 SDK BLE…' : '正在启动 OmniBCI LSL 桥接…')
       try {
-        const ensured = await ensureBridge('omni')
+        const ensured = await ensureBridge(sdk ? 'omni-sdk' : 'omni')
         if (ensured.message) setOmniProbe(ensured.message)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -1076,9 +1109,9 @@ export function AcquisitionDebugPage() {
         return
       }
 
-      const labels = cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!)
       const client = new OmniWsClient({
-        url: omniWsUrl(),
+        url: omniWsUrl(sdk),
+        endpoint: sdk ? sdkEndpoint : undefined,
         stream: omniStream,
         onStatus: (s, d) => {
           if (s === 'connecting') {
@@ -1109,6 +1142,7 @@ export function AcquisitionDebugPage() {
           if (d) setDetail(d)
         },
         onHello: (hello: OmniHello) => {
+          const labels = acqRuntime.omniSdkChannelNames
           const names =
             hello.channels.length === labels.length ? labels : hello.channels
           resizeBuffers(names.length, hello.sample_rate)
@@ -1123,9 +1157,9 @@ export function AcquisitionDebugPage() {
           setFeatureHistory([])
           acqRuntime.status = 'open'
           acqRuntime.device = 'omni'
-          acqRuntime.omniLink = 'api'
+          acqRuntime.omniLink = sdk ? 'sdk' : 'api'
           setStatus('open')
-          const msg = `已连接 OmniBCI LSL · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。`
+          const msg = `已连接 OmniBCI ${sdk ? 'SDK BLE' : 'LSL'} · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。`
           liveEegHub.configure({
             device: 'omni',
             sampleRate: hello.sample_rate,
@@ -1141,7 +1175,10 @@ export function AcquisitionDebugPage() {
             samples: batch.samples,
             channels: batch.channels,
             sampleRate: batch.sampleRate,
-            channelNames: batch.channelNames,
+            channelNames: batch.channels === CHANNELS
+              ? [...acqRuntime.omniSdkChannelNames] : batch.channelNames,
+            electrodeNames: batch.channels === CHANNELS ? acqRuntime.omniElectrodeNames : undefined,
+            electrodePositions: batch.channels === CHANNELS ? acqRuntime.omniElectrodePositions : undefined,
             unit: batch.unit,
             packetLoss: batch.packetLoss,
             packetCount: batch.packetCount,
@@ -1361,6 +1398,9 @@ export function AcquisitionDebugPage() {
         sampleRate,
         channels: names.length,
         channelNames: names,
+        ...(device === 'omni' ? { electrodeNames: cfg.electrodeNames?.map(n => n.trim()),
+          electrodePositions: omniElectrodePositions(cfg), positionUnit: 'm', positionFrame: 'reve-position-bank',
+          positionMode: cfg.positionMode ?? 'standard', positionCoordinates: cfg.positionCoordinates } : {}),
       }
     }
     return {
@@ -1370,6 +1410,9 @@ export function AcquisitionDebugPage() {
       sampleRate: FS,
       channels: CHANNELS,
       channelNames: cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!),
+      electrodeNames: cfg.electrodeNames?.map(n => n.trim()),
+      electrodePositions: omniElectrodePositions(cfg), positionUnit: 'm', positionFrame: 'reve-position-bank',
+      positionMode: cfg.positionMode ?? 'standard', positionCoordinates: cfg.positionCoordinates,
     }
   }
 
@@ -1397,7 +1440,7 @@ export function AcquisitionDebugPage() {
     if (acqRuntime.impedanceActive) {
       await stopImpedanceMeasure(true)
     }
-    if (device === 'neuracle' || device === 'bcigo' || (device === 'omni' && omniLink === 'api')) {
+    if (device === 'neuracle' || device === 'bcigo' || (device === 'omni' && omniLink !== 'usb')) {
       const linked =
         device === 'neuracle'
           ? Boolean(neuracleRef.current)
@@ -1500,7 +1543,7 @@ export function AcquisitionDebugPage() {
     setFeatureHistory([])
     const stillLinked =
       device === 'omni'
-        ? omniLink === 'api'
+        ? omniLink !== 'usb'
           ? Boolean(omniRef.current)
           : transportRef.current.connected
         : device === 'neuracle'
@@ -1583,6 +1626,7 @@ export function AcquisitionDebugPage() {
   }
 
   const updateCfg = (patch: Partial<ChannelConfig> | ((c: ChannelConfig) => ChannelConfig)) => {
+    if (recording || status === 'connecting' || status === 'streaming') return
     setCfg((c) => {
       const next = typeof patch === 'function' ? patch(c) : { ...c, ...patch }
       syncLsb(next)
@@ -1602,7 +1646,8 @@ export function AcquisitionDebugPage() {
   }
 
   const omniUsb = device === 'omni' && omniLink === 'usb'
-  const omniApi = device === 'omni' && omniLink === 'api'
+  const omniApi = device === 'omni' && omniLink !== 'usb'
+  const omniSdk = device === 'omni' && omniLink === 'sdk'
   const channelLabels =
     usesBridgeStream(device, omniLink) || status === 'demo'
       ? streamLabels
@@ -1666,7 +1711,7 @@ export function AcquisitionDebugPage() {
       setImpedanceMeasuring(false)
       const linked =
         device === 'omni'
-          ? omniLink === 'api'
+          ? omniLink !== 'usb'
             ? Boolean(omniRef.current)
             : transportRef.current.connected
           : device === 'bcigo'
@@ -1850,8 +1895,12 @@ export function AcquisitionDebugPage() {
   useEffect(() => {
     if (device === 'omni' && status !== 'demo') {
       setStreamLabels(cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!))
+      acqRuntime.omniSdkChannelNames = cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!)
+      acqRuntime.omniElectrodeNames = cfg.electrodeNames?.map(n => n.trim())
+      acqRuntime.omniElectrodePositions = omniElectrodePositions(cfg)
+      if (liveEegHub.meta.device === 'omni' && liveEegHub.meta.channelNames.length === CHANNELS) liveEegHub.configure({ channelNames: acqRuntime.omniSdkChannelNames })
     }
-  }, [cfg.labels, device, status])
+  }, [cfg.labels, cfg.electrodeNames, cfg.positionMode, cfg.positionCoordinates, device, status])
 
   const statusLabel =
     status === 'streaming'
@@ -1955,7 +2004,7 @@ export function AcquisitionDebugPage() {
       <section className="acq-group">
         <div className="acq-group-title">
           {omniApi
-            ? 'OmniBCI V19 控制'
+            ? (omniSdk ? 'OmniBCI SDK BLE' : 'OmniBCI LSL 控制')
             : device === 'omni'
               ? '串口控制'
               : device === 'neuracle'
@@ -1968,6 +2017,7 @@ export function AcquisitionDebugPage() {
             <select
               className="select"
               value={device}
+              aria-label="设备"
               disabled={deviceBusy}
               onChange={(e) => void switchDevice(e.target.value as DeviceKind)}
             >
@@ -1982,15 +2032,17 @@ export function AcquisitionDebugPage() {
               <select
                 className="select"
                 value={omniLink}
+                aria-label="链路"
                 disabled={deviceBusy}
                 onChange={(e) => void switchOmniLink(e.target.value as OmniLink)}
               >
+                <option value="sdk">SDK BLE 直连</option>
                 <option value="api">LSL 桥接</option>
                 <option value="usb">USB 串口</option>
               </select>
             </label>
           ) : null}
-          {omniApi ? (
+          {omniApi && !omniSdk ? (
             <>
               <label className="acq-field">
                 流
@@ -2012,6 +2064,19 @@ export function AcquisitionDebugPage() {
                 </select>
               </label>
               {omniProbe ? <span className="acq-hint">{omniProbe}</span> : null}
+            </>
+          ) : null}
+          {omniSdk ? (
+            <>
+              <button className="btn" disabled={deviceBusy || deviceLinked || sdkSearching} onClick={() => void searchSdk()}>{sdkSearching ? '搜索中…' : '搜索 BLE 设备'}</button>
+              <label className="acq-field">BLE 设备
+                <select className="select" aria-label="BLE 设备" value={sdkEndpoint} disabled={deviceBusy || deviceLinked || sdkSearching} onChange={e => setSdkEndpoint(e.target.value)}>
+                  <option value="">请选择设备</option>
+                  {sdkEndpoint && !sdkDevices.some(d => d.endpoint === sdkEndpoint) ? <option value={sdkEndpoint}>上次设备 · {sdkEndpoint}</option> : null}
+                  {sdkDevices.map(d => <option key={d.endpoint} value={d.endpoint}>{d.name || 'BLE 设备'} · {d.rssi ?? '—'} dBm · {d.endpoint}</option>)}
+                </select>
+              </label>
+              <span className="acq-hint" role="status">{sdkMessage || '电极位置可稍后填写，不影响查看波形和录制。请先关闭占用设备的 OmniBCI 应用连接。'}</span>
             </>
           ) : null}
           {device === 'neuracle' ? (
@@ -2147,7 +2212,7 @@ export function AcquisitionDebugPage() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={deviceBusy || deviceLinked || status === 'demo' || (omniUsb && !supported)}
+            disabled={deviceBusy || deviceLinked || status === 'demo' || (omniUsb && !supported) || (omniSdk && (!sdkEndpoint || sdkSearching))}
             onClick={connectDevice}
           >
             {omniUsb ? '打开串口' : '连接'}
@@ -2203,6 +2268,44 @@ export function AcquisitionDebugPage() {
           ) : null}
           <span className="acq-status">{detail}</span>
         </div>
+        {device === 'omni' ? (
+          <details style={{ marginTop: 8 }}>
+            <summary>通道名称与电极位置（REVE）</summary>
+            <p className="acq-hint">位置按 CH1–CH8 接线顺序填写，例如 C3、C4；无需重命名通道。位置会单独保存并传给 REVE，更改后重新应用模型。暂不填写仍可采集；若未单独设置位置，模型沿用通道名称查找。</p>
+            <label className="acq-field">位置输入
+              <select className="select" aria-label="电极位置输入方式" value={cfg.positionMode ?? 'standard'} disabled={recording || status === 'connecting' || status === 'streaming'}
+                onChange={event => updateCfg({ positionMode: event.target.value as ChannelConfig['positionMode'], positionCoordinates: undefined })}>
+                <option value="standard">标准电极位置</option><option value="cartesian">XYZ 三维坐标（米）</option><option value="spherical">球坐标（角度、米）</option>
+              </select>
+            </label>
+            {cfg.positionMode === 'cartesian' || cfg.positionMode === 'spherical' ? <p className="acq-hint">
+              坐标须与 REVE 位置库使用相同原点、方向和尺度；米制，X 向右、Y 向前、Z 向上，不自动居中或缩放。
+              {cfg.positionMode === 'spherical' ? ' 方位角从 +X 朝 +Y 为正；仰角从 XY 平面朝 +Z 为正（−90°～90°）；半径为到原点的距离（米）。二维头皮图极坐标不能直接填入。' : ''}
+            </p> : null}
+            <div className="acq-bar">
+              {cfg.labels.map((name, index) => (
+                <div className="acq-field" key={index}>CH{index + 1}
+                  <input className="input" aria-label={`CH${index + 1} 通道名称`} title="显示名称" style={{ width: 80 }}
+                    value={name} disabled={recording || status === 'connecting' || status === 'streaming'}
+                    onChange={event => { const value = event.target.value; setMontageId('custom'); updateCfg(c => ({ ...c, labels: c.labels.map((old, i) => i === index ? value : old) })) }} />
+                  {!cfg.positionMode || cfg.positionMode === 'standard' ? <input className="input" aria-label={`CH${index + 1} 电极位置`} title="REVE 电极位置" placeholder="位置，如 C3" list="omni-electrode-positions" style={{ width: 110 }}
+                    value={cfg.electrodeNames?.[index] ?? ''} disabled={recording || status === 'connecting' || status === 'streaming'}
+                    onChange={event => { const value = event.target.value; updateCfg(c => {
+                      const names = Array.from({ length: CHANNELS }, (_, i) => c.electrodeNames?.[i] ?? '')
+                      names[index] = value
+                      return { ...c, electrodeNames: names.some(n => n.trim()) ? names : undefined }
+                    }) }} /> : (cfg.positionMode === 'spherical' ? ['方位角 °', '仰角 °', '半径 m'] : ['X m', 'Y m', 'Z m']).map((axis, j) =>
+                      <input key={`${cfg.positionMode}-${j}`} className="input" type="number" step="any" aria-label={`CH${index + 1} ${axis}`} placeholder={axis} style={{ width: 96 }}
+                        value={cfg.positionCoordinates?.[index]?.[j] ?? ''} disabled={recording || status === 'connecting' || status === 'streaming'}
+                        onChange={event => { const value = event.target.value; updateCfg(c => ({ ...c,
+                          positionCoordinates: Array.from({ length: CHANNELS }, (_, i) => Array.from({ length: 3 }, (_, k) =>
+                            i === index && k === j ? value : c.positionCoordinates?.[i]?.[k] ?? '')) })) }} />)}
+                </div>
+              ))}
+            </div>
+            <datalist id="omni-electrode-positions">{[...new Set(MONTAGE_PRESETS.filter(p => p.id !== 'ch').flatMap(p => p.names))].map(name => <option key={name} value={name} />)}</datalist>
+          </details>
+        ) : null}
       </section>
 
       <section className="acq-group">
@@ -2480,7 +2583,7 @@ export function AcquisitionDebugPage() {
             ) : null}
             <label className="acq-field">
               通道名预设
-              <select className="select" value={montageId} onChange={(e) => applyMontage(e.target.value)}>
+              <select className="select" value={montageId} disabled={recording || status === 'connecting' || status === 'streaming'} onChange={(e) => applyMontage(e.target.value)}>
                 <option value="custom">自定义</option>
                 {MONTAGE_PRESETS.map((p) => (
                   <option key={p.id} value={p.id}>

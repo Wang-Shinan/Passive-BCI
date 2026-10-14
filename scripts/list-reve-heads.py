@@ -29,15 +29,20 @@ for file in sorted((root / 'recordings' / '.reve-heads').glob('*.pt')):
         if weight.ndim != 2:
             raise ValueError('文件不包含二维线性头权重')
         item.update(task=task, encoderId=encoder, classes=int(weight.shape[0]))
+        if task == 'smr_control' and payload.get('class_names') != ['left_hand', 'right_hand', 'tongue', 'rest']:
+            raise ValueError('旧双手／类别未注明的 SMR 头不适用于舌头四分类，请重新采集并训练')
         if task not in ('smr_control', 'passive_rating', 'tetris_action'):
             raise ValueError('不支持的任务类型')
         if Path(encoder).name != encoder or '/' in encoder or '\\' in encoder or encoder in ('.', '..'):
             raise ValueError('无效的编码器标识')
         if encoder not in ('reve-base', 'reve-large'):
-            adapter = ncc / 'checkpoints' / 'adapters' / encoder / 'best.pt'
+            adapter = Path(payload['lora_checkpoint']) if payload.get('lora_checkpoint') else ncc / 'checkpoints' / 'adapters' / encoder / 'best.pt'
+            if adapter.parent.name != encoder:
+                raise ValueError('LoRA 路径与编码器标识不一致')
             if not adapter.is_file():
                 raise ValueError('缺少配套 LoRA 编码器：' + encoder)
             item['loraCheckpoint'] = str(adapter)
+            item['size'] = payload.get('size', 'base')
         else:
             item['size'] = encoder.removeprefix('reve-')
         item['available'] = True

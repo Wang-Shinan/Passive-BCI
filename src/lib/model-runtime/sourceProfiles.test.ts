@@ -8,6 +8,7 @@ import {
   projectRawBatchToProfile,
 } from './sourceProfiles'
 import type { RawBridgeBatch } from '../../acquisition/runtime'
+import { ModelWindowAssembler } from './windowAssembler'
 
 function batch(partial: Partial<RawBridgeBatch> & Pick<RawBridgeBatch, 'channelNames' | 'device' | 'channels'>): RawBridgeBatch {
   return {
@@ -109,6 +110,37 @@ describe('model source profiles', () => {
     expect(projected.values[28]).toBe(28)
     expect(projected.values[59 + 28]).toBe(128)
     expect(projected.values.length).toBe(59 * 2)
+  })
+
+  it('preserves Omni electrode order and names all the way into a model window', () => {
+    const names = ['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CP4']
+    const input = batch({ device: 'omni', channels: 8, sampleRate: 250,
+      channelNames: names, samples: 500,
+      values: Float32Array.from({ length: 4000 }, (_, i) => i % 8 + Math.floor(i / 8) * 10) })
+    const projected = projectRawBatchToProfile(input, matchModelSourceProfile(input)!)
+    const [packet] = new ModelWindowAssembler({ windowSec: 2 }).push(projected)
+    expect(packet!.header.channel_names).toEqual(names)
+    expect(projected.values).toBe(input.values)
+    expect(projected.channelNames).toEqual(names)
+  })
+
+  it('sends independent locations without renaming labels and resets windows when locations change', () => {
+    const labels = [...OMNI_CHANNEL_NAMES]
+    const input = batch({ device: 'omni', channels: 8, sampleRate: 250, channelNames: labels,
+      samples: 500, values: new Float32Array(4000),
+      electrodeNames: ['F3', 'F4', 'C3', 'Cz', 'C4', 'P3', 'Pz', 'P4'] })
+    const assembler = new ModelWindowAssembler({ windowSec: 2 })
+    const [named] = assembler.push(projectRawBatchToProfile(input, matchModelSourceProfile(input)!))
+    expect(named!.header.channel_names).toEqual(labels)
+    expect(named!.header.electrode_names).toEqual(input.electrodeNames)
+    const points = Array.from({ length: 8 }, (_, i) => [i * .01, 0, .08])
+    const half = { ...input, electrodePositions: points, samples: 250, values: new Float32Array(2000) }
+    expect(assembler.push(half)).toHaveLength(0)
+    const [xyz] = assembler.push(half)
+    expect(xyz!.header.channel_names).toEqual(labels)
+    expect(xyz!.header.electrode_positions).toEqual(points)
+    expect(xyz!.header.electrode_names).toBeUndefined()
+    expect(xyz!.header.segment_id).not.toBe(named!.header.segment_id)
   })
 
   it('rejects unknown channel layouts', () => {

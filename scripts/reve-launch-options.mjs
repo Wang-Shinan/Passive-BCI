@@ -10,6 +10,18 @@ function option(argv, flag) {
   return value
 }
 
+export function resolveReveHeadMode({ task, argv = [], env = {} }) {
+  const stateFile = option(argv, '--state-file')
+  const explicitFresh = argv.includes('--fresh-head')
+  const explicitCheckpoint = argv.includes('--checkpoint-head')
+  if (stateFile && (explicitFresh || explicitCheckpoint)) throw new Error('state-file and head initialization flags are mutually exclusive')
+  const freshHead = explicitFresh || (!stateFile && !explicitCheckpoint && env.MODEL_REVE_FRESH_HEAD === '1')
+  const checkpointHead = explicitCheckpoint || (task === 'smr_control' && !stateFile && !freshHead)
+  if (checkpointHead && freshHead) throw new Error('checkpoint-head and fresh-head are mutually exclusive')
+  if (checkpointHead && task !== 'smr_control') throw new Error('checkpoint-head is currently supported for smr_control only')
+  return { freshHead, checkpointHead }
+}
+
 /** Keep a deployed gaze head paired with its training encoder, not today's defaults. */
 export function resolveReveLoraArgs({ task, stateFile, ncc, argv = [], env = {} }) {
   const explicit = option(argv, '--lora-checkpoint')
@@ -54,6 +66,10 @@ export function resolveReveLoraArgs({ task, stateFile, ncc, argv = [], env = {} 
     }
   }
   if (frozenBase || noLora) return ['--no-lora']
-  const checkpoint = paired || explicit || env.MODEL_REVE_LORA
+  let checkpoint = paired || explicit || env.MODEL_REVE_LORA
+  if (!checkpoint && task === 'smr_control' && argv.includes('--checkpoint-head')) {
+    checkpoint = path.join(ncc, 'checkpoints', 'adapters', 'stieger2021_4class_reve_lora_r16_mi5init', 'best.pt')
+    if (!existsSync(checkpoint)) throw new Error('Missing initial SMR LoRA checkpoint; select one with MODEL_REVE_LORA or --lora-checkpoint')
+  }
   return checkpoint ? ['--lora-checkpoint', checkpoint] : []
 }

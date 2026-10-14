@@ -26,10 +26,10 @@ export const REVE_TASKS: readonly ReveTaskOption[] = [
   },
   {
     id: 'smr_control',
-    label: 'SMR · 左 / 右 / 双手 / 休息',
+    label: 'SMR · 左 / 右 / 舌头 / 休息',
     short: 'SMR 头',
     semantics: 'smr_control_4',
-    classNames: ['left_hand', 'right_hand', 'both_hand', 'rest'],
+    classNames: ['left_hand', 'right_hand', 'tongue', 'rest'],
   },
   {
     id: 'tetris_action',

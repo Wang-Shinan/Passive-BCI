@@ -9,14 +9,15 @@
 
 import type { Plugin } from 'vite'
 import type { Connect } from 'vite'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { findNcc, findPython as findModelPython } from './scripts/run-model-service.mjs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 
-type BridgeName = 'bcigo' | 'neuracle' | 'omni'
+type BridgeName = 'bcigo' | 'neuracle' | 'omni' | 'omni-sdk'
 
 interface BridgeSpec {
   name: BridgeName
@@ -47,6 +48,12 @@ interface EnsureResult {
 }
 
 const SPECS: Record<BridgeName, BridgeSpec> = {
+  'omni-sdk': {
+    name: 'omni-sdk', port: 8772, script: 'bridges/omni/sdk_ws_bridge.py',
+    readyPattern: /\[omni-sdk-bridge\].*ready/i,
+    buildEnv: () => ({ ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', NCC_OI_BCI_ROOT: findNcc() }),
+    resolvePython: () => { const ncc = findNcc(); if (!ncc) throw new Error('找不到 NCC-OI-BCI'); return findModelPython(ncc) },
+  },
   omni: {
     name: 'omni',
     port: 8771,
@@ -61,7 +68,11 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
     script: 'bridges/bcigo/ws_bridge.py',
     readyPattern: /\[bcigo-bridge\].*waiting/i,
     buildEnv: (_root) => ({ ...process.env, PYTHONUNBUFFERED: '1' }),
-    resolvePython: () => process.env.BCIGO_PYTHON || findPython(),
+    resolvePython: (root) => {
+      if (process.env.BCIGO_PYTHON) return process.env.BCIGO_PYTHON
+      const local = path.resolve(root, '..', '.tools', 'bcigo-runtime', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+      return existsSync(local) ? local : findPython()
+    },
   },
   neuracle: {
     name: 'neuracle',
@@ -181,12 +192,14 @@ function sendJson(res: import('node:http').ServerResponse, status: number, body:
 
 export function bridgeManagerPlugin(): Plugin {
   const managed = persistentDevStore('bridge-manager', (): Record<BridgeName, ManagedBridge> => ({
+    'omni-sdk': { child: null, owned: false, lastError: '', starting: null },
     omni: { child: null, owned: false, lastError: '', starting: null },
     bcigo: { child: null, owned: false, lastError: '', starting: null },
     neuracle: { child: null, owned: false, lastError: '', starting: null },
   }))
   // Vite reloads config inside the same process; migrate stores created by an older config.
   managed.omni ??= { child: null, owned: false, lastError: '', starting: null }
+  managed['omni-sdk'] ??= { child: null, owned: false, lastError: '', starting: null }
   let projectRoot = process.cwd()
 
   async function statusOf(name: BridgeName): Promise<EnsureResult> {
@@ -253,6 +266,7 @@ export function bridgeManagerPlugin(): Plugin {
       console.log(`\x1b[35m[bridge]\x1b[0m starting ${name}: ${py} ${spec.script}`)
 
       const child = spawn(py, [scriptPath], {
+        windowsHide: true,
         cwd: projectRoot,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -289,7 +303,7 @@ export function bridgeManagerPlugin(): Plugin {
             name === 'bcigo'
               ? child.exitCode === 9009
                 ? 'Windows 找不到 python3（退出码 9009）。请用 Anaconda 的 python，或设置 BCIGO_PYTHON'
-                : '请确认已 pip install bcigo-sdk websockets numpy'
+                : '请用桥接的 Python 执行 -m pip install -r bridges/bcigo/requirements.txt（要求 bcigo-sdk 2.1.2）'
               : name === 'omni'
                 ? '请执行 pip install -r bridges/omni/requirements.txt'
                 : '请确认 OI_MI_ROOT / oi-mi 与 neuracle 依赖可用'
@@ -552,7 +566,20 @@ export function bridgeManagerPlugin(): Plugin {
         })
       return
     }
-    const m = url.match(/^\/api\/bridge\/(bcigo|neuracle|omni)\/(ensure|status|stop)$/)
+    if (url === '/api/bridge/omni-sdk/discover' && req.method === 'POST') {
+      const spec = SPECS['omni-sdk']
+      try {
+        execFile(spec.resolvePython(projectRoot), [path.join(projectRoot, spec.script), '--discover'], {
+          env: spec.buildEnv(projectRoot), windowsHide: true, timeout: 25000, encoding: 'utf8',
+        }, (error, stdout, stderr) => {
+          if (error) { sendJson(res, 500, { ok: false, message: stderr.trim() || error.message }); return }
+          try { sendJson(res, 200, JSON.parse(stdout.trim())) }
+          catch { sendJson(res, 500, { ok: false, message: 'SDK 设备搜索返回格式错误' }) }
+        })
+      } catch (error) { sendJson(res, 500, { ok: false, message: String(error) }) }
+      return
+    }
+    const m = url.match(/^\/api\/bridge\/(bcigo|neuracle|omni|omni-sdk)\/(ensure|status|stop)$/)
     if (!m) {
       next()
       return

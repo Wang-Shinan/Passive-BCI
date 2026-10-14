@@ -1,9 +1,13 @@
 import type { TargetDir } from './smrControl'
 
+export const SMR_IMAGERY_SCHEMA = 'left-right-tongue-rest-v1'
+export const SMR_CLASS_NAMES = ['left_hand', 'right_hand', 'tongue', 'rest'] as const
+export const SMR_TARGET_CLASSES = { left: 'left_hand', right: 'right_hand', up: 'tongue', down: 'rest' } as const
+
 const ALIASES: Record<TargetDir, string[]> = {
   right: ['right', 'right_hand', 'right-hand', 'righthand'],
   left: ['left', 'left_hand', 'left-hand', 'lefthand'],
-  up: ['up', 'both', 'both_hand', 'both-hand', 'both_hands', 'bothhands'],
+  up: ['up', 'tongue'],
   down: ['down', 'rest', 'idle'],
 }
 

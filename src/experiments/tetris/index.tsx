@@ -372,7 +372,7 @@ export function TetrisExperiment() {
       connection: modelRuntime.status,
       actionMapping: brainControlTask === 'gaze_smr'
         ? { left: 'left', right: 'right', up: 'rotate', down: 'none' }
-        : { left_hand: 'left', right_hand: 'right', both_hand: 'rotate', rest: 'none' },
+        : { left_hand: 'left', right_hand: 'right', tongue: 'rotate', rest: 'none' },
     })
     return sessionHub.subscribe(info => { if (info.active) logBinding() })
   }, [brainControlTask, appliedModel, modelRuntime.status, modelRuntime.serviceHello?.model_revision])
@@ -947,7 +947,7 @@ export function TetrisExperiment() {
             </Link>
             {' · '}
             ←→ 移动 · ↑/X 顺时针 · Z 逆时针 · ↓ 软降 · 空格硬降 · P 暂停 · R 重开
-            {miControlEnabled && !collabEnabled ? (brainControlTask === 'gaze_smr' ? ' · gaze：左← 右→ 上↻ 下静止' : ' · SMR：左手← 右手→ 双手↻ 休息静止') : ''}
+            {miControlEnabled && !collabEnabled ? (brainControlTask === 'gaze_smr' ? ' · gaze：左← 右→ 上↻ 下静止' : ' · SMR：左手← 右手→ 舌头↻ 休息静止') : ''}
             {collabEnabled ? ' · 协作：脑控←→ · I 无井不竖' : ''}
             {followEnabled ? ` · 跟手：人 ${followMoves} 左右 / 教师 ${followSteps} 左右 · 旋转不计 · 教师每步 0.5 秒` : ''}
             {rlEnabled ? ' · 启发式教师代打中' : ''}
@@ -1113,7 +1113,7 @@ export function TetrisExperiment() {
                 用 SMR 头操控方块（与键盘并行{collabEnabled ? '；协作时只左右' : followEnabled ? '；跟手旋转不占次数' : ''}）
               </label>
               <p className="muted m-0 mb-3 text-sm">
-                {brainControlTask === 'gaze_smr' ? '方向左/右 → 左右移动 · 上 → 旋转 · 下 → 静止；二分类仅控制左右。' : '左手 → 左移 · 右手 → 右移 · 双手 → 旋转 · 休息 → 静止。'}勾选后拉起已拟合、冻结的
+                {brainControlTask === 'gaze_smr' ? '方向左/右 → 左右移动 · 上 → 旋转 · 下 → 静止；二分类仅控制左右。' : '左手 → 左移 · 右手 → 右移 · 舌头 → 旋转 · 休息 → 静止。'}勾选后拉起已拟合、冻结的
                 {brainControlTask}，每 0.1 秒送来一帧重叠窗；默认多数投票后再动手，不在线微调
                 {collabEnabled
                   ? '。协作模式下手脑旋转会被忽略；I 只在已有深井时才竖放，空盘保持横放。'

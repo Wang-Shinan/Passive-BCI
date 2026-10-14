@@ -2,6 +2,8 @@
 
 Passive BCI 负责采集与切窗；推理和在线适配留在独立的 [NCC-OI-BCI](https://github.com/ttkx-web/NCC-OI-BCI) Python 服务里。
 
+ESP32 8 通道 BLE 还可选择 [Omni SDK 直连](../omni/README.md)：由 Python 直接取流、切窗、推理，浏览器只接收预测。通过 `MODEL_OMNI_ENDPOINT` 与 `MODEL_OMNI_CHANNELS` 启用，真实电极位置可后续配置；未启用时仍使用下述浏览器切窗路径。
+
 ## 边界
 
 - 浏览器只发送 **原始 EEG 窗口**（`uV`，`layout=CT`）
@@ -56,7 +58,9 @@ npm run model-service:reve:tetris
 
 或在方块页勾选「键盘操作在线学习」，开发服务会拉起 `tetris_action` 头。用键盘玩时把当前 2 秒窗标成该操作；可选「用预测操控方块」。
 
-SMR 光标四类头（`left_hand` / `right_hand` / `both_hand` / `rest`）：
+SMR 光标四类头（`left_hand` / `right_hand` / `tongue` / `rest`）：
+
+第三类为舌头运动想象（向上／旋转），需要重新采集并训练。旧双手分类头不兼容，不能只改类别名；切换后重启服务。
 
 ```bash
 npm run model-service:reve:smr

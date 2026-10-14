@@ -11,7 +11,7 @@
 3. 安装依赖并启动桥接：
 
 ```bash
-pip install -r bridges/bcigo/requirements.txt
+python -m pip install -r bridges/bcigo/requirements.txt
 npm run bcigo-bridge
 # 或
 python3 bridges/bcigo/ws_bridge.py
@@ -39,4 +39,5 @@ WebSocket：`ws://127.0.0.1:8767/v1/stream`（开发时也可走 Vite 代理 `/w
 
 - **能发现设备但无波形**：关闭官方 App / 其它 ECAP 客户端后重连；或在 UI 填已知 IP（例如 mDNS 扫到的 `ameba.local` / `192.168.x.x`）与端口。
 - **mDNS 失败**：同一网段、关闭 VPN，或手动填 host/port。
-- SDK 版本以本机 `pip show bcigo-sdk` 为准；API 以 PyPI 文档为准。
+- 依赖固定在 `requirements.txt` 的已核验版本：`bcigo-sdk==2.1.2`。桥接启动时检查安装包版本，拒绝其它版本。旧版 1.0.0 在离线同包对照中将每包 10 点截成 4 点，不能用于本项目采集。
+- 开发服务优先使用工作区的 `.tools/bcigo-runtime` Python；可用 `BCIGO_PYTHON` 指定其它已安装相同依赖的解释器。使用 `python -m pip`，确保依赖装在启动桥接的同一个环境中。

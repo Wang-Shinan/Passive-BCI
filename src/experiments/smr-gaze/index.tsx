@@ -14,6 +14,7 @@ import './smrGaze.css'
 import { CONTROL_SPEED_PER_SEC, CONTROL_TARGET_SEC, moveProbabilityCursor, reachedEdge, type CursorPosition } from './cursor'
 
 import type { SmrModeProps } from '../smr/types'
+import { SMR_IMAGERY_SCHEMA, SMR_TARGET_CLASSES } from '../smr-adapt/labels'
 
 type Phase = 'idle' | 'starting' | 'baseline' | 'target' | 'feedback' | 'control' | 'break' | 'done'
 type Mode = 'train' | 'validate' | 'feedback' | 'control' | 'preview'
@@ -24,7 +25,7 @@ type ActiveSession = {
   invalid: string | null; model: GazeReport | null
   control: { position: CursorPosition; direction: Direction | null; lastDecode: number; readySample: number; hit: boolean; hits: number } | null
 }
-const MI = { left: '注视左侧，同时想象左手运动', right: '注视右侧，同时想象右手运动', up: '注视上方，同时想象双手运动', down: '注视下方，放松休息' }
+const MI = { left: '注视左侧，同时想象左手运动', right: '注视右侧，同时想象右手运动', up: '注视上方，同时想象舌头运动', down: '注视下方，放松休息' }
 
 export function SmrGazePage({ embedded = false, subjectId: sharedSubject, onSubjectChange, onBusyChange }: SmrModeProps = {}) {
   const eeg = useLiveEeg()
@@ -97,6 +98,7 @@ export function SmrGazePage({ embedded = false, subjectId: sharedSubject, onSubj
     }
     setTrial(state.plan[state.index] ?? null)
     logger.current.log('gaze_phase', {
+      imagerySchema: SMR_IMAGERY_SCHEMA,
       phase: next, mode: state.mode, ...state.plan[state.index],
       label: state.plan[state.index] ? `gaze_${state.plan[state.index]!.target}` : null,
     })
@@ -213,6 +215,7 @@ export function SmrGazePage({ embedded = false, subjectId: sharedSubject, onSubj
       setTotalTrials(state.plan.length)
       active.current = state
       logger.current.log('session_start', {
+        imagerySchema: SMR_IMAGERY_SCHEMA, mapping: SMR_TARGET_CLASSES,
         protocol: nextMode === 'train' ? 'gaze-assisted-smr-closed-loop-v1' : nextMode === 'control' ? 'gaze-assisted-smr-control-v1' : 'gaze-assisted-smr-v1', mode: nextMode, seed, trials: state.plan, channels, sampleRate: hz,
         baselineSec: BASELINE_SEC, targetSec: closedLoop ? CONTROL_TARGET_SEC : TARGET_SEC,
         feedbackSec: nextMode === 'feedback' || closedLoop ? FEEDBACK_SEC : 0,
@@ -393,7 +396,7 @@ export function SmrGazePage({ embedded = false, subjectId: sharedSubject, onSubj
     <main className={embedded ? "gaze-page smr-protocol" : "gaze-page"}>
       {!embedded && <><Link to="/smr-adapt">← SMR 适配</Link> · </>}<Link to="/gaze-smr-tetris">全屏 SMR 俄罗斯方块</Link> · <Link to="/gaze-tetris">眼动版俄罗斯方块</Link>
       {embedded ? <h2>全屏 SMR · 采集、训练与验证</h2> : <h1>REVE 全屏 SMR</h1>}
-      <p>采集时实时控制蓝色光标：中央准备 3 秒，亮边后有 12 秒将光标移到目标边。左：注视＋左手运动想象；右：注视＋右手运动想象；上：注视＋双手运动想象；下：注视＋放松休息。</p>
+      <p>采集时实时控制蓝色光标：中央准备 3 秒，亮边后有 12 秒将光标移到目标边。左：注视＋左手运动想象；右：注视＋右手运动想象；上：注视＋舌头运动想象；下：注视＋放松休息。</p>
       <LiveEegBadge />
       <div className="gaze-controls">
         <label>采集方案 <select value={collection} disabled={running || fitting} onChange={e => setCollection(e.target.value)}>

@@ -12,12 +12,12 @@ export const CUE_SEC = 2
 export const FEEDBACK_SEC = 6
 export const POST_SEC = 1
 
-export type Phase = 'idle' | 'iti' | 'cue' | 'feedback' | 'post' | 'done'
+export type Phase = 'idle' | 'iti' | 'cue' | 'feedback' | 'post' | 'rest' | 'done'
 
-export type PlanId = 'quick' | 'standard' | 'full'
+export type PlanId = 'quick' | 'standard' | 'full' | 'grouped'
 
 export type PlanBlock = {
-  task: SmrTask
+  task: SmrTask | '1D'
   runs: number
   trialsPerRun: number
 }
@@ -27,9 +27,17 @@ export type PlanSpec = {
   label: string
   hint: string
   blocks: PlanBlock[]
+  restBetweenRuns?: boolean
 }
 
 export const PLANS: Record<PlanId, PlanSpec> = {
+  grouped: {
+    id: 'grouped',
+    label: '水平 / 垂直一维采集',
+    hint: '每组先水平、后垂直；各轴内方向等量随机，组间保存后继续。',
+    blocks: [{ task: '1D', runs: 3, trialsPerRun: 20 }],
+    restBetweenRuns: true,
+  },
   quick: {
     id: 'quick',
     label: '快速适配',
@@ -102,11 +110,15 @@ export function buildTrials(plan: PlanSpec, seed: number): TrialRecord[] {
   for (const block of plan.blocks) {
     for (let r = 0; r < block.runs; r++) {
       run += 1
-      const targets = balancedTargets(block.task, block.trialsPerRun, rng)
+      const targets = block.task === '1D'
+        ? [...shuffleInPlace(balancedTargets('LR', block.trialsPerRun / 2, rng), rng),
+          ...shuffleInPlace(balancedTargets('UD', block.trialsPerRun / 2, rng), rng)]
+        : balancedTargets(block.task, block.trialsPerRun, rng)
+      if (plan.restBetweenRuns && block.task !== '1D') shuffleInPlace(targets, rng)
       for (const target of targets) {
         trials.push({
           index: trials.length,
-          task: block.task,
+          task: block.task === '1D' ? (target === 'left' || target === 'right' ? 'LR' : 'UD') : block.task,
           run,
           target,
           outcome: null,
@@ -170,25 +182,39 @@ export function advancePhase(session: SessionState, now: number): SessionState {
     if (next >= session.trials.length) {
       return { ...session, cursor: next, phase: 'done', phaseStartedAt: now }
     }
-    return { ...session, cursor: next, phase: 'iti', phaseStartedAt: now }
+    const boundary = session.plan.restBetweenRuns && session.trials[next]?.run !== session.trials[session.cursor]?.run
+    return { ...session, cursor: next, phase: boundary ? 'rest' : 'iti', phaseStartedAt: now }
   }
   return session
 }
 
-export function instructionFor(task: SmrTask): string {
+export function resumeGroup(session: SessionState, now: number): SessionState {
+  return session.phase === 'rest' ? { ...session, phase: 'iti', phaseStartedAt: now } : session
+}
+
+export function groupedPlan(groups: number, trialsPerGroup: number): PlanSpec {
+  if (!Number.isInteger(groups) || groups < 1 || groups > 50) throw new Error('组数必须为 1–50')
+  if (!Number.isInteger(trialsPerGroup) || trialsPerGroup < 4 || trialsPerGroup > 200 || trialsPerGroup % 4 !== 0) {
+    throw new Error('每组试次数必须为 4–200，且为 4 的倍数')
+  }
+  return { ...PLANS.grouped, blocks: [{ task: '1D', runs: groups, trialsPerRun: trialsPerGroup }] }
+}
+
+export function instructionFor(task: SmrTask | '1D'): string {
+  if (task === '1D') return '先水平：左手 / 右手；后垂直：舌头 / 放松。每次只控制一个轴。'
   if (task === 'LR') {
     return '想象左手反复开合 → 光标向左；右手开合 → 向右。'
   }
   if (task === 'UD') {
-    return '双手同时开合 → 光标向上；主动放空休息 → 向下。'
+    return '舌头运动想象 → 光标向上；主动放空休息 → 向下。'
   }
-  return '左/右手控左右，双手向上，休息向下。'
+  return '左/右手控左右，舌头向上，休息向下。'
 }
 
 export function cueLabel(target: TargetDir): string {
   if (target === 'left') return '左手开合 → 左'
   if (target === 'right') return '右手开合 → 右'
-  if (target === 'up') return '双手开合 → 上'
+  if (target === 'up') return '舌头运动想象 → 上'
   return '放空休息 → 下'
 }
 

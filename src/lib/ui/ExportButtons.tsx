@@ -13,6 +13,8 @@ import {
 } from '../session/recordControl'
 import { sessionHub } from '../session/sessionHub'
 
+import { notifyModelSubjectChanged } from '../model-runtime/modelHeadPreference'
+
 const SUBJECT_KEY = 'passive-bci.subject-id'
 
 export function ExportButtons({
@@ -51,6 +53,7 @@ export function ExportButtons({
     onSubjectChange(id)
     try {
       localStorage.setItem(SUBJECT_KEY, id)
+      notifyModelSubjectChanged()
     } catch {
       /* ignore */
     }

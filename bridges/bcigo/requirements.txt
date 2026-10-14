@@ -1,3 +1,5 @@
-bcigo-sdk>=1.0.0
-websockets>=12
-numpy>=1.24
+# 1.0.0 silently drops six samples from ten-sample EEG packets.
+# Keep the validated bridge environment reproducible.
+bcigo-sdk==2.1.2
+websockets==17.2
+numpy==2.5.4

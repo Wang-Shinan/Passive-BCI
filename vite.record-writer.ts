@@ -94,6 +94,7 @@ interface RecordSession {
   contextStream: WriteStream
   bytes: number
   queue: Promise<void>
+  closing?: boolean
   manifest: SessionManifest
 }
 
@@ -170,6 +171,7 @@ export function recordWriterPlugin(): Plugin {
   }
 
   async function closeSession(session: RecordSession, unlink: boolean) {
+    session.closing = true
     sessions.delete(session.id)
     await session.queue.catch(() => undefined)
     await Promise.all([
@@ -177,6 +179,13 @@ export function recordWriterPlugin(): Plugin {
       endStream(session.eventsStream),
       endStream(session.contextStream),
     ]).catch(() => undefined)
+    if (!unlink) {
+      session.manifest.stoppedAt = new Date().toISOString()
+      session.manifest.status = 'interrupted'
+      session.manifest.bytes = session.bytes
+      writeManifest(session)
+      writeEegSidecar(session, { stoppedAt: session.manifest.stoppedAt, status: 'interrupted' })
+    }
     operationGate.detachRecording(session.id)
     if (unlink) {
       try {
@@ -495,11 +504,17 @@ export function recordWriterPlugin(): Plugin {
           return
         }
 
+        if (session.closing) {
+          req.resume()
+          sendJson(res, 409, { ok: false, message: '录制正在结束，已接收的数据正在保存' })
+          return
+        }
+
         if (action === 'chunk' && req.method === 'POST') {
-          const buf = await readBody(req)
           session.queue = session.queue.then(
-            () =>
-              new Promise<void>((resolveWrite, rejectWrite) => {
+            async () => {
+              const buf = await readBody(req)
+              return new Promise<void>((resolveWrite, rejectWrite) => {
                 session.binStream.write(buf, (err) => {
                   if (err) rejectWrite(err)
                   else {
@@ -507,7 +522,8 @@ export function recordWriterPlugin(): Plugin {
                     resolveWrite()
                   }
                 })
-              }),
+              })
+            },
           )
           await session.queue
           sendJson(res, 200, { ok: true, bytes: session.bytes })
@@ -515,17 +531,15 @@ export function recordWriterPlugin(): Plugin {
         }
 
         if ((action === 'events' || action === 'context') && req.method === 'POST') {
-          const buf = asNdjson(await readBody(req))
-          if (buf.byteLength === 0) {
-            sendJson(res, 200, { ok: true })
-            return
-          }
           const stream = action === 'events' ? session.eventsStream : session.contextStream
           session.queue = session.queue.then(
-            () =>
-              new Promise<void>((resolveWrite, rejectWrite) => {
+            async () => {
+              const buf = asNdjson(await readBody(req))
+              if (buf.byteLength === 0) return
+              return new Promise<void>((resolveWrite, rejectWrite) => {
                 stream.write(buf, (err) => (err ? rejectWrite(err) : resolveWrite()))
-              }),
+              })
+            },
           )
           await session.queue
           sendJson(res, 200, { ok: true })
@@ -551,18 +565,22 @@ export function recordWriterPlugin(): Plugin {
         }
 
         if (action === 'finish' && req.method === 'POST') {
-          await session.queue.catch(() => undefined)
+          session.closing = true
+          let incomplete = false
+          await session.queue.catch(() => { incomplete = true })
           const bytes = session.bytes
           const { stem, binPath, dirPath } = session
           let clock: unknown = null
           try {
             const raw = await readBody(req)
             if (raw.byteLength) {
-              const parsed = JSON.parse(raw.toString('utf8')) as { clock?: unknown }
+              const parsed = JSON.parse(raw.toString('utf8')) as { clock?: unknown; expectedBytes?: number; incomplete?: boolean }
               clock = parsed.clock ?? null
+              incomplete ||= parsed.incomplete === true || (parsed.expectedBytes !== undefined && parsed.expectedBytes !== bytes)
             }
           } catch {
             clock = null
+            incomplete = true
           }
           const clockSummary =
             clock && typeof clock === 'object'
@@ -577,14 +595,14 @@ export function recordWriterPlugin(): Plugin {
               : null
           writeEegSidecar(session, {
             stoppedAt: new Date().toISOString(),
-            status: bytes === 0 ? 'empty' : 'complete',
+            status: incomplete ? 'interrupted' : bytes === 0 ? 'empty' : 'complete',
             clock: clockSummary,
           })
           if (clock && bytes > 0) {
             writeFileSync(session.idxPath, `${JSON.stringify(clock)}\n`, 'utf8')
           }
           session.manifest.stoppedAt = new Date().toISOString()
-          session.manifest.status = bytes === 0 ? 'empty' : 'complete'
+          session.manifest.status = incomplete ? 'interrupted' : bytes === 0 ? 'empty' : 'complete'
           session.manifest.bytes = bytes
           session.manifest.clock = {
             ...(session.manifest.clock ?? {}),
@@ -598,6 +616,10 @@ export function recordWriterPlugin(): Plugin {
           ])
           sessions.delete(id)
           operationGate.detachRecording(id)
+          if (incomplete) {
+            sendJson(res, 409, { ok: false, message: '录制写入失败或字节数不符，数据已保留为中断会话', bytes })
+            return
+          }
           if (bytes === 0) {
             try {
               rmSync(dirPath, { recursive: true, force: true })

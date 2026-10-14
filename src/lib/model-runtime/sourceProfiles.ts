@@ -75,12 +75,17 @@ export function matchModelSourceProfile(
 ): MatchedModelSource | null {
   for (const profile of MODEL_SOURCE_PROFILES) {
     if (profile.device !== batch.device) continue
+    // Omni columns are hardware ordered. Preserve the user's montage instead of
+    // replacing electrode names with the default CH1..CH8 labels.
+    if (profile.id === 'omni8' && batch.channels === profile.channelNames.length) {
+      if (batch.channelNames.length !== batch.channels) return null
+      return {
+        profile: { ...profile, channelNames: [...batch.channelNames] },
+        indices: batch.channelNames.map((_, i) => i),
+      }
+    }
     const indices = channelPickIndices(batch.channelNames, profile.channelNames)
     if (indices) return { profile, indices }
-    // V19 API still has 8 hardware columns when the UI overlays montage aliases.
-    if (profile.id === 'omni8' && batch.channels === profile.channelNames.length) {
-      return { profile, indices: profile.channelNames.map((_, i) => i) }
-    }
   }
   return null
 }
@@ -114,6 +119,8 @@ export function projectRawBatchToProfile(
     values,
     channels: outChannels,
     channelNames: [...profile.channelNames],
+    ...(batch.electrodeNames ? { electrodeNames: indices.map(i => batch.electrodeNames![i]!) } : {}),
+    ...(batch.electrodePositions ? { electrodePositions: indices.map(i => batch.electrodePositions![i]!) } : {}),
   }
 }
 

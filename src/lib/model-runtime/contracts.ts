@@ -15,6 +15,8 @@ export type ModelWindowHeader = {
   segment_id: string
   sample_rate: number
   channel_names: string[]
+  electrode_names?: string[]
+  electrode_positions?: number[][]
   unit: 'uV'
   layout: 'CT'
   channels: number
@@ -34,6 +36,7 @@ export type ModelServiceHello = {
   type: 'hello'
   schema_version: number
   service?: string
+  warning?: string
   model_name?: string
   model_type?: string
   task?: string
@@ -42,6 +45,7 @@ export type ModelServiceHello = {
   strategy?: string
   window_sec?: number
   step_sec?: number
+  input_source?: 'omni-sdk'
   follow?: {
     transport?: string
     bind?: string
@@ -68,6 +72,9 @@ export type ModelPrediction = {
   online_update_applied: boolean
   prepare_latency_ms: number
   inference_latency_ms: number
+  /** SDK host delivery to finished inference; excludes hardware/BLE and browser delivery. */
+  source_latency_ms?: number
+  source_dropped_windows?: number
   task?: string
   output_semantics?: string
   received_at_ms: number
@@ -156,6 +163,7 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
     type: 'hello',
     schema_version: finiteNumber(value.schema_version) ? value.schema_version : 0,
     service: typeof value.service === 'string' ? value.service : undefined,
+    warning: typeof value.warning === 'string' ? value.warning : undefined,
     model_name:
       (typeof value.model_name === 'string' ? value.model_name : undefined) ??
       (typeof model?.name === 'string' ? model.name : undefined),
@@ -174,6 +182,7 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
       (typeof online?.strategy === 'string' ? online.strategy : undefined),
     window_sec: windowSec && windowSec > 0 ? windowSec : undefined,
     step_sec: stepSec && stepSec > 0 ? stepSec : undefined,
+    input_source: input?.source === 'omni-sdk' ? 'omni-sdk' : undefined,
     follow: parseFollow(value.follow),
   }
 }
@@ -289,6 +298,10 @@ export function parseServerMessage(raw: string): ModelServerMessage {
     inference_latency_ms: finiteNumber(value.inference_latency_ms)
       ? value.inference_latency_ms
       : 0,
+    source_latency_ms: finiteNumber(value.source_latency_ms) && value.source_latency_ms >= 0
+      ? value.source_latency_ms : undefined,
+    source_dropped_windows: finiteNumber(value.source_dropped_windows) && value.source_dropped_windows >= 0
+      ? value.source_dropped_windows : undefined,
     task: typeof value.task === 'string' ? value.task : undefined,
     output_semantics:
       typeof value.output_semantics === 'string' ? value.output_semantics : undefined,

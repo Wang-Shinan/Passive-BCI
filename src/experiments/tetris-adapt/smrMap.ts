@@ -3,13 +3,14 @@ import {
   reveCursorAxes,
   type TargetDir,
 } from '../smr-adapt/smrControl'
+import { canLabelSmrHead } from '../smr-adapt/labels'
 
 export type CursorDrive = 'reve' | 'features'
 export type OverlapAction = 'left' | 'right' | 'rotate' | 'down'
 
 const LEFT_NAMES = new Set(['left_hand', 'left', 'left-hand', 'lefthand'])
 const RIGHT_NAMES = new Set(['right_hand', 'right', 'right-hand', 'righthand'])
-const UP_NAMES = new Set(['both_hand', 'both_hands', 'both', 'both-hand', 'up'])
+const UP_NAMES = new Set(['tongue', 'up'])
 const DOWN_NAMES = new Set(['rest', 'down', 'idle'])
 
 export function normalizeClassName(name: string): string {
@@ -39,7 +40,7 @@ export function axesFromReve(
   classNames: readonly string[],
   probabilities: readonly number[],
 ): { zH: number; zV: number } | null {
-  if (!classNames.length || classNames.length !== probabilities.length) return null
+  if (!canLabelSmrHead(classNames) || classNames.length !== probabilities.length) return null
   const axes = reveCursorAxes(classNames, probabilities)
   return { zH: axes.zH * REVE_CURSOR_GAIN, zV: axes.zV * REVE_CURSOR_GAIN }
 }

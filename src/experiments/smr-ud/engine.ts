@@ -147,7 +147,7 @@ export type UdBars = {
   zV: number
 }
 
-/** Contrast both_hand vs rest even when left/right take most of the softmax. */
+/** Contrast tongue vs rest even when left/right take most of the softmax. */
 export function udPairDrive(up: number, down: number, eps = 1e-6): {
   zV: number
   upShare: number

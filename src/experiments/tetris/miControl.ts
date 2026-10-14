@@ -9,11 +9,8 @@ const CLASS_TO_ACTION: Record<string, MiControlAction> = {
   right: 'right',
   right_hand: 'right',
   feet: 'rotate',
-  both: 'rotate',
-  both_hand: 'rotate',
-  both_hands: 'rotate',
+  tongue: 'rotate',
   up: 'rotate',
-  tongue: 'none',
   rest: 'none',
   down: 'none',
   idle: 'none',
@@ -32,6 +29,8 @@ export function miControlActionForClassName(name: string): MiControlAction | nul
 export function miControlActionForPrediction(
   prediction: ModelPrediction,
 ): MiControlAction | null {
+  // Preserve the separate left/right/feet/tongue MI4 task's original idle action.
+  if (!isSmrControlPrediction(prediction) && prediction.class_name === 'tongue') return 'none'
   return (
     miControlActionForClassName(prediction.class_name) ??
     miControlActionForClassName(prediction.class_names[prediction.class_id] ?? '')

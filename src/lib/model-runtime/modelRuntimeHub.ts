@@ -1,4 +1,5 @@
 import {
+  acqRuntime,
   subscribeRawBridgeBatches,
   type RawBridgeBatch,
 } from '../../acquisition/runtime'
@@ -327,6 +328,7 @@ class ModelRuntimeHub {
       this.logDebug('info', '已发送 hello')
     }
     socket.onmessage = (event) => {
+      if (this.socket !== socket) return
       if (typeof event.data !== 'string') return
       this.handleMessage(event.data)
     }
@@ -417,6 +419,8 @@ class ModelRuntimeHub {
 
   private enqueueSource(batch: RawBridgeBatch): void {
     if (!this.snapshotValue.enabled) return
+    if (batch.device === 'omni' && acqRuntime?.omniLink === 'sdk') return
+    if (this.snapshotValue.serviceHello?.input_source === 'omni-sdk') return
     if (this.sourceQueue.length >= MAX_SOURCE_BATCHES) {
       this.sourceQueue = []
       this.pending = []
@@ -435,6 +439,11 @@ class ModelRuntimeHub {
   }
 
   private drainSource(): void {
+    if (this.snapshotValue.serviceHello?.input_source === 'omni-sdk') {
+      this.sourceQueue = []
+      this.sourceDraining = false
+      return
+    }
     const batch = this.sourceQueue.shift()
     if (!batch || !this.snapshotValue.enabled) {
       this.sourceDraining = false
@@ -516,6 +525,7 @@ class ModelRuntimeHub {
   }
 
   private flush(): void {
+    if (this.snapshotValue.serviceHello?.input_source === 'omni-sdk') return
     this.expireStaleInFlight()
     const socket = this.socket
     if (
@@ -562,6 +572,13 @@ class ModelRuntimeHub {
       const message = parseServerMessage(raw)
       if (message.type === 'hello') {
         this.applyInputContract(message)
+        if (message.input_source === 'omni-sdk') {
+          this.sourceQueue = []
+          this.pending = []
+          this.clearInFlight()
+          this.assembler.reset()
+          this.patch({ sourceCompatible: false, sourceDetail: 'Omni SDK 直连 · 等待连续 EEG 窗口', pendingWindows: 0, inFlightWindows: 0 })
+        }
         this.logDebug(
           'info',
           'hello 就绪',
@@ -582,6 +599,9 @@ class ModelRuntimeHub {
         return
       }
       if (message.type === 'error') {
+        if (message.code === 'source_reset') {
+          this.patch({ latestPrediction: null, sourceCompatible: false, sourceDetail: message.message })
+        }
         if (message.request_id) {
           this.inFlight.delete(message.request_id)
           this.inFlightAt.delete(message.request_id)
@@ -613,7 +633,9 @@ class ModelRuntimeHub {
 
       this.inFlight.delete(message.request_id)
       this.inFlightAt.delete(message.request_id)
-      const latency = message.prepare_latency_ms + message.inference_latency_ms
+      const directSource = this.snapshotValue.serviceHello?.input_source === 'omni-sdk'
+      const latency = directSource && message.source_latency_ms != null
+        ? message.source_latency_ms : message.prepare_latency_ms + message.inference_latency_ms
       this.latencies.push(latency)
       if (this.latencies.length > LATENCY_HISTORY) this.latencies.shift()
       this.patch({
@@ -623,6 +645,11 @@ class ModelRuntimeHub {
         p50LatencyMs: percentile(this.latencies, 0.5),
         p95LatencyMs: percentile(this.latencies, 0.95),
         lastError: '',
+        ...(directSource ? {
+          sourceCompatible: true,
+          sourceDetail: 'Omni SDK 直连 · Python 切窗与推理 · 8 导 / 250 Hz',
+          droppedWindows: message.source_dropped_windows ?? this.snapshotValue.droppedWindows,
+        } : {}),
       })
       this.flush()
     } catch (error) {

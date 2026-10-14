@@ -144,4 +144,32 @@ describe('BinRecorder', () => {
     expect(saved?.bytes).toBe(8)
     expect(rec.pendingBytes).toBe(0)
   })
+
+  it('freezes the recording boundary while disk writes are pending', async () => {
+    let release!: () => void
+    const write = new Promise<void>(resolve => { release = resolve })
+    const finish = vi.fn(async () => ({ name: 't.bin', rel: 'recordings/t' }))
+    const rec = new BinRecorder({ flushBytes: 8, createSink: async () => ({ kind: 'disk', write: () => write, finish, abort: async () => {} }) })
+    await rec.start({ filenamePrefix: 't' })
+    rec.append(new Uint8Array(8))
+    const stopped = rec.stop()
+    rec.append(new Uint8Array(8))
+    release()
+    expect((await stopped)?.bytes).toBe(8)
+    expect(finish).toHaveBeenCalledWith(expect.objectContaining({ expectedBytes: 8, incomplete: false }))
+  })
+
+  it('preserves a failed write as interrupted and never returns a trainable path', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const finish = vi.fn(async () => ({ name: 'partial.bin', rel: 'recordings/partial' }))
+    const rec = new BinRecorder({ flushBytes: 8, createSink: async () => ({ kind: 'disk',
+      write: async () => { throw new Error('disk full') }, finish, abort: async () => {} }) })
+    try {
+      await rec.start({ filenamePrefix: 'partial' })
+      rec.append(new Uint8Array(8))
+      expect((await rec.stop())?.rel).toBeUndefined()
+      expect(finish).toHaveBeenCalledWith(expect.objectContaining({ expectedBytes: 8, incomplete: true }))
+      expect(rec.recording).toBe(false)
+    } finally { errorLog.mockRestore() }
+  })
 })

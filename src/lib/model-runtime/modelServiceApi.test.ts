@@ -1,11 +1,15 @@
 import { sessionHub } from '../session/sessionHub'
 import { modelOperation } from './modelOperation'
-import { afterEach, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, expect, it, vi } from 'vitest'
 import { ensureModelService, stopModelService, selectModelHeadPreference, registerModelRuntimeControl, getAppliedModel } from './modelServiceApi'
 
+beforeEach(() => {
+  const values = new Map<string, string>()
+  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) })
+})
 afterEach(() => { modelOperation.cancel(); sessionHub.detach(); vi.unstubAllGlobals() })
 it('uses the saved head when experiments auto-start REVE, but respects an explicit default', async () => {
-  vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ smr_control: 'chosen.pt' }) })
+  selectModelHeadPreference('smr_control', 'chosen.pt')
   const fetcher = vi.fn(async () => new Response(JSON.stringify({ ok: true })))
   vi.stubGlobal('fetch', fetcher)
   await ensureModelService({ task: 'smr_control' })

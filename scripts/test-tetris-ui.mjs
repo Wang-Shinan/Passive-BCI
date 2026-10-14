@@ -44,7 +44,7 @@ try {
       const answer={...current,backend:req.backend,task:req.task,headId:req.headId||null,running:true,owned:true,starting:false,stepSec:req.stepSec,modelRevision:req.task==='gaze_smr'?'gaze-history':req.headId,gazeReport:req.task==='gaze_smr'?report:null}
       if(holdNext){holdNext=false;await new Promise(r=>{release=r})}
       else current=answer
-      await page.evaluate(v=>{window.__fixtureModel=v},{task:req.task,model_revision:answer.modelRevision,class_names:req.task==='gaze_smr'?['left','right','up','down']:['left_hand','right_hand','both_hand','rest']})
+      await page.evaluate(v=>{window.__fixtureModel=v},{task:req.task,model_revision:answer.modelRevision,class_names:req.task==='gaze_smr'?['left','right','up','down']:['left_hand','right_hand','tongue','rest']})
       body=answer
     } else body={ok:true}
     await route.fulfill({contentType:'application/json',body:JSON.stringify(body)}).catch(()=>{})

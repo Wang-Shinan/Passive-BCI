@@ -231,7 +231,7 @@ export function instructionFor(trial: TrialRecord | null): string {
     return '左手开合 → 左移；右手开合 → 右移。把活块移到高亮列。'
   }
   if (trial.kind === 'smr' && trial.target === 'up') {
-    return '双手开合 → 旋转，对齐绿色虚影。'
+    return '舌头运动想象 → 旋转，对齐绿色虚影。'
   }
   if (trial.kind === 'smr') {
     return '放空休息 → 下落，对齐绿色落点。'

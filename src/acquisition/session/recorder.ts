@@ -35,6 +35,8 @@ export interface RecordStopResult {
 
 export interface RecordFinishExtra {
   clock?: SampleClockDump
+  expectedBytes?: number
+  incomplete?: boolean
 }
 
 export interface RecordSink {
@@ -285,9 +287,15 @@ export class BinRecorder {
   async stop(): Promise<RecordStopResult | null> {
     if (this.startedAt === null) return null
     this.enqueueTail()
+    // Freeze the sample boundary before awaiting disk IO; incoming rest samples
+    // must not extend the recording or shift its event-to-sample origin.
+    this.startedAt = null
+    const clock = sampleClock.dump()
+    let incomplete = false
     try {
       await this.flushChain
     } catch (err) {
+      incomplete = true
       console.error('[record] flush failed', err)
     }
     const bytes = this.bytes
@@ -300,8 +308,8 @@ export class BinRecorder {
       return null
     }
     try {
-      const clock = sampleClock.dump()
-      const done = await sink?.finish(clock.sampleIndex > 0 ? { clock } : undefined)
+      const done = await sink?.finish({ ...(clock.sampleIndex > 0 ? { clock } : {}), expectedBytes: bytes, incomplete })
+      if (incomplete) throw new Error('录制写入失败；保留中断数据，不作为完整会话')
       return {
         bytes,
         name: done?.name ?? name,

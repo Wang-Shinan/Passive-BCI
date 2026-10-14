@@ -316,6 +316,10 @@ export default defineConfig({
   ],
   server: {
     proxy: {
+      '/ws/omni-sdk': {
+        target: 'ws://127.0.0.1:8772', ws: true,
+        rewrite: (path) => path.replace(/^\/ws\/omni-sdk/, '/v1/stream'),
+      },
       // OmniBCI publishes LSL; the local bridge exposes it as WebSocket.
       '/ws/omni': {
         target: 'ws://127.0.0.1:8771',

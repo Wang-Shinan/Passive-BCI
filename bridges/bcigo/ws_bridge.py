@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from importlib.metadata import PackageNotFoundError, version
 import queue
 import threading
 import time
@@ -36,6 +37,23 @@ DEFAULT_WS_HOST = "127.0.0.1"
 DEFAULT_WS_PORT = 8767
 DEFAULT_N_CHANNELS = 32
 DEFAULT_SAMPLE_RATE = 250
+REQUIRED_SDK_VERSION = "2.1.2"
+
+
+def require_sdk_version() -> str:
+    try:
+        installed = version("bcigo-sdk")
+    except PackageNotFoundError:
+        installed = "missing"
+    if installed != REQUIRED_SDK_VERSION:
+        raise RuntimeError(
+            f"bcigo-sdk {installed} is not supported; require exactly {REQUIRED_SDK_VERSION}. "
+            "Older SDKs can truncate ten-sample EEG packets. "
+            "Install with: python -m pip install -r bridges/bcigo/requirements.txt"
+        )
+    return installed
+
+
 # Idle wait only — never sit in websocket.recv() before draining EEG.
 # The old 20 ms recv timeout capped the loop at ~50 Hz when the SDK
 # yielded ~1 sample per poll (UI rate ~41 Hz, packets ≈ samples).
@@ -1036,7 +1054,7 @@ async def main_async(ws_host: str, ws_port: int) -> None:
     ):
         print(f"[bcigo-bridge] ws://{ws_host}:{ws_port}/v1/stream")
         print("[bcigo-bridge] waiting for browser subscribe…")
-        print("[bcigo-bridge] tip: pip install 'bcigo-sdk' websockets numpy")
+        print("[bcigo-bridge] tip: python -m pip install -r bridges/bcigo/requirements.txt")
         await asyncio.Future()
 
 
@@ -1047,14 +1065,18 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        sdk_version = require_sdk_version()
         import bcigo_sdk  # noqa: F401
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from None
     except ImportError:
-        raise SystemExit("Missing bcigo-sdk. pip install bcigo-sdk") from None
+        raise SystemExit("Cannot import bcigo-sdk. Install bridges/bcigo/requirements.txt") from None
     try:
         import websockets  # noqa: F401
     except ImportError:
         raise SystemExit("Missing websockets. pip install websockets") from None
 
+    print(f"[bcigo-bridge] verified bcigo-sdk {sdk_version}", flush=True)
     asyncio.run(main_async(args.ws_host, args.ws_port))
 
 

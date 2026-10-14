@@ -3,6 +3,7 @@ import {
   MODEL_PROTOCOL_VERSION,
   type ModelWindowPacket,
 } from './contracts'
+import { validElectrodePositions } from '../../acquisition/omni/positions'
 
 export type ModelSourceBatch = {
   values: Float32Array
@@ -10,6 +11,8 @@ export type ModelSourceBatch = {
   channels: number
   sampleRate: number
   channelNames: string[]
+  electrodeNames?: string[]
+  electrodePositions?: number[][]
   unit: string
   packetLoss: number
   packetCount: number
@@ -47,6 +50,8 @@ export class ModelWindowAssembler {
   private emitSequence = 0
   private sampleRate = 0
   private channelNames: string[] = []
+  private electrodeNames: string[] | undefined
+  private electrodePositions: number[][] | undefined
   private device = ''
   private streamId = 0
   private lastPacketLoss = 0
@@ -82,6 +87,8 @@ export class ModelWindowAssembler {
       this.sampleRate !== batch.sampleRate ||
       this.device !== batch.device ||
       this.streamId !== batch.streamId ||
+      JSON.stringify(this.electrodeNames) !== JSON.stringify(batch.electrodeNames) ||
+      JSON.stringify(this.electrodePositions) !== JSON.stringify(batch.electrodePositions) ||
       !sameNames(this.channelNames, batch.channelNames)
     const discontinuity =
       identityChanged ||
@@ -127,6 +134,14 @@ export class ModelWindowAssembler {
     if (batch.channelNames.length !== batch.channels) {
       throw new Error('模型批次通道名数量与数据不一致')
     }
+    if (batch.electrodePositions !== undefined && !validElectrodePositions(batch.electrodePositions, batch.channels)) {
+      throw new Error('请填写每个通道的有效三维电极坐标，位置不可重复')
+    }
+    if (batch.electrodePositions === undefined && batch.electrodeNames !== undefined &&
+      (batch.electrodeNames.length !== batch.channels || batch.electrodeNames.some(n => !n.trim()) ||
+        new Set(batch.electrodeNames.map(n => n.trim().toUpperCase())).size !== batch.channels)) {
+      throw new Error('请完整填写每个通道的电极位置，位置不可重复')
+    }
     if (batch.values.length !== batch.samples * batch.channels) {
       throw new Error('模型批次 Float32 长度与 shape 不一致')
     }
@@ -138,6 +153,8 @@ export class ModelWindowAssembler {
   private beginSegment(batch: ModelSourceBatch): void {
     this.sampleRate = batch.sampleRate
     this.channelNames = [...batch.channelNames]
+    this.electrodeNames = batch.electrodeNames ? [...batch.electrodeNames] : undefined
+    this.electrodePositions = batch.electrodePositions?.map(p => [...p])
     this.device = batch.device
     this.streamId = batch.streamId
     this.capacity = Math.round(this.windowSec * batch.sampleRate)
@@ -169,6 +186,8 @@ export class ModelWindowAssembler {
       channels: this.channelNames.length,
       sampleRate: this.sampleRate,
       channelNames: [...this.channelNames],
+      electrodeNames: this.electrodeNames,
+      electrodePositions: this.electrodePositions,
       unit: 'uV',
       packetLoss: this.lastPacketLoss,
       packetCount: this.lastPacketCount,
@@ -202,6 +221,8 @@ export class ModelWindowAssembler {
         segment_id: this.segmentId,
         sample_rate: this.sampleRate,
         channel_names: [...this.channelNames],
+        ...(this.electrodeNames && !this.electrodePositions ? { electrode_names: this.electrodeNames } : {}),
+        ...(this.electrodePositions ? { electrode_positions: this.electrodePositions } : {}),
         unit: 'uV',
         layout: 'CT',
         channels,

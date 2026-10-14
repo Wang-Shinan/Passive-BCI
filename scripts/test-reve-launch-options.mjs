@@ -4,7 +4,27 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { resolveReveLoraArgs } from './reve-launch-options.mjs'
+import { resolveReveLoraArgs, resolveReveHeadMode } from './reve-launch-options.mjs'
+
+test('new SMR subject uses the embedded head without a saved subject state', () => {
+  assert.deepEqual(resolveReveHeadMode({ task: 'smr_control', env: { MODEL_STATE_FILE: 'previous-subject.pt' } }),
+    { freshHead: false, checkpointHead: true })
+  assert.deepEqual(resolveReveHeadMode({ task: 'smr_control', argv: ['--state-file', 'subject.pt'],
+    env: { MODEL_REVE_CHECKPOINT_HEAD: '1', MODEL_REVE_FRESH_HEAD: '1' } }),
+    { freshHead: false, checkpointHead: false })
+  assert.deepEqual(resolveReveHeadMode({ task: 'smr_control', argv: ['--fresh-head'] }),
+    { freshHead: true, checkpointHead: false })
+  assert.throws(() => resolveReveHeadMode({ task: 'smr_control', argv: ['--state-file', 'x', '--checkpoint-head'] }), /mutually exclusive/)
+})
+
+test('embedded SMR default resolves the general LoRA, not a previous subject adapter', t => {
+  const { ncc } = fixture(t)
+  const base = path.join(ncc, 'checkpoints', 'adapters', 'stieger2021_4class_reve_lora_r16_mi5init', 'best.pt')
+  mkdirSync(path.dirname(base), { recursive: true }); writeFileSync(base, 'base adapter')
+  const options = { task: 'smr_control', ncc, argv: ['--checkpoint-head'] }
+  assert.deepEqual(resolveReveLoraArgs(options), ['--lora-checkpoint', base])
+  assert.deepEqual(resolveReveLoraArgs({ ...options, env: { MODEL_REVE_LORA: 'chosen.pt' } }), ['--lora-checkpoint', 'chosen.pt'])
+})
 
 function fixture(t, extra = {}) {
   const ncc = mkdtempSync(path.join(os.tmpdir(), 'gaze-merge-'))
