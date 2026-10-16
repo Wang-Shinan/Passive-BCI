@@ -1,0 +1,86 @@
+.smrgrid-page { min-height: 100dvh; padding: 24px clamp(20px, 5vw, 80px) 32px; background: #10171c; color: #eaf0ec; font-family: system-ui, sans-serif; }
+.smrgrid-header { max-width: 1120px; margin: 0 auto 25px; }
+.smrgrid-back { display: block; width: fit-content; color: #a3b8b2; font-size: 13px; text-decoration: none; margin-bottom: 22px; }
+.smrgrid-eyebrow { font-size: 11px; letter-spacing: .2em; color: #b9de7b; }
+.smrgrid-header h1 { font-size: clamp(25px, 3vw, 35px); font-weight: 550; margin: 8px 0; letter-spacing: .03em; }
+.smrgrid-header p { color: #9faeac; font-size: 14px; margin: 0; }
+.smrgrid-layout { max-width: 1120px; margin: auto; display: grid; grid-template-columns: minmax(0, 1fr) 285px; gap: clamp(24px, 4vw, 56px); align-items: start; }
+.smrgrid-stage { min-width: 0; width: 100%; max-width: min(650px, max(340px, calc(100dvh - 350px))); }
+.smrgrid-stage-heading, .smrgrid-stage-footer { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: #a7b9b3; padding: 12px 0; }
+.smrgrid-board { width: 100%; max-width: 650px; aspect-ratio: 1; position: relative; border: 1px solid #42514d; border-radius: 10px; overflow: hidden; box-shadow: 0 16px 50px #0003; }
+.smrgrid-board.is-hit { border-color: #c6e692; }
+.smrgrid-cells { display: grid; height: 100%; gap: 2px; background: #3c4844; }
+.smrgrid-cell { background: #26332f; display: grid; place-items: center; position: relative; }
+.smrgrid-cell.is-dark { background: #1d2825; }
+.smrgrid-cell.is-target { background: #c1e58c; box-shadow: inset 0 0 0 3px #def1ba; }
+.smrgrid-target-mark { font-size: clamp(26px, 4vw, 48px); font-weight: 200; color: #445b2b; line-height: 1; }
+.smrgrid-corridor { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.smrgrid-corridor-area { fill: #20bfe31c; stroke: #78dcee; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.smrgrid-corridor-axis { stroke: #a4e8f2; stroke-width: 1; stroke-dasharray: 7 6; vector-effect: non-scaling-stroke; }
+.smrgrid-corridor-origin { fill: #a4e8f2; }
+.smrgrid-formula { font-size: 11px; color: #a7b9b3; line-height: 1.7; }
+.smrgrid-formula summary { cursor: pointer; }
+.smrgrid-formula p { margin: 8px 0 0; }
+.smrgrid-cursor { position: absolute; width: 3.6%; aspect-ratio: 1; border: 3px solid white; border-radius: 50%; background: #20bfe3; transform: translate(-50%, -50%); box-shadow: 0 0 0 4px #09171c66, 0 0 22px #20bfe370; pointer-events: none; }
+.smrgrid-panel { padding-top: 8px; display: flex; flex-direction: column; gap: 16px; }
+.smrgrid-score { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #35423c; padding-bottom: 20px; margin-bottom: 2px; }
+.smrgrid-score strong { display: block; font-size: 36px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.smrgrid-score small { font-size: 16px; color: #a7b9b3; }
+.smrgrid-score span { font-size: 12px; color: #a7b9b3; }
+.smrgrid-panel label { font-size: 13px; color: #bbc8c2; display: block; }
+.smrgrid-panel select, .smrgrid-panel button { background: #202d28; color: #e5eee7; border: 1px solid #42534a; border-radius: 6px; padding: 10px 12px; font: inherit; font-size: 13px; }
+.smrgrid-panel select { display: block; width: 100%; margin-top: 7px; }
+.smrgrid-panel button { cursor: pointer; }
+.smrgrid-panel button:hover { border-color: #b9de7b; }
+.smrgrid-panel button:disabled { opacity: .5; cursor: wait; }
+.smrgrid-panel :focus-visible, .smrgrid-back:focus-visible { outline: 2px solid #c1e58c; outline-offset: 4px; }
+.smrgrid-panel input[type=range] { display: block; width: 100%; margin-top: 10px; accent-color: #c1e58c; }
+.smrgrid-panel output { float: right; font-variant-numeric: tabular-nums; color: #e5eee7; }
+.smrgrid-assistance { display: grid; gap: 14px; padding: 14px 0; border-block: 1px solid #35423c; }
+.smrgrid-panel .smrgrid-toggle { display: flex; align-items: center; gap: 9px; color: #e5eee7; cursor: pointer; }
+.smrgrid-toggle input { accent-color: #c1e58c; width: 16px; height: 16px; }
+.smrgrid-signal, .smrgrid-help, .smrgrid-error { font-size: 12px; line-height: 1.6; margin: -5px 0 0; color: #9eafa6; }
+.smrgrid-signal { color: #c1e58c; }
+.smrgrid-help a { color: #c1e58c; text-decoration: underline; }
+.smrgrid-error { color: #ffb9a9; overflow-wrap: anywhere; }
+.smrgrid-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.smrgrid-panel .smrgrid-primary { background: #c1e58c; color: #1c2c14; border-color: #c1e58c; font-weight: 650; }
+.smrgrid-instructions { border-top: 1px solid #35423c; padding-top: 18px; font-size: 13px; }
+.smrgrid-instructions strong { font-weight: 500; }
+.smrgrid-instructions p { white-space: pre-line; line-height: 1.9; margin: 8px 0; color: #b8c9c0; }
+.smrgrid-instructions span, .smrgrid-drive { font-size: 11px; color: #91a398; }
+.smrgrid-drive { font-variant-numeric: tabular-nums; }
+.smrgrid-drive span { margin: 0 8px; }
+.smrgrid-debug { max-width: 1120px; margin: 28px auto 0; border: 1px solid #35483e; border-radius: 8px; background: #16211c; --text: #eaf0ec; --muted: #a7b9b3; --panel: #16211c; --panel-2: #202d28; --border: #42534a; --accent: #c1e58c; }
+.smrgrid-debug summary { cursor: pointer; padding: 15px 18px; font-size: 14px; }
+.smrgrid-debug summary span { margin-left: 10px; font-size: 12px; color: #a7b9b3; }
+.smrgrid-debug-content { padding: 0 18px 18px; }
+.smrgrid-debug-status { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: #b9d49e; font-size: 12px; padding: 6px 0 16px; }
+.smrgrid-debug-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+.smrgrid-debug-grid section { min-width: 0; }
+.smrgrid-debug h2 { font-size: 14px; font-weight: 550; margin: 0 0 10px; }
+.smrgrid-debug-note { color: #a7b9b3; font-size: 12px; line-height: 1.7; margin: 8px 0 14px; }
+.smrgrid-debug-class { margin: 16px 0; }
+.smrgrid-debug-class > div:first-child { display: flex; align-items: baseline; gap: 12px; font-size: 12px; margin-bottom: 5px; }
+.smrgrid-debug-class strong { flex: 1; font-weight: 500; }
+.smrgrid-debug-class span { font-variant-numeric: tabular-nums; color: #b8c9c0; }
+.smrgrid-debug-track { height: 6px; overflow: hidden; background: #2e3b33; border-radius: 3px; }
+.smrgrid-debug-track i { display: block; height: 100%; }
+.smrgrid-debug-filtered { margin-top: 5px; font-size: 10px; }
+.smrgrid-debug-filtered .smrgrid-debug-track { height: 3px; margin-top: 4px; opacity: .65; }
+.smrgrid-debug-vectors { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 24px; font-variant-numeric: tabular-nums; }
+.smrgrid-debug-vectors th { text-align: left; font-weight: 400; }
+.smrgrid-debug-vectors th, .smrgrid-debug-vectors td { padding: 8px 4px; border-bottom: 1px solid #35483e; }
+.smrgrid-debug-vectors td { text-align: right; }
+.smrgrid-debug-filter { border: 0; margin: 0; padding: 0; min-width: 0; }
+.smrgrid-debug-filter:disabled { opacity: .5; }
+.smrgrid-debug select, .smrgrid-debug input:not([type=checkbox]):not([type=range]) { max-width: 100%; background: #202d28; color: #eaf0ec; border: 1px solid #42534a; border-radius: 5px; padding: 7px; }
+.smrgrid-debug input { accent-color: #c1e58c; }
+.smrgrid-debug :focus-visible { outline: 2px solid #c1e58c; outline-offset: 3px; }
+.smrgrid-debug-service { margin-top: 22px; border-top: 1px solid #35483e; }
+.smrgrid-debug-service summary { padding-left: 0; }
+.smrgrid-debug-service-body { padding-top: 8px; overflow-wrap: anywhere; }
+.smrgrid-debug-service-body .btn { background: #202d28; color: #eaf0ec; border: 1px solid #42534a; }
+.smrgrid-debug-service-body .btn-primary { background: #c1e58c; color: #1c2c14; }
+@media (max-width: 760px) { .smrgrid-debug-grid { grid-template-columns: 1fr; gap: 20px; } .smrgrid-debug summary span { display: block; margin: 5px 0 0; } .smrgrid-debug-content { padding: 0 12px 12px; } .smrgrid-debug-service-body .acq-field { min-width: 0 !important; } }
+@media (max-width: 760px) { .smrgrid-layout { grid-template-columns: 1fr; gap: 20px; } .smrgrid-stage, .smrgrid-board { max-width: none; } .smrgrid-header { margin-bottom: 12px; } .smrgrid-panel { padding: 0; } }

@@ -1,0 +1,108 @@
+.ns-page { --ns-cyan: #7af4ea; color-scheme: dark; min-height: 100vh; padding: 30px 44px 18px; color: #e4f2ff; background: radial-gradient(ellipse at 18% 0%, #15324b55, transparent 60%), #081321; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+.ns-page:fullscreen { overflow: auto; }
+.ns-page * { box-sizing: border-box; }
+.ns-page h1,.ns-page h2,.ns-page p { margin: 0; }
+.ns-page button,.ns-page select,.ns-page input { font: inherit; color: #d8e9fa; border: 1px solid #31465c; border-radius: 8px; background: #14253a; padding: 10px 14px; }
+.ns-page button { cursor: pointer; white-space: nowrap; transition: border-color .2s, background .2s; }
+.ns-page button:hover:not(:disabled) { border-color: #7af4ea; background: #1e3b4c; }
+.ns-page button:disabled { opacity: .4; cursor: default; }
+.ns-page :focus-visible { outline: 2px solid #7af4ea; outline-offset: 4px; }
+.ns-page a { color: #91c6dc; font-size: 13px; text-decoration: none; }
+.ns-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 27px; }
+.ns-brand { display: flex; gap: 18px; align-items: center; }
+.ns-brand-mark { width: 58px; height: 58px; border: 1px solid #528b9f; border-radius: 17px; transform: rotate(-7deg); background: #143e4a; color: #a9fff7; font-size: 30px; font-weight: 700; display: grid; place-content: center; position: relative; }
+.ns-brand-mark span { position: absolute; right: -6px; top: -11px; font-size: 24px; }
+.ns-page .ns-eyebrow { font-size: 10px; letter-spacing: .2em; font-weight: 650; color: #7b9bb6; }
+.ns-header h1 { font-size: clamp(23px, 2vw, 33px); font-weight: 650; letter-spacing: -.04em; margin-top: 3px; }
+.ns-header h1 span { font-size: .65em; font-weight: 400; letter-spacing: 0; color: #a3b8cc; }
+.ns-header-side { text-align: right; display: grid; gap: 9px; }
+.ns-live { font-size: 12px; color: #bed3e3; }
+.ns-live i,.ns-dot { display: inline-block; border-radius: 50%; width: 7px; height: 7px; margin-right: 8px; background: #7af4ea; box-shadow: 0 0 12px #7af4ea66; }
+.ns-toolbar { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; border-top: 1px solid #21364b; border-bottom: 1px solid #21364b; padding: 17px 0; margin-bottom: 24px; }
+.ns-toolbar label { display: flex; align-items: center; gap: 12px; font-size: 12px; color: #90a9be; }
+.ns-toolbar select { font-size: 14px; min-width: 255px; }
+.ns-mode { display: flex; background: #050e19; border: 1px solid #263c51; border-radius: 9px; padding: 4px; gap: 3px; }
+.ns-mode button { border: 0; font-size: 13px; background: transparent; color: #829ab0; padding: 9px 17px; }
+.ns-mode button.is-active { background: #244455; color: #adfff5; }
+.ns-actions { display: flex; gap: 9px; margin-left: auto; font-size: 13px; }
+.ns-page .ns-primary { background: #8af2e7; color: #0b3035; border-color: #8af2e7; font-weight: 700; padding-left: 25px; padding-right: 25px; }
+.ns-page .ns-primary:hover:not(:disabled) { background: #b8fff5; }
+.ns-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 24px; max-width: 1900px; margin: auto; align-items: start; }
+.ns-arena { min-width: 0; background: radial-gradient(ellipse at center, #15324a66, transparent 70%), #0b1a2b; border: 1px solid #2c4257; border-radius: 18px; padding: 24px 30px 18px; position: relative; overflow: hidden; }
+.ns-arena-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.ns-arena-heading h2 { font-size: 22px; font-weight: 500; margin-top: 5px; }
+.ns-status { border: 1px solid #38566b; border-radius: 30px; padding: 7px 12px; font-size: 12px; color: #9dcbda; background: #112b3d; }
+.ns-status.is-sliding { border-color: #61d8d0; color: #a8fff8; }
+.ns-board-wrap { position: relative; display: grid; place-items: center; padding: 22px 0 14px; min-height: 450px; }
+.ns-board { width: 100%; height: min(63vh, 700px); min-height: 420px; filter: drop-shadow(0 16px 24px #0004); }
+.ns-board-note { position: absolute; bottom: 27px; padding: 13px 22px; border: 1px solid #487084; background: #0a1b2def; border-radius: 12px; color: #c4f7f4; font-size: 14px; text-align: center; box-shadow: 0 8px 24px #0004; }
+.ns-board-note span { display: block; color: #92acbf; margin-top: 4px; font-size: 11px; }
+.ns-arena-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; border-top: 1px solid #22394c; padding-top: 15px; color: #7997af; font-size: 11px; }
+.ns-arena-footer>div { display: flex; align-items: center; gap: 6px; }
+.ns-arena-footer .ns-dot { margin: 0 0 0 15px; }
+.ns-arena-footer .ns-dot:first-child { margin-left: 0; }
+.ns-dot.ns-gold { background: #edc77f; box-shadow: 0 0 12px #edc77f55; }
+.ns-wall-key { display: inline-block; width: 9px; height: 9px; background: #45617c; border-radius: 2px; margin-left: 15px; }
+.ns-sidebar { display: grid; gap: 16px; }
+.ns-panel { padding: 20px 22px; border: 1px solid #273d52; background: #102034; border-radius: 14px; }
+.ns-direction-display { display: flex; align-items: center; gap: 18px; margin: 15px 0 20px; }
+.ns-big-arrow { width: 66px; height: 66px; display: grid; place-items: center; font-size: 43px; line-height: 1; color: #96fff4; background: #173e4b; border: 1px solid #3b7583; border-radius: 16px; }
+.ns-big-arrow.moving { box-shadow: 0 0 25px #71f4e825; }
+.ns-direction-display strong { font-size: 23px; font-weight: 500; }
+.ns-direction-display p { font-size: 11px; margin-top: 5px; color: #8aa5bb; }
+.ns-stats { display: grid; grid-template-columns: 1fr 1fr; padding-top: 17px; border-top: 1px solid #294053; }
+.ns-stats>div+div { padding-left: 25px; border-left: 1px solid #294053; }
+.ns-stats span { display: block; font-size: 11px; color: #819db5; }
+.ns-stats strong { font-family: 'Cascadia Code', Consolas, monospace; font-size: 30px; font-weight: 400; letter-spacing: -.06em; }
+.ns-panel-heading { display: flex; align-items: center; justify-content: space-between; }
+.ns-panel h2 { font-size: 15px; font-weight: 500; }
+.ns-panel-heading>span { color: #7497af; font: 9px Consolas, monospace; letter-spacing: .08em; }
+.ns-probabilities { display: grid; gap: 17px; margin: 21px 0; }
+.ns-probability>div:first-child { display: flex; gap: 11px; align-items: center; font-size: 13px; }
+.ns-probability b { margin-left: auto; font: 15px Consolas, monospace; color: #9bc9d8; }
+.ns-probability small { display: block; font-size: 9px; color: #7692a9; }
+.ns-small-arrow { font-size: 22px; color: #7aeadd; width: 22px; }
+.ns-bar { height: 5px; background: #20364d; border-radius: 4px; margin-top: 7px; overflow: hidden; }
+.ns-bar i { display: block; height: 100%; background: linear-gradient(90deg, #2f97b7, #86f4de); transition: width .15s; }
+.ns-page .ns-filter-state { font-size: 11px; color: #8caac2; padding-top: 13px; border-top: 1px solid #294053; min-height: 30px; }
+.ns-page .ns-warning { color: #f3cb88; font-size: 12px; line-height: 1.7; margin-top: 12px; }
+.ns-instructions h2 { margin: 10px 0; font-size: 15px; color: #cae2ed; }
+.ns-instructions>p:not(.ns-eyebrow) { font-size: 12px; color: #87a4bb; line-height: 1.9; }
+.ns-keycaps { display: flex; align-items: center; gap: 6px; margin-top: 15px; }
+.ns-keycaps kbd { display: grid; place-items: center; width: 27px; height: 29px; border: 1px solid #426078; border-bottom-width: 3px; border-radius: 5px; background: #1b3448; color: #c0e5e9; }
+.ns-keycaps span { color: #8ca5b8; font-size: 10px; margin-left: 6px; }
+.ns-settings { padding: 15px 20px; font-size: 12px; }
+.ns-settings summary { cursor: pointer; color: #abc5d7; }
+.ns-settings summary>span { float: right; }
+.ns-settings label { display: grid; gap: 5px; color: #a7c1d3; margin-top: 14px; }
+.ns-settings input,.ns-settings select { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }
+.ns-settings button { margin: 12px 0 3px; font-size: 12px; width: 100%; }
+.ns-settings p { color: #8ba7bb; line-height: 1.7; margin-top: 11px; overflow-wrap: anywhere; }
+.ns-mapping { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ns-rest-debug { min-width: 0; margin: 18px 0 0; padding: 4px 12px 12px; border: 1px solid #365c72; border-radius: 8px; }
+.ns-rest-debug legend { padding: 0 6px; color: #72e5e4; }
+.ns-page-footer { display: flex; justify-content: space-between; gap: 15px; margin-top: 16px; color: #55738c; font-size: 10px; letter-spacing: .12em; }
+.ns-victory { position: absolute; width: min(420px, 90%); padding: 26px; text-align: center; background: #0c2135f2; border: 1px solid #d4bb7c; border-radius: 20px; box-shadow: 0 0 100px #e7cb6b22, 0 25px 70px #0008; animation: ns-arrival .8s ease-out; }
+.ns-victory-star { color: #ffdfa0; font-size: 65px; text-shadow: 0 0 25px #ffd98a66; animation: ns-star 2s ease-in-out infinite; }
+.ns-victory h2 { margin: 14px 0; font-size: 28px; }
+.ns-victory p:not(.ns-eyebrow) { font: 24px Consolas, monospace; color: #f6dca7; margin-bottom: 24px; }
+.ns-victory p span { margin: 0 12px; }
+@keyframes ns-arrival { from { opacity: 0; transform: translateY(20px) scale(.9); } to { opacity: 1; transform: none; } }
+@keyframes ns-star { 50% { transform: scale(1.12); text-shadow: 0 0 40px #ffdc8a99; } }
+@media(min-width:1200px) {
+  .ns-board { height: calc(100dvh - 485px); }
+  .ns-panel { padding: 17px 22px; }
+  .ns-direction-display { margin: 12px 0 14px; }
+  .ns-big-arrow { width: 58px; height: 58px; }
+  .ns-stats { padding-top: 12px; }
+  .ns-probabilities { gap: 10px; margin: 14px 0; }
+  .ns-instructions h2 { margin: 8px 0; }
+  .ns-instructions>p:not(.ns-eyebrow) { line-height: 1.7; }
+  .ns-keycaps { margin-top: 10px; }
+  .ns-settings { padding: 13px 20px; }
+}
+@media(min-width:1700px) { .ns-layout { grid-template-columns: minmax(0,1fr) 390px; gap: 30px; } .ns-page { padding: 28px 58px 18px; } }
+@media(max-width:1150px) { .ns-page { padding: 22px; } .ns-layout { grid-template-columns: minmax(0,1fr) 300px; gap: 16px; } .ns-arena { padding: 20px 15px; } .ns-board { min-height: 320px; height: 55vh; } .ns-arena-footer>span { display: none; } .ns-toolbar { gap: 12px; } .ns-actions { margin-left: 0; } .ns-header h1 span { display: block; } }
+@media(max-width:800px) { .ns-page { padding: 15px; } .ns-header { gap: 10px; } .ns-brand-mark { display: none; } .ns-header-side { max-width: 130px; } .ns-eyebrow { font-size: 8px !important; } .ns-layout { grid-template-columns: 1fr; } .ns-board { height: 58vh; min-height: 300px; } .ns-board-wrap { min-height: 340px; } .ns-toolbar select { min-width: 0; } .ns-sidebar { grid-template-columns: 1fr; } .ns-page-footer { flex-direction: column; } .ns-arena-heading h2 { font-size: 18px; } .ns-status { font-size: 10px; padding: 6px 8px; } .ns-board-note { max-width: 90%; font-size: 11px; } }
+@media(max-width:800px) { .ns-board { height: auto; min-height: 0; } .ns-board-wrap { min-height: 0; } .ns-board-note { position: static; margin-top: 12px; max-width: 100%; } }
+@media(prefers-reduced-motion:reduce) { .ns-victory,.ns-victory-star { animation: none; } .ns-bar i { transition: none; } }

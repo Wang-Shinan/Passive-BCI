@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BCIGO_CHANNEL_NAMES } from '../../acquisition/bcigo/client'
 import { NEURACLE_59_EEG_CHANNEL_NAMES } from '../../acquisition/neuracle/client'
+import { TemporalEvidenceFilter, DEFAULT_TEMPORAL_FILTER } from '../../lib/model-runtime/temporalEvidence'
 import {
   BalancedNorm,
   alphaPower,
@@ -14,10 +15,40 @@ import {
   resetCursor,
   resolveLaplacianMontage,
   reveCursorAxes,
+  reveCursorDrive,
   smrClassMasses,
   smrFeatures,
   stepCursor,
 } from './smrControl'
+
+describe('REVE vote cursor', () => {
+  const names = ['left_hand', 'right_hand', 'tongue', 'rest']
+  function voteFilter() {
+    return new TemporalEvidenceFilter({ ...DEFAULT_TEMPORAL_FILTER, mode: 'vote', horizonSec: 1, stepSec: .5 })
+  }
+  it('waits for enough observations and does not turn a tiny winning margin into full speed', () => {
+    const filter = voteFilter()
+    const observe = (id: string) => filter.observe({ observationId: id, classNames: names, probabilities: [.249, .251, .25, .25] })
+    expect(reveCursorDrive(observe('1'))).toEqual({ zH: 0, zV: 0 })
+    const decision = observe('2')
+    expect(decision.probabilities).toEqual([0, 1, 0, 0])
+    const axes = reveCursorDrive(decision)
+    expect(axes.zH).toBeGreaterThan(0)
+    expect(axes.zH).toBeLessThan(.01)
+    expect(axes.zV).toBe(0)
+  })
+  it('allows a complete EEG window before even a confident vote can hit an edge', () => {
+    const filter = voteFilter()
+    const input = { classNames: names, probabilities: [0, 1, 0, 0] }
+    filter.observe({ ...input, observationId: '1' })
+    const axes = reveCursorDrive(filter.observe({ ...input, observationId: '2' }))
+    let cursor = resetCursor()
+    for (let i = 0; i < 50; i++) cursor = stepCursor(cursor, 'LR', axes.zH, axes.zV)
+    expect(hitEdge(cursor)).toBeNull()
+    for (let i = 0; i < 10; i++) cursor = stepCursor(cursor, 'LR', axes.zH, axes.zV)
+    expect(hitEdge(cursor)).toBe('right')
+  })
+})
 
 function sine(freq: number, sampleRate: number, sec: number, amp = 10): Float32Array {
   const n = Math.round(sampleRate * sec)

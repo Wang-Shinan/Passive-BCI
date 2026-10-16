@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mock = vi.hoisted(() => ({
-  revision: 'old', status: 'ready', headId: 'old.pt',
+  revision: 'old', status: 'ready', headId: 'old.pt', hasPrediction: true, windowSec: 2,
+  supportsGroupTraining: true,
   ensure: vi.fn(), stop: vi.fn(), progress: vi.fn(), statusApi: vi.fn(),
 }))
 vi.mock('../../lib/model-runtime/modelServiceApi', () => ({
@@ -9,17 +10,18 @@ vi.mock('../../lib/model-runtime/modelServiceApi', () => ({
 }))
 vi.mock('../../lib/model-runtime/modelRuntimeHub', () => ({ modelRuntimeHub: {
   get snapshot() { return { status: mock.status, serviceHello: { strategy: 'none', model_revision: mock.revision,
-    model_name: 'reve-base', class_names: ['left_hand', 'right_hand', 'tongue', 'rest'] } } },
-  latestObservation: () => ({ model_revision: mock.revision, class_names: ['left_hand', 'right_hand', 'tongue', 'rest'],
-    prepare_latency_ms: 1, inference_latency_ms: 10 }),
+    model_name: 'reve-base', window_sec: mock.windowSec, supports_group_training: mock.supportsGroupTraining,
+    class_names: ['left_hand', 'right_hand', 'tongue', 'rest'] } } },
+  latestObservation: () => mock.hasPrediction ? ({ model_revision: mock.revision, class_names: ['left_hand', 'right_hand', 'tongue', 'rest'],
+    prepare_latency_ms: 1, inference_latency_ms: 10 }) : null,
   disconnect: vi.fn(), setEnabled: vi.fn(), connect: vi.fn(),
 } }))
-import { runGroupProbe, runRoundLora, waitForProbePrediction, type ProbeRound, type ProbeReport } from './groupedProbe'
+import { currentProbeBaseline, loadProbeBaseline, runGroupProbe, runRoundLora, waitForProbePrediction, type ProbeRound, type ProbeReport } from './groupedProbe'
 
 const options = { minimumGain: .02, maximumRecallDrop: 0 }
 function round(): ProbeRound {
   return { id: 'round', subjectId: 'S01', seed: 3, sessions: ['group1'],
-    baseline: { headId: 'old.pt', revision: 'old', modelName: 'reve-base', stepSec: .5 } }
+    baseline: { headId: 'old.pt', revision: 'old', modelName: 'reve-base', stepSec: .5, windowSec: 2 } }
 }
 function report(promote = true) {
   return { headId: 'new.pt', baselineHeadId: 'copy.pt', baselineRevision: 'old', modelRevision: 'new',
@@ -42,6 +44,9 @@ function server(result: Partial<ProbeReport> = report(), failed = false) {
 beforeEach(() => {
   vi.clearAllMocks()
   mock.revision = 'old'; mock.headId = 'old.pt'; mock.status = 'ready'
+  mock.hasPrediction = true
+  mock.windowSec = 2
+  mock.supportsGroupTraining = true
   mock.statusApi.mockImplementation(async () => ({ running: true, owned: true, backend: 'reve', task: 'smr_control', headId: mock.headId, stepSec: .5 }))
   mock.stop.mockResolvedValue({ ok: true })
   mock.ensure.mockImplementation(async ({ headId }: { headId: string }) => {
@@ -52,6 +57,31 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('group boundary probing', () => {
+  it('accepts a supported four-second model round and rejects an explicit training block', async () => {
+    mock.windowSec = 4
+    await expect(currentProbeBaseline(new AbortController().signal)).resolves.toMatchObject({ windowSec: 4 })
+    mock.supportsGroupTraining = false
+    await expect(currentProbeBaseline(new AbortController().signal)).rejects.toThrow('关闭组间自动训练')
+    expect(mock.stop).not.toHaveBeenCalled()
+  })
+  it('finishes offline training without EEG, but still requires EEG before the next group', async () => {
+    server()
+    mock.hasPrediction = false
+    await expect(runGroupProbe(round(), options, new AbortController().signal, mock.progress)).resolves.toContain('模型已就绪')
+    vi.useFakeTimers()
+    const pending = waitForProbePrediction({ ...round().baseline, revision: 'new' }, new AbortController().signal)
+    const assertion = expect(pending).rejects.toThrow('45 秒')
+    await vi.advanceTimersByTimeAsync(45001)
+    await assertion
+  })
+  it('does not accept a wrong revision merely because the service is connected', async () => {
+    vi.useFakeTimers()
+    mock.ensure.mockResolvedValue({ running: true })
+    const pending = loadProbeBaseline({ ...round().baseline, revision: 'new' }, new AbortController().signal)
+    const assertion = expect(pending).rejects.toThrow('未确认预期版本')
+    await vi.advanceTimersByTimeAsync(45001)
+    await assertion
+  })
   const lora = { epochs: 5, lr: .0001, rank: 4, alpha: 8, batchSize: 1, accumulationSteps: 8 }
   it('trains round-end LoRA from the history export and records the selected model for the next round', async () => {
     const requests = server()
@@ -76,7 +106,7 @@ describe('group boundary probing', () => {
     const requests = server()
     const state = round()
     await runGroupProbe(state, options, new AbortController().signal, mock.progress)
-    expect(requests.find(r => r.body?.kind === 'export')?.body?.sessions).toEqual(['group1'])
+    expect(requests.find(r => r.body?.kind === 'export')?.body).toMatchObject({ sessions: ['group1'], windowSec: 2 })
     expect(requests.find(r => r.body?.kind === 'fit')?.body).toMatchObject({ datasetId: 'export', baselineRevision: 'old', ...options })
     expect(mock.stop).toHaveBeenCalledOnce()
     expect(mock.ensure).toHaveBeenCalledWith(expect.objectContaining({ headId: 'new.pt' }))

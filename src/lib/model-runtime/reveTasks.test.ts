@@ -14,9 +14,9 @@ describe('reve task catalog', () => {
     expect(defaultReveStrategy('tetris_action')).toBe('supervised-head')
   })
 
-  it('uses 0.1s live hop for Tetris decode and 0.5s for SMR-adapt', () => {
+  it('uses 0.1s live hop for Tetris and SMR, preserving the rating hop', () => {
     expect(liveStepSecForReveTask('tetris_action')).toBe(TETRIS_LIVE_STEP_SEC)
-    expect(liveStepSecForReveTask('smr_control')).toBe(0.5)
+    expect(liveStepSecForReveTask('smr_control')).toBe(0.1)
     expect(liveStepSecForReveTask('passive_rating')).toBe(0.5)
     expect(reveLiveHopMatches(0.1, TETRIS_LIVE_STEP_SEC)).toBe(true)
     expect(reveLiveHopMatches(0.5, TETRIS_LIVE_STEP_SEC)).toBe(false)

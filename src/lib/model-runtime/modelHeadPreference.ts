@@ -1,3 +1,4 @@
+import { defaultSubjectHead } from './subjectModels'
 const KEY = 'passive-bci.model-heads'
 const SUBJECT_KEY = 'passive-bci.subject-id'
 const SUBJECT_HEADS_KEY = 'passive-bci.subject-model-heads.v1'
@@ -11,7 +12,7 @@ export function preferredModelHead(task = 'passive_rating', subjectId = currentM
   try {
     const scoped = task === 'smr_control'
     const value = JSON.parse(localStorage.getItem(scoped ? SUBJECT_HEADS_KEY : KEY) || '{}')?.[scoped ? preferenceKey(task, subjectId) : task]
-    return typeof value === 'string' ? value : ''
+    return typeof value === 'string' ? value : defaultSubjectHead(task, subjectId)
   } catch { return '' }
 }
 export function saveModelHeadPreference(task: string, id: string, subjectId = currentModelSubject()): void {

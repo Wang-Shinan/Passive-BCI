@@ -59,25 +59,14 @@ def require_sdk_version() -> str:
 # yielded ~1 sample per poll (UI rate ~41 Hz, packets ≈ samples).
 IDLE_POLL_S = 0.002
 IMPEDANCE_POLL_S = 0.05
-# Keep get_eeg_buffer working: set_cfg(50) as "callback batch" starved the
-# poller (native never accumulated 50 rows, buffer stayed empty). 4096 was
-# the last value that still returned last_n=4.
+# Drain the SDK buffer frequently; EEG callbacks use the same underlying data.
 EEG_BUFFER_LEN = 4096
 IMU_CALLBACK_BATCH = 20
 IMP_WINDOW_LEN = 256
 EEG_BUFFER_TAKE = 16
 POLL_PERIOD_S = 0.04
 POLL_IDLE_S = 0.001
-_SAMPLE_ATTRS = (
-    "sample1",
-    "sample2",
-    "sample3",
-    "sample4",
-    "sample_1",
-    "sample_2",
-    "sample_3",
-    "sample_4",
-)
+_SAMPLE_ATTRS = tuple(f"sample{i}" for i in range(1, 11)) + tuple(f"sample_{i}" for i in range(1, 11))
 
 # Hardware / EDF column order after stripping sample_index (get_eeg_buffer).
 BCIGO_HARDWARE_CHANNEL_NAMES: tuple[str, ...] = (
@@ -248,7 +237,7 @@ def _strip_index_column(arr: np.ndarray, n_channels: int) -> np.ndarray:
 
 
 def _packed_sample_rows(raw: Any) -> list[Any] | None:
-    """EegData proto carries sample1..sample4 in one Wi‑Fi packet."""
+    """EegData proto carries up to sample1..sample10 in one Wi‑Fi packet."""
     if raw is None or isinstance(raw, (list, tuple, np.ndarray, str, bytes)):
         return None
     rows: list[Any] = []
@@ -285,6 +274,22 @@ def _read_sdk_eeg_buffer(sdk: Any) -> Any:
         return sdk.get_eeg_buffer(EEG_BUFFER_TAKE, True)
     except TypeError:
         return sdk.get_eeg_buffer(True, True)
+
+
+async def start_sdk_eeg(client: Any, sdk: Any, parser: Any, sample_rate: int, gain: int, signal: str) -> None:
+    """Keep SDK 2.1.2's full parser, with explicit configuration and mode steps."""
+    await client.start_data_stream(parser)
+    try:
+        await client.set_eeg_config(_fs_enum(sdk, sample_rate), _gain_enum(sdk, gain), _signal_enum(sdk, signal))
+    except RuntimeError as exc:
+        # Firmware 2.0.5 acknowledges the config but omits EegAcqResponse.mode.
+        # The SDK interprets the absent field as 0 and aborts start_stream before
+        # issuing start_eeg_stream. That separate command gets a valid mode=1 ACK.
+        if str(exc) != "EEG mode acknowledgement mismatch: expected 1, got 0":
+            raise
+        print("[bcigo-bridge] configuration reply omitted mode; requesting explicit EEG mode acknowledgement", flush=True)
+    await client.start_eeg_stream()
+    print("[bcigo-bridge] EEG mode acknowledged", flush=True)
 
 
 def _coerce_eeg_raw(raw: Any) -> Any:
@@ -546,8 +551,7 @@ class BciGoSession:
             sdk.set_cfg(EEG_BUFFER_LEN, IMU_CALLBACK_BATCH, IMP_WINDOW_LEN)
         except Exception:
             pass
-        # Official example registers a free function before TCP connect.
-        # Bound methods have been silent (cb=0) on this 1.0.0 wheel.
+        # Register callbacks before TCP connect; the poller also drains the buffer.
         session = self
 
         def on_eeg(data: Any) -> None:
@@ -600,37 +604,35 @@ class BciGoSession:
         self._client = sdk.BCIGoClient(str(addr), int(port))
         parser = sdk.MessageParser("bcigo", _msg_type(sdk, self.msg_type_name))
 
-        # Device only accepts one TCP client; hang here = App / stale bridge holding it.
         try:
             await asyncio.wait_for(
-                self._client.start_stream(
-                    parser,
-                    fs=_fs_enum(sdk, self.sample_rate),
-                    gain=_gain_enum(sdk, self.gain),
-                    signal=_signal_enum(sdk, self.signal),
-                ),
+                start_sdk_eeg(self._client, sdk, parser, self.sample_rate, self.gain, self.signal),
                 timeout=15.0,
             )
         except asyncio.TimeoutError as exc:
+            await self.stop()
             raise RuntimeError(
-                f"连接设备 TCP 超时（{self.resolved_host}:{self.resolved_port}）。"
-                "请关闭强脑官方 App，并确认没有其它桥接占用设备后重试。"
+                f"设备连接或 EEG 启动协商超时（{self.resolved_host}:{self.resolved_port}）。"
             ) from exc
+        except BaseException:
+            await self.stop()
+            raise
         self._started = True
+        self._out_t0 = time.monotonic()
         self._start_poller()
 
-        # Peek once for data_ready — do NOT block hello on first samples.
+        # Report live only after actual EEG arrives. Leave the first batch in
+        # hardware order so poll_batch applies the channel permutation once.
         saw = False
-        peek_deadline = time.monotonic() + min(0.4, max(0.0, self.ready_timeout))
+        peek_deadline = time.monotonic() + max(0.4, self.ready_timeout)
         while time.monotonic() < peek_deadline:
-            batch = self.poll_batch()
-            if batch is not None:
-                wire, _ = batch
-                with self._lock:
-                    self._queue.appendleft(wire)
+            if not self._out_q.empty():
                 saw = True
                 break
             await asyncio.sleep(0.05)
+        if not saw:
+            await self.stop()
+            raise RuntimeError("EEG 启动已确认，但未收到采样数据；连接已释放，请检查设备采集状态。")
 
         return {
             "type": "hello",
@@ -827,13 +829,14 @@ class BciGoSession:
                     sdk.clear_eeg_buffer()
                 except Exception:
                     pass
-            if client is not None and self._started:
+            if client is not None:
+                if self._started:
+                    try:
+                        await asyncio.wait_for(client.stop_eeg_stream(), timeout=3)
+                    except Exception:
+                        pass
                 try:
-                    await client.stop_eeg_stream()
-                except Exception:
-                    pass
-                try:
-                    await client.disconnect_tcp()
+                    await asyncio.wait_for(client.disconnect_tcp(), timeout=3)
                 except Exception:
                     pass
         finally:
@@ -1028,6 +1031,7 @@ async def handle_client(websocket) -> None:  # type: ignore[no-untyped-def]
                 except (asyncio.CancelledError, Exception):
                     pass
     except Exception as exc:
+        print(f"[bcigo-bridge] connection failed: {exc}", flush=True)
         try:
             await websocket.send(
                 json.dumps({"type": "error", "message": str(exc)}, separators=(",", ":"))

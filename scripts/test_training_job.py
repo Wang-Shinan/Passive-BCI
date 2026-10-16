@@ -104,6 +104,9 @@ class SplitTests(unittest.TestCase):
                 self.model_revision = 'original'
                 self.feature_normalization = 'none'
                 self.input_clip = 7.
+                self.preprocessing_profile = 's04-mne-4s-v1'
+                self.input_channel_names = tuple(f'EEG{i}' for i in range(31))
+                self.window_sec = 4
             def load(self):
                 pass
 
@@ -115,7 +118,7 @@ class SplitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             labels = np.tile(np.arange(4), 5)
-            data = np.zeros((20, 2, 500), dtype=np.float32)
+            data = np.zeros((20, 2, 1000), dtype=np.float32)
             data[:, 0, 0] = np.arange(20)
             write_hdf5(root / 'dataset.h5', data, labels, np.ones(20, dtype=np.int64), ['group1'] * 20, np.arange(20),
                        HDF5Metadata(250, ['C3', 'C4'], ['left_hand', 'right_hand', 'tongue', 'rest'], 'uV', 'smr_control'))
@@ -140,6 +143,8 @@ class SplitTests(unittest.TestCase):
             self.assertEqual(baseline['model_revision'], 'original')
             self.assertEqual(candidate['feature_normalization'], 'none')
             self.assertEqual(candidate['input_clip'], 7.)
+            self.assertEqual(candidate['preprocessing_profile'], 's04-mne-4s-v1')
+            self.assertEqual(candidate['input_window_sec'], 4)
             self.assertTrue(torch.equal(baseline['head']['weight'], torch.zeros(4, 4)))
 
     def test_group_isolation_coverage_and_repeatability(self):
@@ -174,6 +179,9 @@ class SplitTests(unittest.TestCase):
             def __init__(self, **kwargs):
                 self._head = torch.nn.Linear(4, 4)
                 self.encoder_id = 'reve-base'
+                self.preprocessing_profile = None
+                self.input_channel_names = ()
+                self.window_sec = 2
 
             def load(self):
                 pass

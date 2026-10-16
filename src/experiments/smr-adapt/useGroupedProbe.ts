@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { currentProbeBaseline, loadProbeBaseline, recordRound, runGroupProbe, runRoundLora, trainingRequest,
-  waitForProbePrediction, type ProbeRound, type LoraOptions } from './groupedProbe'
+  waitForProbePrediction, type ProbeRound, type ProbeBaseline, type LoraOptions } from './groupedProbe'
 
 export function useGroupedProbe(options: { minimumGain: number; maximumRecallDrop: number; lora?: LoraOptions }) {
   const round = useRef<ProbeRound | null>(null)
@@ -82,6 +82,23 @@ export function useGroupedProbe(options: { minimumGain: number; maximumRecallDro
     if (!pending.current || !round.current || busy) return false
     setBusy(true)
     try {
+      // A completed round may have been recovered from its saved training
+      // results while this tab still shows the earlier load timeout.
+      if (pending.current.last) {
+        const saved = await trainingRequest<{ round: { entries: Array<{ type: string;
+          data: { model?: ProbeBaseline; sessions?: string[] } }> } }>(`rounds/${round.current.id}`,
+          undefined, controller.current!.signal)
+        const completed = saved.round.entries.filter(entry => entry.type === 'complete').at(-1)?.data
+        if (completed?.model && completed.sessions?.length === round.current.sessions.length
+          && completed.sessions.every(stem => round.current!.sessions.includes(stem))) {
+          await loadProbeBaseline(completed.model, controller.current!.signal)
+          round.current.baseline = completed.model
+          pending.current = null
+          setBlocked(false); setBusy(false)
+          setMessage('本轮数据与训练结果已保存，已恢复处理完成状态，无需重复训练。下一轮开始前检查实时 EEG。')
+          return true
+        }
+      }
       setMessage('正在恢复本轮模型…')
       await loadProbeBaseline(round.current.baseline, controller.current!.signal)
     } catch (error) {

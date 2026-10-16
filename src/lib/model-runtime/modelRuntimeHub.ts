@@ -130,6 +130,7 @@ class ModelRuntimeHub {
   private assembler = new ModelWindowAssembler({ windowSec: 4, stepSec: 0.5 })
   private listeners = new Set<() => void>()
   private pending: ModelWindowPacket[] = []
+  private lastScheduledWindow: { segment: string; end: number } | null = null
   private sourceQueue: RawBridgeBatch[] = []
   private sourceDraining = false
   private inFlight = new Set<string>()
@@ -480,6 +481,16 @@ class ModelRuntimeHub {
   }
 
   private enqueue(packet: ModelWindowPacket): void {
+    // Slide the buffer frequently, but infer only on the latest update window.
+    if (this.assembler.stepSec < this.snapshotValue.stepSec) {
+      const end = packet.header.end_time_sec
+      if (typeof end === 'number') {
+        const last = this.lastScheduledWindow
+        if (last?.segment === packet.header.segment_id && end - last.end < this.snapshotValue.stepSec - 1e-6) return
+        this.lastScheduledWindow = { segment: packet.header.segment_id, end }
+      }
+      this.pending = []
+    }
     if (this.pending.length >= MAX_PENDING) {
       this.pending.shift()
       this.patch({ droppedWindows: this.snapshotValue.droppedWindows + 1 })
@@ -664,18 +675,20 @@ class ModelRuntimeHub {
   private applyInputContract(hello: ModelServiceHello): void {
     const windowSec = hello.window_sec ?? DEFAULT_WINDOW_SEC
     const stepSec = hello.step_sec ?? DEFAULT_STEP_SEC
-    if (!(windowSec > 0) || !(stepSec > 0) || stepSec > windowSec) {
+    const slideSec = hello.slide_sec ?? stepSec
+    if (!(windowSec > 0) || !(stepSec > 0) || stepSec > windowSec || !(slideSec > 0) || slideSec > windowSec) {
       this.logDebug('warn', 'hello 切窗参数非法，保持当前窗', `${windowSec}/${stepSec}`)
       return
     }
     if (
       this.assembler.windowSec === windowSec &&
-      this.assembler.stepSec === stepSec
+      this.assembler.stepSec === slideSec
     ) {
       this.patch({ windowSec, stepSec })
       return
     }
-    this.assembler = new ModelWindowAssembler({ windowSec, stepSec })
+    this.assembler = new ModelWindowAssembler({ windowSec, stepSec: slideSec })
+    this.lastScheduledWindow = null
     this.pending = []
     this.sentWindowKeys.clear()
     this.patch({
@@ -683,7 +696,7 @@ class ModelRuntimeHub {
       stepSec,
       pendingWindows: 0,
     })
-    this.logDebug('info', `切窗已改为 ${windowSec}s`, `步长 ${stepSec}s`)
+    this.logDebug('info', `切窗已改为 ${windowSec}s`, `滑动 ${slideSec}s，预测更新 ${stepSec}s`)
   }
 
   private logDebug(level: ModelDebugLevel, message: string, detail?: string): void {

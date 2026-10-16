@@ -10,7 +10,7 @@ param(
     [string]$BaseUrl = 'http://127.0.0.1:5173',
     [string]$HeadId = '',
     [ValidateRange(0.05, 10)]
-    [double]$StepSec = 0.5
+    [double]$StepSec = 0.1
 )
 
 $ErrorActionPreference = 'Stop'

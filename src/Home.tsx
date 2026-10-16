@@ -2,6 +2,11 @@ import { Link } from 'react-router-dom'
 
 const TOOLS = [
   {
+    path: '/smr-grid', title: 'SMR 二维棋盘追踪',
+    blurb: '3×3 随机亮格，连续移动光标追踪目标。命中后保留位置，立即开始下一目标；支持 SMR 与键盘试玩。',
+    tag: '二维移动 · 连续控制', accent: '#c1e58c',
+  },
+  {
     path: '/jaw-clench', title: '咬牙与放松采集',
     blurb: '跟随全屏提示完成咬牙和放松，等量随机采集 EEG 与二分类标签。',
     tag: '提示式采集 · 咬牙 / 放松', accent: '#f3cc62',
@@ -66,6 +71,11 @@ const TOOLS = [
 ]
 
 const EXPERIMENTS = [
+  {
+    path: '/neuroslide', title: 'NeuroSlide 脑控冰面迷宫',
+    blurb: '一次方向指令，自动滑到墙前。三种难度，支持键盘单次输入和 EEG 四分类控制。',
+    tag: '四分类 MI · 冰面滑行', accent: '#7af4ea',
+  },
   {
     path: '/nback',
     title: '实验八 · N-back 工作记忆',

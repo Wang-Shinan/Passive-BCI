@@ -31,8 +31,13 @@ def train_round_lora(backend, windows, train_indices, val_indices, config):
         canonical = None
         for index in indices:
             item = windows[int(index)]
-            prepared, names = prepare_reve_window(item.data, item.channel_names, item.sample_rate, backend._lookup,
-                                                  window_sec=backend.window_sec, target_hz=backend.target_hz)
+            if backend.preprocessing_profile == 's04-mne-4s-v1':
+                from bci_dayloop.serving.reve_s04 import prepare_s04_window
+                prepared, names = prepare_s04_window(item.data, item.channel_names, item.sample_rate,
+                                                     backend.input_channel_names, window_sec=backend.window_sec)
+            else:
+                prepared, names = prepare_reve_window(item.data, item.channel_names, item.sample_rate, backend._lookup,
+                                                      window_sec=backend.window_sec, target_hz=backend.target_hz)
             if backend.input_clip is not None:
                 prepared = np.clip(prepared, -backend.input_clip, backend.input_clip)
             if canonical is not None and tuple(names) != canonical:
@@ -104,7 +109,10 @@ def train_round_lora(backend, windows, train_indices, val_indices, config):
         torch.save({'model': state, 'meta': {'lora': {'rank': config['rank'], 'alpha': config['alpha']},
                    'label_names': ['left_hand', 'right_hand', 'tongue', 'rest'],
                    'initialRevision': config['baselineRevision'], 'initialAdapter': config['loraCheckpoint'],
-                   'feature_normalization': backend.feature_normalization, 'input_clip': backend.input_clip}}, handle)
+                   'feature_normalization': backend.feature_normalization, 'input_clip': backend.input_clip,
+                   'preprocessing_profile': backend.preprocessing_profile,
+                   'input_channel_names': list(backend.input_channel_names),
+                   'input_window_sec': backend.window_sec}}, handle)
     return metrics, {'bestEpoch': best_epoch, 'rank': config['rank'], 'alpha': config['alpha'],
                      'targets': ['to_qkv', 'to_out'], 'batchSize': batch_size, 'accumulationSteps': accumulation,
                      'trainableParameters': sum(p.numel() for p in parameters),

@@ -1,5 +1,6 @@
 /** Stieger-style SMR cursor: C3/C4 Laplacian alpha → 2D velocity. */
 import { canLabelSmrHead } from './labels'
+import type { TemporalDecision } from '../../lib/model-runtime/temporalEvidence'
 
 export const SMR_WINDOW_SEC = 0.16
 export const SMR_ALPHA_CENTER_HZ = 12
@@ -245,6 +246,20 @@ export function reveCursorAxes(
 ): { zH: number; zV: number } {
   const mass = smrClassMasses(classNames, probabilities)
   return { zH: mass.right - mass.left, zV: mass.up - mass.down }
+}
+
+/** A vote chooses direction, while soft evidence determines movement strength. */
+export function reveCursorDrive(decision: TemporalDecision): { zH: number; zV: number } {
+  if (decision.ready === false) return { zH: 0, zV: 0 }
+  const axes = reveCursorAxes(decision.classNames, decision.evidenceProbabilities ?? decision.probabilities)
+  const votes = reveCursorAxes(decision.classNames, decision.probabilities)
+  // At gain 0.85, a center-to-edge movement takes at least 2.26 seconds,
+  // leaving enough feedback EEG for a complete 2-second training window.
+  const drive = (value: number, vote: number) => {
+    if (decision.evidenceProbabilities && value * vote <= 0) return 0
+    return Math.max(-0.25, Math.min(0.25, value * REVE_CURSOR_GAIN))
+  }
+  return { zH: drive(axes.zH, votes.zH), zV: drive(axes.zV, votes.zV) }
 }
 
 /** +1 if pos-class mean is higher; -1 if the physiology-signed axis is inverted. */

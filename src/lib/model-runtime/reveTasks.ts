@@ -73,7 +73,7 @@ export function defaultReveStrategy(task: string | null | undefined): 'none' | '
 }
 
 export function liveStepSecForReveTask(task: string | null | undefined): number {
-  return task === 'tetris_action' ? TETRIS_LIVE_STEP_SEC : REVE_DEFAULT_LIVE_STEP_SEC
+  return task === 'tetris_action' || task === 'smr_control' ? 0.1 : REVE_DEFAULT_LIVE_STEP_SEC
 }
 
 export function reveLiveHopMatches(actual: number | null | undefined, wanted: number): boolean {

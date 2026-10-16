@@ -101,8 +101,6 @@ export function WaveformCanvas({
     let lastShownAvail = 0
     let lastBuf0: Float32Array | null = null
     let scrolling = false
-    let behind = 0
-    let lastTick = 0
     let pxAcc = 0
     let pagePos = 0
     let lastCol = 0
@@ -116,12 +114,12 @@ export function WaveformCanvas({
       const avg = stats.n ? stats.ms / stats.n : 0
       const line =
         `${extra} full=${stats.full} blit=${stats.blit} grow=${stats.grow} skip=${stats.skip}` +
-        ` avg=${avg.toFixed(1)}ms max=${stats.maxMs.toFixed(1)}ms behind=${Math.round(behind)} arr=${stats.arr}`
+        ` avg=${avg.toFixed(1)}ms max=${stats.maxMs.toFixed(1)}ms arr=${stats.arr}`
       stats = { full: 0, blit: 0, grow: 0, skip: 0, ms: 0, n: 0, maxMs: 0, arr: 0 }
       if (typeof console !== 'undefined' && console.debug) console.debug('[paint]', line)
     }
 
-    const paint = (frameT: number) => {
+    const paint = () => {
       if (!ctx || !tctx || !sctx) return
       const t0 = performance.now()
       const p = propsRef.current
@@ -169,9 +167,7 @@ export function WaveformCanvas({
       const layoutReset = key !== layoutKey
       const bufReset = buffers[0] !== lastBuf0 || avail < lastAvail
       const arrived = lastWriteHead < 0 || bufReset ? 0 : sampleDelta(writeHead, lastWriteHead, bufLen)
-      if (!bufReset) behind += arrived
-      else {
-        behind = 0
+      if (bufReset) {
         lastShownAvail = 0
         scrolling = false
         pxAcc = 0
@@ -180,16 +176,10 @@ export function WaveformCanvas({
       }
       stats.arr += arrived
 
-      const dt = lastTick === 0 ? 1 / 60 : Math.min(0.05, Math.max(0, (frameT - lastTick) / 1000))
-      lastTick = frameT
-      const floor = Math.max(1, Math.round(0.1 * p.sampleRate))
-      let pace = 1
-      if (behind > floor * 3) pace = 1.08
-      if (behind > floor * 6) pace = 1.2
-      const natural = dt * p.sampleRate
-      const extra = behind - floor
-      const step = extra > 0 && natural > 0 ? Math.min(extra, natural * pace) : 0
-      behind -= step
+      // Consume every newly arrived sample on each paint. A separate playback
+      // clock capped at 50 ms cannot keep up with the 90/120 ms plot timers.
+      // After a long pause, redraw at most the latest visible window.
+      const step = Math.min(arrived, displaySamples)
 
       if (!layoutReset && !bufReset && step < 1e-6 && arrived === 0 && avail === lastAvail) {
         stats.skip += 1
@@ -202,8 +192,8 @@ export function WaveformCanvas({
       const cols = plotW
       const samplesPerCol = displaySamples / cols
       const full = avail >= displaySamples
-      const shownHead = (((writeHead - Math.round(behind)) % bufLen) + bufLen) % bufLen
-      const shownAvail = Math.max(0, avail - Math.round(behind))
+      const shownHead = writeHead
+      const shownAvail = avail
       const reset = layoutReset || bufReset
       const amp = PX_PER_CM / Math.max(1e-6, p.yScaleUv)
 
@@ -537,7 +527,7 @@ export function WaveformCanvas({
       for (let i = 0; i < p.channelNames.length; i++) {
         if (p.visibleChannels[i] !== false) nVis += 1
       }
-      paint(performance.now())
+      paint()
       timer = window.setTimeout(loop, plotIntervalMs(nVis))
     }
     canvas.addEventListener('click', onClick)

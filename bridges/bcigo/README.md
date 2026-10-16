@@ -37,6 +37,8 @@ WebSocket：`ws://127.0.0.1:8767/v1/stream`（开发时也可走 Vite 代理 `/w
 
 ## 排障
 
+- **SDK 2.1.2 + 固件 2.0.5**：固件的配置回复不含模式字段，一键 `start_stream` 会报 `EEG mode acknowledgement mismatch: expected 1, got 0`。桥接使用 `start_data_stream → set_eeg_config → start_eeg_stream`，仅兼容这一条缺失模式的配置回复；后续开始采样命令仍必须获得确认，并收到真实 EEG 才报告已连接。SDK 版本保持 2.1.2。
+- 启动失败也会释放 TCP；Windows 停止桥接时同时终止虚拟环境启动器及其子进程，避免残留连接占用设备。
 - **能发现设备但无波形**：关闭官方 App / 其它 ECAP 客户端后重连；或在 UI 填已知 IP（例如 mDNS 扫到的 `ameba.local` / `192.168.x.x`）与端口。
 - **mDNS 失败**：同一网段、关闭 VPN，或手动填 host/port。
 - 依赖固定在 `requirements.txt` 的已核验版本：`bcigo-sdk==2.1.2`。桥接启动时检查安装包版本，拒绝其它版本。旧版 1.0.0 在离线同包对照中将每包 10 点截成 4 点，不能用于本项目采集。

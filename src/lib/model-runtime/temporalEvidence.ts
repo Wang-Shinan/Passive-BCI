@@ -42,6 +42,8 @@ export type TemporalDecision = {
   className: string
   classNames: string[]
   probabilities: number[]
+  /** Soft evidence before hard voting; vote fractions are not model confidence. */
+  evidenceProbabilities?: number[]
   logits: number[]
   confidence: number
   rawClassId: number
@@ -237,6 +239,9 @@ export class TemporalEvidenceFilter {
       className: classNames[classId] ?? '',
       classNames,
       probabilities: outProbs,
+      ...(mode === 'vote' ? {
+        evidenceProbabilities: meanRows(this.logitHistory.slice(-nKeep).map(softmax)),
+      } : {}),
       logits: outLogits,
       confidence: outProbs[classId] ?? 0,
       rawClassId,

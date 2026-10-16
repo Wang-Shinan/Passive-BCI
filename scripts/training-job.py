@@ -54,8 +54,11 @@ def main():
                 seal_recordings(item['sessions'], item['recordingManifest'])
         elif config.get('roundId'):
             seal_recordings(config['sessions'], config['recordingManifest'])
-        print('[export] extracting labeled 2s non-overlapping windows', flush=True)
-        windows = extract_all_labeled_windows([Path(p) for p in config['sessions']], window_sec=2, hop_sec=2, label_source=config['labelSource'])
+        window_sec = float(config.get('windowSec', 2))
+        if window_sec not in (2, 4):
+            raise ValueError('训练窗口只支持 2 秒或 4 秒')
+        print(f'[export] extracting labeled {window_sec:g}s non-overlapping windows', flush=True)
+        windows = extract_all_labeled_windows([Path(p) for p in config['sessions']], window_sec=window_sec, hop_sec=window_sec, label_source=config['labelSource'])
         kept = [w for w in windows if not w.padded]
         target = out / 'dataset.h5'
         windows_to_hdf5(kept, target, subject_id=config['subjectId'])
@@ -81,7 +84,7 @@ def main():
             raise ValueError('EEG 包含非有限数值，请先检查采集数据')
         report = {'kind': 'export', 'shape': list(loaded['data'].shape), 'sampleRate': dataset.metadata.sample_rate,
                   'classNames': dataset.metadata.class_names, 'counts': np.bincount(loaded['labels'], minlength=4).tolist(),
-                  'sessions': dataset.sessions(), 'windowSec': 2, 'hopSec': 2, 'droppedPadded': len(windows) - len(kept),
+                  'sessions': dataset.sessions(), 'windowSec': window_sec, 'hopSec': window_sec, 'droppedPadded': len(windows) - len(kept),
                   'missingTrialIdSessions': sorted(session_groups)}
         if config.get('roundId'):
             report.update(roundId=config['roundId'], subjectLabel=config['subjectLabel'])
@@ -131,6 +134,9 @@ def main():
                                    cache_size=max(128, len(loaded['labels']) + 8),
                                    lora_checkpoint=Path(config['loraCheckpoint']) if config['loraCheckpoint'] else None)
         backend.load()
+        duration = loaded['data'].shape[-1] / meta.sample_rate
+        if abs(duration - backend.window_sec) > 1 / meta.sample_rate:
+            raise ValueError(f'训练数据窗口 {duration:g} 秒与模型窗口 {backend.window_sec:g} 秒不一致')
         if adaptive and backend.model_revision != config['baselineRevision']:
             raise ValueError('离线载入的基线与采集模型版本不一致，拒绝比较')
         windows = [SimpleNamespace(data=data, class_id=int(label), sample_rate=meta.sample_rate,
@@ -150,6 +156,9 @@ def main():
                                 'head_initialization': getattr(backend, 'head_initialization', None),
                                 'task': 'smr_control', 'encoder_id': backend.encoder_id, 'model_revision': backend.model_revision,
                                 'feature_normalization': backend.feature_normalization, 'input_clip': backend.input_clip,
+                                'preprocessing_profile': backend.preprocessing_profile,
+                                'input_channel_names': list(backend.input_channel_names),
+                                'input_window_sec': backend.window_sec,
                                 'lora_checkpoint': config['loraCheckpoint'], 'size': config['size']}
             with baseline_head.open('xb') as handle:
                 torch.save(baseline_payload, handle)
@@ -182,6 +191,9 @@ def main():
                         'task': 'smr_control', 'encoder_id': encoder_id, 'step': config['epochs'],
                         'feature_normalization': getattr(backend, 'feature_normalization', 'l2'),
                         'input_clip': getattr(backend, 'input_clip', None),
+                        'preprocessing_profile': getattr(backend, 'preprocessing_profile', None),
+                        'input_channel_names': list(getattr(backend, 'input_channel_names', ())),
+                        'input_window_sec': getattr(backend, 'window_sec', loaded['data'].shape[-1] / meta.sample_rate),
                         'lora_checkpoint': config['adapterOutput'] if lora else config['loraCheckpoint'], 'size': config['size'],
                         'trained_at': datetime.now(timezone.utc).isoformat(),
                         'model_revision': revision}, handle)

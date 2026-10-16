@@ -235,7 +235,7 @@ function parseReveTask(value: unknown): string {
 }
 
 function defaultLiveStepSec(task: string): number {
-  return task === 'tetris_action' ? 0.1 : 0.5
+  return task === 'tetris_action' || task === 'smr_control' ? 0.1 : 0.5
 }
 
 function parseStepSec(value: unknown, task: string): number {
@@ -483,7 +483,7 @@ export function modelServiceManagerPlugin(): Plugin {
             backend,
             message:
               backend === 'reve'
-                ? `已启动本地 REVE（${task}，pid ${child.pid}，2s 窗 / ${stepSec}s 步）`
+                ? `已启动本地 REVE（${task}，pid ${child.pid}，${stepSec}s 步；窗口按所选模型配置）`
                 : `已启动 dev mock（pid ${child.pid}）`,
           })
         }

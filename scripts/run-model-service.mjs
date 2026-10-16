@@ -86,7 +86,7 @@ function defaultStrategy(task) {
 }
 
 function defaultStepSec(task) {
-  return task === 'tetris_action' ? '0.1' : undefined
+  return task === 'tetris_action' || task === 'smr_control' ? '0.1' : undefined
 }
 
 function main() {
@@ -190,7 +190,7 @@ function main() {
     if (freshHead && !stateFile) console.warn('[model-service] Untrained task head: uniform probabilities. Pipeline check only; collect labeled EEG and fit a head before model-driven control.')
     if (checkpointHead && !stateFile) console.log('[model-service] Using the LoRA checkpoint linear head as initialization; source classes are reported by the model service.')
     console.log(
-      `[model-service] backend=reve，启动本地 REVE（2s 窗${stepSec ? ` / ${stepSec}s 步` : ''}，task=${task}，strategy=${strategy}）…`,
+      `[model-service] backend=reve，启动本地 REVE（窗口按所选模型配置${stepSec ? ` / ${stepSec}s 步` : ''}，task=${task}，strategy=${strategy}）…`,
     )
     if (stateFile) console.log(`[model-service] state-file=${stateFile}`)
   } else {

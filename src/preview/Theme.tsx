@@ -41,7 +41,7 @@ export function ThemeSwitch() {
 
 export function ExperimentThemeBar() {
   const { pathname } = useLocation()
-  if (pathname === '/' || pathname === '/smr-acquisition' || pathname === '/jaw-clench') return null
+  if (pathname === '/' || pathname === '/smr-acquisition' || pathname === '/jaw-clench' || pathname === '/neuroslide') return null
   return (
     <div className="preview-theme-bar" aria-label="实验页面配色">
       <a href="#/" className="preview-brand-home" aria-label="全域智能：返回实验目录"><BrandLogo /><span className="preview-brand-label"><Icon name="left" size={15} />实验目录</span></a>

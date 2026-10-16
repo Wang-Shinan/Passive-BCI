@@ -139,7 +139,10 @@ export function trainingPlugin(): Plugin {
                   return path.join(root, 'recordings', stem)
                 })
                 if (body.labelSource !== 'auto' && body.labelSource !== 'trial') throw new Error('无效标签来源')
+                const windowSec = body.windowSec === undefined ? 2 : trainingNumber(body.windowSec, 2, 4)
+                if (![2, 4].includes(windowSec)) throw new Error('训练窗口只支持 2 秒或 4 秒')
                 config = { sessions: [...new Set(sessions)], subjectId: round ? 1 : trainingNumber(body.subjectId, 1, 999999, true),
+                  windowSec,
                   labelSource: round ? 'trial' : body.labelSource, ...(round ? { roundId, subjectLabel: round.subjectId,
                     recordingManifest: path.join(roundDirectory(root, round.id), 'recordings.json') } : {}),
                   ...(history ? { scope: 'history', history } : {}) }

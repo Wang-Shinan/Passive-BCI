@@ -36,6 +36,16 @@ interface ManagedBridge {
   starting: Promise<EnsureResult> | null
 }
 
+function terminateBridge(child: ChildProcess): void {
+  if (child.exitCode !== null || child.killed) return
+  // Windows venv python.exe launches a child interpreter that owns the sockets.
+  if (process.platform === 'win32' && child.pid) {
+    execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 5000 })
+  } else {
+    child.kill('SIGTERM')
+  }
+}
+
 interface EnsureResult {
   ok: boolean
   name: BridgeName
@@ -353,7 +363,7 @@ export function bridgeManagerPlugin(): Plugin {
       }
 
       try {
-        child.kill('SIGTERM')
+        terminateBridge(child)
       } catch {
         /* ignore */
       }
@@ -382,9 +392,10 @@ export function bridgeManagerPlugin(): Plugin {
     const spec = SPECS[name]
     if (state.child && state.owned) {
       try {
-        state.child.kill('SIGTERM')
-      } catch {
-        /* ignore */
+        terminateBridge(state.child)
+      } catch (error) {
+        return { ok: false, name, port: spec.port, running: true, owned: true,
+          pid: state.child.pid ?? null, alreadyRunning: true, message: `停止桥接失败：${String(error)}` }
       }
       state.child = null
       state.owned = false

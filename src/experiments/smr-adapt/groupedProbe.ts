@@ -2,7 +2,7 @@ import { ensureModelService, modelServiceStatus, stopModelService } from '../../
 import { modelRuntimeHub } from '../../lib/model-runtime/modelRuntimeHub'
 import { liveStepSecForReveTask } from '../../lib/model-runtime/reveTasks'
 
-export type ProbeBaseline = { headId: string; revision: string; modelName: string; stepSec: number }
+export type ProbeBaseline = { headId: string; revision: string; modelName: string; stepSec: number; windowSec: number }
 export type ProbeRound = { id: string; subjectId: string; seed: number; sessions: string[]; baseline: ProbeBaseline }
 export type LoraOptions = { epochs: number; lr: number; rank: number; alpha: number; batchSize: number; accumulationSteps: number }
 export type ProbeReport = {
@@ -35,13 +35,16 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 export async function currentProbeBaseline(signal: AbortSignal): Promise<ProbeBaseline> {
   const status = await modelServiceStatus(signal)
   const hello = modelRuntimeHub.snapshot.serviceHello
+  if (hello?.supports_group_training === false || !hello?.window_sec || ![2, 4].includes(hello.window_sec)) {
+    throw new Error('当前模型的预处理与组间训练不兼容，请关闭组间自动训练后采集；推理和原始数据保存不受影响')
+  }
   if (!status.running || !status.owned || status.backend !== 'reve' || status.task !== 'smr_control'
     || modelRuntimeHub.snapshot.status !== 'ready' || hello?.strategy !== 'none'
     || !hello.model_revision || !hello.model_name || hello.class_names?.join(',') !== 'left_hand,right_hand,tongue,rest') {
     throw new Error('自动 probing 需要左手／右手／舌头／休息四分类 REVE 就绪；旧双手模型请重启服务并重新采集训练')
   }
   return { headId: status.headId || status.loadedHead || '', revision: hello.model_revision,
-    modelName: hello.model_name, stepSec: status.stepSec ?? liveStepSecForReveTask('smr_control') }
+    modelName: hello.model_name, stepSec: status.stepSec ?? liveStepSecForReveTask('smr_control'), windowSec: hello.window_sec }
 }
 
 export async function waitForProbePrediction(baseline: ProbeBaseline, signal: AbortSignal): Promise<void> {
@@ -68,7 +71,18 @@ export async function loadProbeBaseline(baseline: ProbeBaseline, signal: AbortSi
   modelRuntimeHub.disconnect()
   modelRuntimeHub.setEnabled(true)
   modelRuntimeHub.connect()
-  await waitForProbePrediction(baseline, signal)
+  // Finishing offline training must not require the participant to keep
+  // streaming EEG. begin/check still require a fresh prediction before a run.
+  const deadline = Date.now() + 45000
+  while (Date.now() < deadline) {
+    signal.throwIfAborted()
+    const { status, serviceHello: hello } = modelRuntimeHub.snapshot
+    if (status === 'ready' && hello?.strategy === 'none'
+      && hello.model_revision === baseline.revision && hello.model_name === baseline.modelName
+      && hello.class_names?.join(',') === 'left_hand,right_hand,tongue,rest') return
+    await delay(200, signal)
+  }
+  throw new Error('模型载入后未确认预期版本和四分类接口；已保存的数据及训练结果不受影响，可重试载入')
 }
 
 async function runJob(config: Record<string, unknown>, signal: AbortSignal): Promise<{ id: string; report: ProbeReport }> {
@@ -123,6 +137,7 @@ async function runAdaptiveTraining(round: ProbeRound, options: { minimumGain: nu
   try {
     const exported = await runJob({
       kind: 'export', roundId: round.id, sessions: round.sessions, labelSource: 'trial', subjectId: 1,
+      windowSec: original.windowSec,
       ...(lora ? { scope: 'history' } : {}),
     }, signal)
     progress(lora ? '轮末休息：联合训练 LoRA 与分类头，在相同历史验证快照上比较…' : '组间休息：均衡训练分类头，并在固定验证集上比较…')

@@ -10,13 +10,13 @@ const DIRECTIONS = { left: '左', right: '右', up: '上', down: '下' }
 type Props = {
   session: SessionState; trial: TrialRecord | null; cursor: CursorState
   running: boolean; starting: boolean; processing: boolean; blocked: boolean
-  canContinue: boolean; locked: boolean; live: boolean; operator: ReactNode
+  canContinue: boolean; locked: boolean; live: boolean; preview?: boolean; operator: ReactNode
   statusMessage: string
   onStart: () => Promise<void>; onContinue: () => Promise<void>; onStop: (reason: string) => void
 }
 
 export function AcquisitionView({ session, trial, cursor, running, starting, processing, blocked,
-  canContinue, locked, live, operator, statusMessage, onStart, onContinue, onStop }: Props) {
+  canContinue, locked, live, preview = false, operator, statusMessage, onStart, onContinue, onStop }: Props) {
   const surface = useRef<HTMLElement>(null)
   const settings = useRef<HTMLDialogElement>(null)
   const settingsButton = useRef<HTMLButtonElement>(null)
@@ -89,17 +89,17 @@ export function AcquisitionView({ session, trial, cursor, running, starting, pro
           <h1>{starting ? '请稍候' : blocked && phase === 'idle' ? '尚未开始本轮' : blocked || interrupted ? '采集已暂停'
             : resting || (ended && processing) ? '休息一下' : ended ? '本轮完成' : '准备好了吗'}</h1>
           <p role="status">{blocked || interrupted ? statusMessage || '请打开实验员设置查看状态并处理。'
-            : working ? '可以眨眼、放松，等待下一步。'
+            : working ? statusMessage || '可以眨眼、放松，等待下一步。'
               : resting ? '本组已完成。休息好后，继续下一组。'
                 : ended ? '谢谢配合，可以休息了。' : '每组先水平、后垂直；沿直线将光标移向亮起的一边。'}</p>
           {!working && !blocked && resting && <button type="button" className="smr-participant-primary"
             disabled={!canContinue} onClick={() => void start(onContinue)}>继续下一组</button>}
           {!locked && !working && !resting && <button type="button" className="smr-participant-primary"
-            onClick={() => void start(onStart)}>{ended ? '开始下一轮' : live ? '全屏开始' : '全屏预览'}</button>}
+            onClick={() => void start(onStart)}>{ended ? '开始下一轮' : preview ? '全屏预览' : '连接并全屏开始'}</button>}
           {phase === 'idle' && !starting && <div className="smr-participant-directions" aria-label="方向说明">
             <span>← 左手</span><span>右手 →</span><span>↑ 舌头</span><span>↓ 放松</span>
           </div>}
-          {phase === 'idle' && !live && !starting && <small className="smr-participant-preview">预览模式 · 不录制</small>}
+          {phase === 'idle' && !starting && <small className="smr-participant-preview">{preview ? '预览模式 · 不录制' : live ? 'EEG 已接入 · 开始前核对模型' : '正式采集 · 开始时连接 EEG 与模型'}</small>}
           {fullscreenFailed && phase === 'idle' && <small className="smr-participant-preview">未能进入全屏，可在当前窗口进行任务。</small>}
         </div>}
         {resting && <span className="smr-participant-progress">第 {completedGroup} 组已完成</span>}

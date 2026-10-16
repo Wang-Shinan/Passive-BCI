@@ -17,6 +17,8 @@ import { SmrPage } from './experiments/smr'
 import { SmrAcquisitionPage } from './experiments/smr-acquisition'
 import { JawClenchPage } from './experiments/jaw-clench'
 import { SmrUdPage } from './experiments/smr-ud'
+import { SmrGridPage } from './experiments/smr-grid'
+import { NeuroSlidePage } from './experiments/neuroslide'
 import { GazeTetrisPage } from './experiments/smr-gaze/GazeTetris'
 import { TetrisAdaptPage } from './experiments/tetris-adapt'
 import { RecordingsPage } from './recordings/RecordingsPage'
@@ -36,6 +38,8 @@ export default function App({ home, autoStartModels = true, pageHeader }: { home
         <Route path="/jaw-clench" element={<JawClenchPage />} />
         <Route path="/smr-adapt" element={<Navigate to="/smr?mode=smr" replace />} />
         <Route path="/smr-ud" element={<SmrUdPage autoStartModel={autoStartModels} />} />
+        <Route path="/smr-grid" element={<SmrGridPage />} />
+        <Route path="/neuroslide" element={<NeuroSlidePage />} />
         <Route path="/smr-gaze" element={<Navigate to="/smr?mode=gaze" replace />} />
         <Route path="/gaze-smr-tetris" element={<GazeTetrisPage key="smr" />} />
         <Route path="/gaze-tetris" element={<GazeTetrisPage key="eye" eyeOnly />} />
