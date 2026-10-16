@@ -1,0 +1,31 @@
+{
+  "nccCommit": "d5c30dcff18557045dbbabec8f18c797ef9663eb",
+  "copiedAt": "2026-10-16T09:28:10.427Z",
+  "files": [
+    "src/bci_dayloop/__init__.py",
+    "src/bci_dayloop/runtime/__init__.py",
+    "src/bci_dayloop/runtime/types.py",
+    "src/bci_dayloop/serving/__init__.py",
+    "src/bci_dayloop/serving/backends.py",
+    "src/bci_dayloop/serving/embed_paths.py",
+    "src/bci_dayloop/serving/omni_relay.py",
+    "src/bci_dayloop/serving/omni_service.py",
+    "src/bci_dayloop/serving/omni_source.py",
+    "src/bci_dayloop/serving/profiles.py",
+    "src/bci_dayloop/serving/protocol.py",
+    "src/bci_dayloop/serving/reve.py",
+    "src/bci_dayloop/serving/reve_dual_axis.py",
+    "src/bci_dayloop/serving/reve_lora.py",
+    "src/bci_dayloop/serving/reve_s04.py",
+    "src/bci_dayloop/serving/server.py",
+    "src/bci_dayloop/serving/session.py",
+    "src/bci_dayloop/serving/smr_sessions.py",
+    "src/bci_dayloop/serving/task_dominance.py",
+    "src/bci_dayloop/serving/tcp_broadcast.py"
+  ],
+  "cuts": [
+    "profiles.py no longer imports bci_dayloop.realtime",
+    "backends.py no longer imports the runtime-package loader at module import",
+    "checkpoint and adapter roots resolve outside this tree"
+  ]
+}

@@ -17,6 +17,8 @@
     "model-service:reve": "node scripts/run-model-service.mjs --backend reve",
     "model-service:reve:tetris": "node scripts/run-model-service.mjs --backend reve --task tetris_action",
     "model-service:reve:smr": "node scripts/run-model-service.mjs --backend reve --task smr_control",
+    "model-service:embed": "node scripts/run-model-service.mjs --embed --backend reve --task smr_control",
+    "test:ncc-embed": "node scripts/probe-ncc-embed.mjs",
     "model-service:reve:smr:fit": "node scripts/fit-smr-head.mjs",
     "model-service:reve:smr:export": "node scripts/export-smr-hdf5.mjs",
     "reve:follow": "node scripts/follow-reve-tcp.mjs",

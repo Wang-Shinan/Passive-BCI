@@ -90,13 +90,18 @@ function defaultStepSec(task) {
 }
 
 function main() {
+  const embed = process.argv.includes('--embed') || process.env.NCC_EMBED === '1'
   const foundNcc = findNcc()
-  if (!foundNcc) {
+  if (!foundNcc && !embed) {
     console.error('[model-service] 找不到 NCC-OI-BCI。请设置 NCC_OI_BCI_ROOT。')
     process.exit(1)
   }
-  const ncc = path.resolve(foundNcc)
-  const python = findPython(ncc)
+  const ncc = foundNcc ? path.resolve(foundNcc) : ''
+  const python = findPython(ncc || passiveRoot)
+  if (process.argv.includes('--list-heads') && !ncc) {
+    console.error('[model-service] 列出分類頭仍需要外部 NCC-OI-BCI。')
+    process.exit(1)
+  }
   if (process.argv.includes('--list-heads')) {
     const child = spawn(python, [path.join(passiveRoot, 'scripts', 'list-reve-heads.py'), passiveRoot, ncc], {
       cwd: passiveRoot, stdio: 'inherit', windowsHide: true,
@@ -182,7 +187,21 @@ function main() {
           profile,
         ]
 
-  console.log(`[model-service] NCC=${ncc}`)
+  const embedRoot = path.join(passiveRoot, 'embedded', 'ncc')
+  if (embed && (pkg || backend !== 'reve')) {
+    console.error('[model-service] --embed 只切換 REVE 服務程式碼。mock 與 MODEL_PACKAGE 仍走外部 NCC。')
+    process.exit(1)
+  }
+  if (embed && !existsSync(path.join(embedRoot, 'serve_reve_model.py'))) {
+    console.error('[model-service] 缺少內置服務。請先執行 node scripts/vendor-ncc-serving.mjs')
+    process.exit(1)
+  }
+  const codeRoot = embed ? embedRoot : ncc
+  const launchArgs = embed
+    ? args.map((item) => (item === 'scripts/serve_reve_model.py' ? 'serve_reve_model.py' : item))
+    : args
+  console.log(`[model-service] NCC=${ncc || '(weights only; code is embedded)'}`)
+  console.log(`[model-service] code=${codeRoot}`)
   console.log(`[model-service] python=${python}`)
   if (pkg) {
     console.log(`[model-service] runtime package=${pkg}`)
@@ -198,10 +217,14 @@ function main() {
     console.log('[model-service] 在线学习请用: npm run model-service:reve')
   }
 
-  const child = spawn(python, args, {
-    cwd: ncc,
+  const child = spawn(python, launchArgs, {
+    cwd: codeRoot,
     stdio: 'inherit',
-    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    env: {
+      ...process.env,
+      PYTHONUNBUFFERED: '1',
+      ...(embed ? { PYTHONPATH: path.join(embedRoot, 'src'), ...(ncc ? { NCC_OI_BCI_ROOT: ncc } : {}) } : {}),
+    },
     windowsHide: false,
   })
   child.on('error', (error) => {
