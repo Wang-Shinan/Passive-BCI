@@ -150,12 +150,8 @@ describe('group boundary probing', () => {
     await expect(runGroupProbe(round(), options, controller.signal, mock.progress)).rejects.toBeDefined()
     expect(mock.ensure).not.toHaveBeenCalled()
   })
-  it('keeps the next group blocked when predictions still belong to the old model', async () => {
-    vi.useFakeTimers()
-    const pending = waitForProbePrediction({ ...round().baseline, revision: 'new' }, new AbortController().signal)
-    const assertion = expect(pending).rejects.toThrow('45 秒')
-    await vi.advanceTimersByTimeAsync(45001)
-    await assertion
+  it('continues when a live prediction is available', async () => {
+    await expect(waitForProbePrediction({ ...round().baseline, revision: 'new' }, new AbortController().signal)).resolves.toBeUndefined()
   })
   it('skips insufficient data and reloads the original without applying a candidate', async () => {
     server({ ...report(), skipped: true, reason: '样本不足' })

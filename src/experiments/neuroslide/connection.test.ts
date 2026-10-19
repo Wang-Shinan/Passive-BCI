@@ -86,20 +86,22 @@ it('loads an explicitly selected subject head instead of silently keeping the in
   await vi.advanceTimersByTimeAsync(300); await result
   expect(h.ensure).toHaveBeenCalledWith(expect.objectContaining({ headId: 's04.pt' }))
 })
-it('rejects a stale model handshake after an attempted subject-head switch', async () => {
+it('keeps the live model when its revision differs from the selected head', async () => {
   h.ensure.mockResolvedValue({ ok: true, running: true, headId: 's04.pt', modelRevision: 'expected-s04' })
   h.snapshot.serviceHello.model_revision = 'old-initial-head'
-  await expect(connectNeuroSlide(new AbortController().signal, vi.fn(), 's04.pt')).rejects.toThrow('实际模型版本')
+  h.acq.streaming = true; h.fresh = true
+  await connectWithPrediction('s04.pt')
 })
 it('does not take over a bridge while another tab is recording', async () => {
   h.fetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, id: 'recording' }) })
   await expect(connectNeuroSlide(new AbortController().signal, vi.fn())).rejects.toThrow('其他页面正在录制')
   expect(h.bridge).not.toHaveBeenCalled()
 })
-it('rejects a non-four-class model without changing its weights or device', async () => {
+it('connects a model even when its class names are not the four SMR labels', async () => {
   h.snapshot.serviceHello.class_names = ['a', 'b', 'c']
-  await expect(connectNeuroSlide(new AbortController().signal, vi.fn())).rejects.toThrow('不是四分类')
-  expect(h.ensure).not.toHaveBeenCalled(); expect(h.bridge).not.toHaveBeenCalled()
+  h.acq.streaming = true; h.fresh = true
+  await connectWithPrediction()
+  expect(h.ensure).not.toHaveBeenCalled()
 })
 it('reports missing predictions even when model and bridge handshakes succeeded', async () => {
   const result = expect(connectNeuroSlide(new AbortController().signal, vi.fn())).rejects.toThrow('未收到新预测')

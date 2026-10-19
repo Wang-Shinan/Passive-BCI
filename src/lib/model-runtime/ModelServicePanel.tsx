@@ -13,6 +13,7 @@ import { modelRuntimeHub, modelUrlPresets } from './modelRuntimeHub'
 import { REVE_TASKS, liveStepSecForReveTask, reveTaskOption, type ReveTaskId } from './reveTasks'
 import { useModelRuntime } from './useModelRuntime'
 import { HeadSelector } from './HeadSelector'
+import { knownS04Revision } from './subjectModels'
 import { useModelConfiguration, useAppliedModel } from './useModelConfiguration'
 
 function latency(value: number | null): string {
@@ -137,12 +138,18 @@ function ModelServiceLaunchBar({
   const wrongTask = Boolean(
     reveTask && proc?.backend === 'reve' && proc.task && proc.task !== reveTask,
   )
+  const leavePort = Boolean(proc?.proxyPort && proc.proxyPort !== proc.port)
+  const forceReplace = !leavePort && (occupied || wrongTask)
   const canStop = Boolean(proc?.owned || proc?.starting || operationBusy || busy)
   const starting = busy || operationBusy || Boolean(proc?.starting)
+  const runtime = useModelRuntime()
   const defaultHeadLabel = task === 'smr_control' ? 'LoRA 自带线性头' : '默认配置'
   const loadedId = proc?.headId || ''
   const desiredId = selectedHead || (task === 'gaze_smr' ? 'gaze_smr_active.pt' : '')
-  const pendingSelection = Boolean(proc?.running && (proc.task !== task || desiredId !== loadedId || (selectedOption?.configurationKey && selectedOption.configurationKey !== proc.configurationKey)))
+  const selectedRevision = knownS04Revision(selectedHead)
+  const sameWeights = Boolean(selectedRevision && runtime.serviceHello?.model_revision === selectedRevision)
+  const pendingSelection = Boolean(proc?.running && !sameWeights && (proc.task !== task || desiredId !== loadedId || (selectedOption?.configurationKey && proc.configurationKey && selectedOption.configurationKey !== proc.configurationKey)))
+  const runningLabel = !proc?.running ? '未运行' : sameWeights ? (selectedHead || defaultHeadLabel) : (proc.headId || proc.loadedHead || defaultHeadLabel)
 
   return (
     <div className="mb-3 space-y-2">
@@ -177,11 +184,11 @@ function ModelServiceLaunchBar({
           type="button"
           className="btn btn-primary"
           disabled={recording || starting || headsLoading || invalidHead}
-          onClick={() => void launch('reve', occupied || wrongTask)}
+          onClick={() => void launch('reve', forceReplace)}
         >
-          {starting ? '正在启动…' : pendingSelection ? '应用线性头并重启' : reveLaunchLabel(reveTask, occupied || wrongTask)}
+          {starting ? '正在启动…' : pendingSelection && !leavePort ? '应用线性头并重启' : reveLaunchLabel(reveTask, forceReplace)}
         </button>
-        <button type="button" className="btn" disabled={recording || starting} onClick={() => void launch('mock', occupied)}>
+        <button type="button" className="btn" disabled={recording || starting} onClick={() => void launch('mock', !leavePort && occupied)}>
           启动 Mock
         </button>
         <button type="button" className="btn" disabled={!canStop} onClick={() => void stop()}>
@@ -193,7 +200,7 @@ function ModelServiceLaunchBar({
             : details?.message || '开发服务可一键拉起本地模型'}
         </span>
       </div>
-      <p className="muted m-0 text-xs">已运行：{proc?.running ? proc?.headId || proc?.loadedHead || defaultHeadLabel : '未运行'}。待应用：{selectedHead || defaultHeadLabel}。{pendingSelection ? '选择尚未生效；点击应用后切换。' : '选择后点击启动按钮生效。'}</p>
+      <p className="muted m-0 text-xs">已运行：{runningLabel}。待应用：{selectedHead || defaultHeadLabel}。{sameWeights ? '当前连接的模型版本与所选分类头相同。' : leavePort ? `页面连接 ${proc?.proxyPort}，${proc?.port} 上的原服务保持运行。` : pendingSelection ? '选择尚未生效；点击应用后切换。' : '选择后点击启动按钮生效。'}</p>
       {recording && <p role="status" className="muted m-0 text-xs">录制中：任务、模型和连接地址已锁定。停止服务会中断脑控，但不会删除录制。</p>}
       {selectedOption && <p className="muted m-0 text-xs">配套编码器：{selectedOption.encoderId} · {selectedOption.classes} 类。启动时自动匹配。</p>}
       {!headsLoading && !taskHeads.length && <p className="muted m-0 text-xs">当前任务暂无已保存线性头。将文件放入 recordings/.reve-heads 后刷新列表。</p>}

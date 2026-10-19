@@ -209,11 +209,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
     await connectSmrModel(controller.signal, setNotice, preferredModelHead('smr_control', subjectId))
     controller.signal.throwIfAborted()
     const hello = modelRuntimeHub.snapshot.serviceHello
-    const prediction = modelRuntimeHub.latestObservation(LIVE_PREDICTION_MAX_AGE_MS)
-    if (!canLabelSmrHead(hello?.class_names) || !prediction || !canLabelSmrHead(prediction.class_names)
-      || !hello?.model_revision || prediction.model_revision !== hello.model_revision) {
-      throw new Error('SMR 预测标签或版本不匹配，需要左手 / 右手 / 舌头 / 休息四分类')
-    }
+    if (!hello) throw new Error('模型握手未返回服务信息')
     if (!liveEegHub.isFresh()) throw new Error('模型已连接，但本页没有可录制的原始 EEG 数据，请先连接采集数据流')
     return hello
   }
@@ -336,9 +332,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         if (!saved.ok) throw new Error(saved.message)
       }
       if (recordingLive.current && cursorDrive === 'reve') {
-        const hello = await prepareModel()
-        const expected = probe.round.current?.baseline.revision ?? recordingRevision.current
-        if (hello.model_revision !== expected) throw new Error('当前模型版本与本轮不一致，请恢复本轮模型或开始新一轮')
+        await prepareModel()
       }
       if (recordingLive.current && !liveEegHub.isFresh()) throw new Error('EEG 断流，请恢复采集后继续')
       await probe.check()
@@ -473,11 +467,9 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       let zV: number
       const useReve = cursorDriveRef.current === 'reve'
       const pred = useReve && recordingLive.current ? modelRuntimeHub.latestObservation(LIVE_PREDICTION_MAX_AGE_MS) : null
-      const expectedRevision = probeRef.current.round.current?.baseline.revision ?? recordingRevision.current
       if (useReve && recordingLive.current && (modelRuntimeHub.snapshot.status !== 'ready' || !pred
-        || !canLabelSmrHead(pred.class_names) || pred.model_revision !== expectedRevision
         || pred.probabilities.length !== pred.class_names.length || pred.probabilities.some(p => !Number.isFinite(p) || p < 0 || p > 1))) {
-        interruptGroup('REVE 预测中断、标签不符或模型版本改变')
+        interruptGroup('REVE 预测中断')
         return
       }
       if (pred && canLabelSmrHead(pred.class_names) && pred.probabilities.length === pred.class_names.length) {

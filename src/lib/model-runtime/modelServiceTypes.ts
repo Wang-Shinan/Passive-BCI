@@ -11,6 +11,7 @@ export type ModelServiceEnsureResult = {
   task?: string | null
   stepSec?: number | null
   port: number
+  proxyPort?: number
   running: boolean
   owned: boolean
   pid: number | null

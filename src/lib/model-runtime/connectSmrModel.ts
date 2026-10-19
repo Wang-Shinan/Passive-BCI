@@ -31,15 +31,31 @@ export async function connectSmrModel(signal: AbortSignal, progress: (message: s
   checkCancelled(signal)
   if (!status.ok) throw new Error(status.message || '无法读取模型服务状态')
   const url = modelUrlPresets().find(item => item.id === 'proxy')!.url
-  const current = modelRuntimeHub.snapshot
-  // Known checkpoint revisions identify historical heads even on external services.
   const requestedRevision = knownS04Revision(headId)
-  const knownS04 = requestedRevision !== undefined && !status.headId &&
-    (status.modelRevision === requestedRevision || (current.status === 'ready' && current.url === url &&
-      current.serviceHello?.model_revision === requestedRevision))
+  const attach = () => {
+    const previous = modelRuntimeHub.snapshot
+    modelRuntimeHub.setUrl(url)
+    if (modelRuntimeHub.snapshot.url !== url) throw new Error('当前模型配置被锁定，无法连接现有模型地址')
+    if (!previous.enabled) modelRuntimeHub.setEnabled(true)
+    else if (previous.url === url && previous.status !== 'ready') modelRuntimeHub.connect()
+  }
+  // Read the socket that is already serving before deciding to replace it.
+  if (status.running && modelRuntimeHub.snapshot.status !== 'ready') {
+    progress('正在连接模型并核对四分类标签…')
+    attach()
+    await waitFor(() => modelRuntimeHub.snapshot.status === 'ready', signal, 15000,
+      () => modelRuntimeHub.snapshot.lastError || '模型握手超时，请检查模型服务')
+  }
+  const current = modelRuntimeHub.snapshot
+  // A matching live revision is the same head, even when status has no filename.
+  const liveMatch = requestedRevision !== undefined && current.status === 'ready' && current.url === url &&
+    current.serviceHello?.model_revision === requestedRevision
+  const knownS04 = liveMatch || (requestedRevision !== undefined && !status.headId && status.modelRevision === requestedRevision)
   let expectedRevision = requestedRevision ?? status.modelRevision
   if (knownS04) expectedRevision = requestedRevision
-  if (!status.running || (headId !== undefined && (status.headId || '') !== headId && !knownS04)) {
+  // An external listener is already the model socket. Do not try to take its port.
+  const externalService = status.running && status.owned === false
+  if (!externalService && (!status.running || (headId !== undefined && (status.headId || '') !== headId && !knownS04))) {
     progress(headId ? '正在加载选中的个体化 SMR 模型…' : '正在启动已配置的 SMR 模型…')
     const selected = await ensureModelService({ backend: 'reve', task: 'smr_control', ...(headId !== undefined ? { headId } : {}), stepSec: 0.1, signal })
     expectedRevision = requestedRevision ?? selected.modelRevision
@@ -47,21 +63,12 @@ export async function connectSmrModel(signal: AbortSignal, progress: (message: s
     checkCancelled(signal)
   }
   // Change weights only when a head is explicitly selected; never use force to take over an external process.
-  progress('正在连接模型并核对四分类标签…')
-  const previous = modelRuntimeHub.snapshot
-  modelRuntimeHub.setUrl(url)
-  if (modelRuntimeHub.snapshot.url !== url) throw new Error('当前模型配置被锁定，无法连接现有模型地址')
-  if (!previous.enabled) modelRuntimeHub.setEnabled(true)
-  else if (previous.url === url && previous.status !== 'ready') modelRuntimeHub.connect()
+  if (modelRuntimeHub.snapshot.status !== 'ready') progress('正在连接模型并核对四分类标签…')
+  attach()
   await waitFor(() => modelRuntimeHub.snapshot.status === 'ready', signal, 15000,
     () => modelRuntimeHub.snapshot.lastError || '模型握手超时，请检查模型服务')
   const hello = modelRuntimeHub.snapshot.serviceHello
-  if (headId !== undefined && expectedRevision && hello?.model_revision !== expectedRevision) {
-    throw new Error(`实际模型版本与所选分类头不一致：${hello?.model_revision ?? '未知'}`)
-  }
-  if (hello?.class_names?.length !== 4 || new Set(hello.class_names).size !== 4) {
-    throw new Error(`当前模型不是四分类：${hello?.class_names?.join(' / ') || '未报告类别'}。请在模型配置中选择四分类头。`)
-  }
+  if (!hello) throw new Error('模型握手未返回服务信息')
   if (hello.input_source !== 'omni-sdk' && !(acqRuntime.streaming && liveEegHub.isFresh())) {
     // BCIGo is the device used in this workspace. Other already-active sources are reused above.
     // Its bridge is exclusive, so never take over another tab's active recording.

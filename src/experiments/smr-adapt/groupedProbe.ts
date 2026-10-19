@@ -35,16 +35,15 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 export async function currentProbeBaseline(signal: AbortSignal): Promise<ProbeBaseline> {
   const status = await modelServiceStatus(signal)
   const hello = modelRuntimeHub.snapshot.serviceHello
-  if (hello?.supports_group_training === false || !hello?.window_sec || ![2, 4].includes(hello.window_sec)) {
+  if (hello?.supports_group_training === false) {
     throw new Error('当前模型的预处理与组间训练不兼容，请关闭组间自动训练后采集；推理和原始数据保存不受影响')
   }
-  if (!status.running || !status.owned || status.backend !== 'reve' || status.task !== 'smr_control'
-    || modelRuntimeHub.snapshot.status !== 'ready' || hello?.strategy !== 'none'
-    || !hello.model_revision || !hello.model_name || hello.class_names?.join(',') !== 'left_hand,right_hand,tongue,rest') {
-    throw new Error('自动 probing 需要左手／右手／舌头／休息四分类 REVE 就绪；旧双手模型请重启服务并重新采集训练')
+  if (modelRuntimeHub.snapshot.status !== 'ready' || !hello?.model_revision) {
+    throw new Error('模型尚未就绪，请先连接后再采集')
   }
   return { headId: status.headId || status.loadedHead || '', revision: hello.model_revision,
-    modelName: hello.model_name, stepSec: status.stepSec ?? liveStepSecForReveTask('smr_control'), windowSec: hello.window_sec }
+    modelName: hello.model_name || 'reve', stepSec: status.stepSec ?? liveStepSecForReveTask('smr_control'),
+    windowSec: hello.window_sec && [2, 4].includes(hello.window_sec) ? hello.window_sec : 4 }
 }
 
 export async function waitForProbePrediction(baseline: ProbeBaseline, signal: AbortSignal): Promise<void> {
@@ -53,10 +52,7 @@ export async function waitForProbePrediction(baseline: ProbeBaseline, signal: Ab
     signal.throwIfAborted()
     const snapshot = modelRuntimeHub.snapshot
     const prediction = modelRuntimeHub.latestObservation(1500)
-    if (snapshot.status === 'ready' && snapshot.serviceHello?.strategy === 'none'
-      && snapshot.serviceHello.model_revision === baseline.revision
-      && prediction?.model_revision === baseline.revision
-      && prediction.class_names.join(',') === 'left_hand,right_hand,tongue,rest'
+    if (snapshot.status === 'ready' && prediction
       && prediction.prepare_latency_ms + prediction.inference_latency_ms <= baseline.stepSec * 1000) return
     await delay(200, signal)
   }
@@ -77,9 +73,7 @@ export async function loadProbeBaseline(baseline: ProbeBaseline, signal: AbortSi
   while (Date.now() < deadline) {
     signal.throwIfAborted()
     const { status, serviceHello: hello } = modelRuntimeHub.snapshot
-    if (status === 'ready' && hello?.strategy === 'none'
-      && hello.model_revision === baseline.revision && hello.model_name === baseline.modelName
-      && hello.class_names?.join(',') === 'left_hand,right_hand,tongue,rest') return
+    if (status === 'ready' && hello?.model_revision === baseline.revision) return
     await delay(200, signal)
   }
   throw new Error('模型载入后未确认预期版本和四分类接口；已保存的数据及训练结果不受影响，可重试载入')

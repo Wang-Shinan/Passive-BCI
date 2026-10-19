@@ -50,6 +50,7 @@ export interface EnsureResult {
   ok: boolean
   backend: ModelServiceBackend | null
   port: number
+  proxyPort?: number
   running: boolean
   owned: boolean
   pid: number | null
@@ -62,6 +63,8 @@ export interface EnsureResult {
 }
 
 const PORT = 8768
+// Temporary: browser sockets follow the embedded service. Start and stop still use 8768.
+const PROXY_PORT: number = 8770
 const READY_PATTERN = /\[model-service\].*waiting for (?:Passive BCI|Omni SDK) windows/i
 const TIMEOUT_MS: Record<ModelServiceBackend, number> = {
   reve: 180_000,
@@ -79,7 +82,7 @@ function rewriteModelWsPath(url: string): string {
 
 /** Proxy /ws/model without Vite's ECONNREFUSED stack dump when REVE is down. */
 function proxyModelUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
-  const target = net.connect(PORT, '127.0.0.1')
+  const target = net.connect(PROXY_PORT, '127.0.0.1')
   const fail = () => {
     target.destroy()
     if (!socket.destroyed) socket.destroy()
@@ -89,7 +92,7 @@ function proxyModelUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
   target.once('connect', () => {
     const dest = rewriteModelWsPath(req.url ?? '/')
     let msg = `GET ${dest} HTTP/1.1\r\n`
-    const headers = { ...req.headers, host: `127.0.0.1:${PORT}` }
+    const headers = { ...req.headers, host: `127.0.0.1:${PROXY_PORT}` }
     for (const [key, value] of Object.entries(headers)) {
       if (value == null) continue
       msg += `${key}: ${Array.isArray(value) ? value.join(', ') : value}\r\n`
@@ -277,6 +280,7 @@ export function modelServiceManagerPlugin(): Plugin {
       gazeReport: state.gazeReport ?? null,
       loadedHead: alive ? state.logBuf.match(/\[reve\] state-file loaded[^\r\n]*[\\/]([^\\/\r\n]+\.pt)/)?.[1] ?? null : null,
       port: PORT,
+      proxyPort: PROXY_PORT,
       running: extra.running ?? false,
       owned: extra.owned ?? (state.owned && alive),
       pid: extra.pid ?? (alive && state.child?.pid ? state.child.pid : null),
@@ -300,7 +304,9 @@ export function modelServiceManagerPlugin(): Plugin {
         : listening
           ? state.owned && alive
             ? `本页托管的 ${state.backend ?? '模型服务'}${state.task ? `/${state.task}` : ''} 已在 :${PORT} 监听`
-            : `已有进程在 :${PORT} 监听（不是本页启动的）`
+            : PROXY_PORT !== PORT
+              ? `页面连接 :${PROXY_PORT}。:${PORT} 上的原服务仍在运行，不必关闭。`
+              : `已有进程在 :${PORT} 监听（不是本页启动的）`
           : state.lastError || `模型服务未运行（端口 ${PORT}）`,
     })
   }
@@ -367,6 +373,16 @@ export function modelServiceManagerPlugin(): Plugin {
           running: true,
           alreadyRunning: true,
           message: `${backend}${wantedTask ? `/${wantedTask}` : ''} 已在 :${PORT} 运行`,
+        })
+      }
+
+      if (PROXY_PORT !== PORT && listening && !(state.owned && alive)) {
+        return snapshot({
+          ok: true,
+          running: true,
+          alreadyRunning: true,
+          owned: false,
+          message: `页面连接 :${PROXY_PORT}。:${PORT} 上的原服务仍在运行，不必关闭。`,
         })
       }
 

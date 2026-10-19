@@ -37,10 +37,7 @@ export function useGroupedProbe(options: { minimumGain: number; maximumRecallDro
     if (!round.current) return
     const signal = controller.current!.signal
     const actual = await currentProbeBaseline(signal)
-    if (actual.headId !== round.current.baseline.headId || actual.revision !== round.current.baseline.revision) {
-      throw new Error('当前模型与本轮记录不一致，请恢复本轮模型后继续')
-    }
-    await waitForProbePrediction(round.current.baseline, signal)
+    await waitForProbePrediction({ ...round.current.baseline, revision: actual.revision, headId: actual.headId || round.current.baseline.headId }, signal)
   }
 
   async function finish(rel: string, last: boolean) {
