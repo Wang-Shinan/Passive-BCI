@@ -69,17 +69,18 @@ def main() -> None:
     parser.add_argument("--tcp-host", default="0.0.0.0", help="LAN follow TCP bind host.")
     parser.add_argument("--tcp-port", type=int, default=DEFAULT_TCP_PORT)
     parser.add_argument("--no-tcp", action="store_true", help="Disable JSONL TCP follow stream.")
-    parser.add_argument("--omni-endpoint", help="Direct ESP32 SDK endpoint, e.g. ble://<discovered-key>.")
+    parser.add_argument("--omni-endpoint", help="Direct Omni SDK endpoint, e.g. ble://<discovered-key>.")
+    parser.add_argument("--omni-device-type", choices=("esp32", "stm32"), default="esp32")
     parser.add_argument("--omni-relay", action="store_true", help="Share the acquisition page SDK owner on localhost:8772.")
-    parser.add_argument("--omni-channels", help="Comma-separated electrode names in hardware CH1..CH8 order; no assumed montage.")
+    parser.add_argument("--omni-channels", help="8 (ESP32) or 32 (STM32) channel names in hardware order; no assumed montage.")
     parser.add_argument("--omni-electrodes", help="Optional electrode position names separate from channel labels.")
-    parser.add_argument("--omni-positions", help="Optional JSON array of 8 XYZ triples, metres in the REVE position-bank frame.")
+    parser.add_argument("--omni-positions", help="Optional JSON array of XYZ triples, one per channel, metres in the REVE position-bank frame.")
     args = parser.parse_args()
     if args.task == 'smr_dual_axis':
         if args.state_file is None:
             parser.error('smr_dual_axis requires a dual-axis manifest --state-file')
         if args.omni_endpoint or args.omni_relay:
-            parser.error('S04 dual-axis models require the trained 31 EEG electrodes, not Omni 8-channel input')
+            parser.error('S04 dual-axis models require the trained 31 EEG electrodes; Omni input needs its own validated model')
         from bci_dayloop.serving.reve_dual_axis import DualAxisReveBackend
         backend = DualAxisReveBackend(args.checkpoint_root / f'reve-{args.size}', args.checkpoint_root / 'reve-positions',
             args.state_file, device=args.device, step_sec=args.step_sec or .5)
@@ -87,14 +88,14 @@ def main() -> None:
         run_model_service(backend, host=args.host, port=args.port, tcp_host=args.tcp_host, tcp_port=args.tcp_port, tcp_enabled=not args.no_tcp)
         return
     omni_config = None
-    if args.omni_endpoint or args.omni_channels or args.omni_relay or args.omni_electrodes or args.omni_positions:
+    if args.omni_endpoint or args.omni_channels or args.omni_relay or args.omni_electrodes or args.omni_positions or args.omni_device_type != "esp32":
         from bci_dayloop.serving.omni_source import OmniSourceConfig
         if not args.omni_endpoint or not args.omni_channels:
             parser.error("--omni-endpoint and --omni-channels must be supplied together")
         try:
             if args.omni_electrodes and args.omni_positions:
                 parser.error("Use either --omni-electrodes or --omni-positions")
-            omni_config = OmniSourceConfig(args.omni_endpoint, tuple(name.strip() for name in args.omni_channels.split(",")), relay=args.omni_relay,
+            omni_config = OmniSourceConfig(args.omni_endpoint, tuple(name.strip() for name in args.omni_channels.split(",")), relay=args.omni_relay, device_type=args.omni_device_type,
                 electrode_names=tuple(name.strip() for name in args.omni_electrodes.split(",")) if args.omni_electrodes else None,
                 electrode_positions=json.loads(args.omni_positions) if args.omni_positions else None)
         except ValueError as error:
@@ -127,8 +128,8 @@ def main() -> None:
     if omni_config is not None and omni_config.electrode_positions is None:
         from bci_dayloop.serving.reve import resolve_channel_name
         mapped = [resolve_channel_name(name, backend._lookup) for name in (omni_config.electrode_names or omni_config.channel_names)]
-        if any(name is None for name in mapped) or len(set(mapped)) != 8:
-            parser.error("--omni-channels must map to 8 distinct REVE electrode positions; CH1..CH8 placeholders are not positions")
+        if any(name is None for name in mapped) or len(set(mapped)) != omni_config.channels:
+            parser.error(f"Omni requires {omni_config.channels} distinct REVE electrode positions; CH labels are not positions")
     state_note = f" state-file={backend.state_file}" if backend.state_file else ""
     print(
         f"[model-service] REVE size={args.size} device={backend.torch_device_name} "

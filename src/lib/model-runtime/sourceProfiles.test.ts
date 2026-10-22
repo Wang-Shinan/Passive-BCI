@@ -24,6 +24,16 @@ function batch(partial: Partial<RawBridgeBatch> & Pick<RawBridgeBatch, 'channelN
 }
 
 describe('model source profiles', () => {
+  it('preserves all 32 Omni columns instead of matching the first eight', () => {
+    const source = batch({ device: 'omni', channels: 32, sampleRate: 250,
+      channelNames: Array.from({ length: 32 }, (_, i) => `CH${i + 1}`),
+      values: Float32Array.from({ length: 32 }, (_, i) => i) })
+    const matched = matchModelSourceProfile(source)!
+    expect(matched.profile.id).toBe('omni32')
+    const projected = projectRawBatchToProfile(source, matched)
+    expect(projected.channels).toBe(32)
+    expect(projected.values[31]).toBe(31)
+  })
   it('matches Neuracle 59 and BCIGo 32 layouts', () => {
     expect(
       matchModelSourceProfile(

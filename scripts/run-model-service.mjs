@@ -117,9 +117,11 @@ function main() {
   const backend = (argValue('--backend') || process.env.MODEL_BACKEND || '').trim().toLowerCase()
   const omniEndpoint = argValue('--omni-endpoint') || process.env.MODEL_OMNI_ENDPOINT
   const omniChannels = argValue('--omni-channels') || process.env.MODEL_OMNI_CHANNELS
+  const omniDeviceType = argValue('--omni-device-type') || process.env.MODEL_OMNI_DEVICE_TYPE || 'esp32'
+  if (!['esp32', 'stm32'].includes(omniDeviceType)) throw new Error('Omni device type must be esp32 or stm32')
   if (omniEndpoint || omniChannels) {
     if (backend !== 'reve' || pkg) throw new Error('Omni SDK direct input requires --backend reve')
-    if (!omniEndpoint || !omniChannels) throw new Error('Set both --omni-endpoint and --omni-channels (CH1..CH8 electrode order)')
+    if (!omniEndpoint || !omniChannels) throw new Error('Set both --omni-endpoint and --omni-channels (hardware channel order)')
   }
   const task = argValue('--task') || process.env.MODEL_REVE_TASK || 'passive_rating'
   const stepSec = argValue('--step-sec') || process.env.MODEL_STEP_SEC || defaultStepSec(task)
@@ -169,7 +171,7 @@ function main() {
           ...(stepSec ? ['--step-sec', String(stepSec)] : []),
           ...(stateFile ? ['--state-file', stateFile] : []),
           ...loraArgs,
-          ...(omniEndpoint ? ['--omni-endpoint', omniEndpoint, '--omni-channels', omniChannels] : []),
+          ...(omniEndpoint ? ['--omni-endpoint', omniEndpoint, '--omni-channels', omniChannels, '--omni-device-type', omniDeviceType] : []),
           ...(omniEndpoint && process.argv.includes('--omni-relay') ? ['--omni-relay'] : []),
           ...(omniEndpoint && argValue('--omni-electrodes') ? ['--omni-electrodes', argValue('--omni-electrodes')] : []),
           ...(omniEndpoint && argValue('--omni-positions') ? ['--omni-positions', argValue('--omni-positions')] : []),

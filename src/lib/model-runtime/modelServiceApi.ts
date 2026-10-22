@@ -76,7 +76,7 @@ export async function ensureModelService(options?: {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ backend: options?.backend ?? 'reve', task: options?.task,
         headId: options?.backend === 'mock' ? undefined : headId,
-        ...(sdkSource ? { omniSource: { endpoint: acqRuntime.omniSdkEndpoint, channelNames: acqRuntime.omniSdkChannelNames,
+        ...(sdkSource ? { omniSource: { endpoint: acqRuntime.omniSdkEndpoint, deviceType: acqRuntime.omniSdkDeviceType, channelNames: acqRuntime.omniSdkChannelNames,
           electrodeNames: acqRuntime.omniElectrodeNames, electrodePositions: acqRuntime.omniElectrodePositions } } : {}),
         stepSec: options?.stepSec, force: options?.force === true }), signal,
     })

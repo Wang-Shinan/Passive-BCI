@@ -13,8 +13,8 @@ const TOOLS = [
   },
   {
     path: '/smr-acquisition', title: 'SMR 分组采集与训练',
-    blurb: '四方向随机采集；组间保存、训练分类头、评估并选择模型，就绪后继续下一组。',
-    tag: '分组采集 · 自动 probing', accent: '#34d399',
+    blurb: '四方向随机采集。光标由随机初始化 EEGNet 驱动；组间保存原始 EEG 与试次标签，不做 LoRA。',
+    tag: '分组采集 · 左手 / 右手 / 舌头 / 休息', accent: '#34d399',
   },
   {
     path: '/training', title: '数据导出与 Linear Probing',

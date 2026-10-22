@@ -1,4 +1,4 @@
-"""ESP32 SDK batches -> continuous model windows, without browser or LSL transport."""
+"""Omni SDK batches -> continuous model windows, without browser transport."""
 
 from __future__ import annotations
 
@@ -12,6 +12,27 @@ import numpy as np
 from .protocol import ParsedWindow, validate_electrode_positions
 
 
+def channel_count(device_type: str) -> int:
+    if device_type not in ("esp32", "stm32"):
+        raise ValueError("Omni device_type must be esp32 or stm32")
+    return 32 if device_type == "stm32" else 8
+
+
+def sdk_device_options(device_type: str) -> dict:
+    channel_count(device_type)
+    if device_type == "esp32":
+        return {}  # Keep compatibility with the released 0.1.2 binding.
+    import omnibci
+    if not hasattr(omnibci, "Stm32Config"):
+        raise RuntimeError("STM32 32 通道需要 omnibci 0.2.0 的 32ch 构建；当前环境仅支持 ESP32 8 通道")
+    return {"device_type": device_type}
+
+
+def open_sdk_board(endpoint: str, device_type: str = "esp32"):
+    from omnibci import Board
+    return Board.connect(endpoint, timeout=20, **sdk_device_options(device_type))
+
+
 @dataclass(frozen=True)
 class OmniSourceConfig:
     endpoint: str
@@ -21,19 +42,24 @@ class OmniSourceConfig:
     relay: bool = False
     electrode_names: tuple[str, ...] | None = None
     electrode_positions: tuple[tuple[float, float, float], ...] | None = None
+    device_type: str = "esp32"
+
+    @property
+    def channels(self) -> int:
+        return channel_count(self.device_type)
 
     def __post_init__(self) -> None:
         if not self.endpoint.startswith(("ble://", "serial://")) or not self.endpoint.split("://", 1)[1]:
             raise ValueError("Omni endpoint must be ble://<discovered-key> or serial://<port>")
         names = [name.strip().upper() for name in self.channel_names]
-        if len(names) != 8 or any(not name for name in names) or len(set(names)) != 8:
-            raise ValueError("Supply 8 distinct electrode names in CH1..CH8 order")
+        if len(names) != self.channels or any(not name for name in names) or len(set(names)) != self.channels:
+            raise ValueError(f"Supply {self.channels} distinct channel names in hardware order")
         if self.electrode_positions is not None:
-            validate_electrode_positions(self.electrode_positions, 8)
+            validate_electrode_positions(self.electrode_positions, self.channels)
         if self.electrode_names is not None:
             electrodes = [n.strip().upper() for n in self.electrode_names]
-            if len(electrodes) != 8 or any(not n for n in electrodes) or len(set(electrodes)) != 8:
-                raise ValueError("Supply 8 distinct electrode positions in CH1..CH8 order")
+            if len(electrodes) != self.channels or any(not n for n in electrodes) or len(set(electrodes)) != self.channels:
+                raise ValueError(f"Supply {self.channels} distinct electrode positions in hardware order")
         for value in (self.max_age_sec, self.idle_timeout_sec):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("Omni timeouts must be positive and finite")
@@ -50,6 +76,8 @@ class OmniWindowAssembler:
         if not (math.isfinite(window_sec) and math.isfinite(step_sec) and 0 < step_sec <= window_sec):
             raise ValueError("Require 0 < step_sec <= window_sec")
         self.names = names
+        if len(names) not in (8, 32):
+            raise ValueError("Omni windows require 8 or 32 channels")
         self.electrode_names = electrode_names
         self.electrode_positions = electrode_positions
         self.size = round(window_sec * 250)
@@ -75,8 +103,8 @@ class OmniWindowAssembler:
         values = np.asarray(batch.eeg_uv)
         indices = np.asarray(batch.sample_indices)
         valid = np.asarray(batch.valid)
-        if batch.sample_rate_hz != 250 or values.ndim != 2 or values.shape[1] != 8:
-            raise ValueError("ESP32 SDK must provide 8 channels at 250 Hz")
+        if batch.sample_rate_hz != 250 or values.ndim != 2 or values.shape[1] != len(self.names):
+            raise ValueError(f"Omni SDK must provide {len(self.names)} channels at 250 Hz")
         if indices.shape != (len(values),) or valid.shape != (len(values),):
             raise ValueError("SDK batch metadata length mismatch")
         if indices.dtype.kind not in "iu" or np.any(indices < 0) or valid.dtype.kind != "b":
@@ -105,7 +133,7 @@ class OmniWindowAssembler:
                     request_id=f"omni-{self.segment_id}-{self.window_id}",
                     window_id=self.window_id, segment_id=self.segment_id,
                     sample_rate=250.0, channel_names=self.names,
-                    channels=8, samples=self.size,
+                    channels=len(self.names), samples=self.size,
                     start_time_sec=(index + 1 - self.size) / 250,
                     end_time_sec=(index + 1) / 250,
                     data=np.ascontiguousarray(np.stack(self.rows).T), profile=None,
@@ -117,12 +145,11 @@ class OmniWindowAssembler:
 def connect_board(config: OmniSourceConfig):
     if config.relay:
         from .omni_relay import RelayBoard
-        return RelayBoard(config.endpoint)
+        return RelayBoard(config.endpoint, device_type=config.device_type)
     try:
-        from omnibci import Board
+        return open_sdk_board(config.endpoint, config.device_type)
     except ImportError as error:
-        raise RuntimeError("Install the official omnibci 0.1.2 Windows wheel in the model Python environment") from error
-    return Board.connect(config.endpoint, timeout=20)
+        raise RuntimeError("Install the official omnibci Windows wheel in the model Python environment") from error
 
 
 def read_available(board):
@@ -134,7 +161,9 @@ def read_available(board):
         return None
 
 
-def validate_board(board) -> None:
+def validate_board(board, channels: int = 8) -> None:
     config = board.get_config()
-    if not config.verified or config.enabled_mask != 255 or config.mode not in {"eeg", "both_bias", "no_bias"}:
-        raise ValueError("Omni requires verified EEG configuration with all 8 channels enabled")
+    if not config.verified or config.enabled_mask != (1 << channels) - 1 or config.mode not in {"eeg", "both_bias", "no_bias"}:
+        raise ValueError(f"Omni requires verified EEG configuration with all {channels} channels enabled")
+    if getattr(config, "loff_mask", 0):
+        raise ValueError("Disable STM32 lead-off excitation before model inference")

@@ -17,6 +17,7 @@ import {
 } from './omni/client'
 import { sequenceGaps } from './omni/protocol'
 import { omniElectrodePositions } from './omni/positions'
+import { isOmniDeviceType, omniChannelCount, omniEndpointStorageKey, type OmniDeviceType } from './omni/device'
 import {
   CMD_START,
   CMD_STOP,
@@ -115,6 +116,17 @@ const CFG_STORAGE_KEY = 'passive-bci.acquisition.channel-config'
 const DEVICE_STORAGE_KEY = 'passive-bci.acquisition.device'
 const OMNI_LINK_STORAGE_KEY = 'passive-bci.acquisition.omni-link'
 const OMNI_STREAM_STORAGE_KEY = 'passive-bci.acquisition.omni-stream'
+const OMNI_DEVICE_TYPE_KEY = 'passive-bci.omni-sdk-device-type'
+
+function loadSdkDeviceType(): OmniDeviceType {
+  if (acqRuntime.omni) return acqRuntime.omniSdkDeviceType
+  const saved = localStorage.getItem(OMNI_DEVICE_TYPE_KEY)
+  return isOmniDeviceType(saved) ? saved : 'esp32'
+}
+
+function configKey(channels: number): string {
+  return channels === 32 ? `${CFG_STORAGE_KEY}.stm32` : CFG_STORAGE_KEY
+}
 
 const EMPTY_STATS = {
   samples: 0,
@@ -257,7 +269,7 @@ function deviceDetail(d: DeviceKind, supported: boolean, omniLink: OmniLink = 'a
   if (d === 'bcigo') {
     return '连接强脑 BCIGo Wi‑Fi（点连接会自动启动本机桥接；基于 bcigo-sdk）。'
   }
-  if (omniLink === 'sdk') return '搜索并选择 ESP32 BLE 设备后连接，再点开始采集查看波形和录制。电极位置可稍后填写。'
+  if (omniLink === 'sdk') return '选择 ESP32 8 通道或 STM32/E73 32 通道，再搜索 BLE 设备并连接，再点开始采集查看波形和录制。电极位置可稍后填写。'
   if (omniLink === 'api') {
     return '先在 OmniBCI 中开始测量并启用 LSL，再点连接。本页会自动启动 LSL 桥接并订阅 EEG 流。'
   }
@@ -266,31 +278,35 @@ function deviceDetail(d: DeviceKind, supported: boolean, omniLink: OmniLink = 'a
     : '当前浏览器不支持 Web Serial，请使用 Chrome / Edge，或改用 LSL 桥接。'
 }
 
-function loadSavedConfig(): ChannelConfig {
-  const base = defaultChannelConfig()
+function loadSavedConfig(channels = loadOmniLink() === 'sdk' ? omniChannelCount(loadSdkDeviceType()) : 8): ChannelConfig {
+  const defaults = defaultChannelConfig()
+  const names = Array.from({ length: channels }, (_, i) => `CH${i + 1}`)
+  const base: ChannelConfig = { ...defaults, labels: names,
+    enabled: Array(channels).fill(true), bias: Array.from({ length: channels }, (_, i) => channels === 32 || i < 5),
+    srb2: Array(channels).fill(true), gains: Array(channels).fill(24) }
   try {
-    const raw = localStorage.getItem(CFG_STORAGE_KEY)
+    const raw = localStorage.getItem(configKey(channels))
     if (!raw) return base
     const parsed = JSON.parse(raw) as Partial<ChannelConfig>
     const labels = Array.isArray(parsed.labels)
-      ? Array.from({ length: CHANNELS }, (_, i) =>
-          String(parsed.labels?.[i] ?? CHANNEL_NAMES[i]).trim() || CHANNEL_NAMES[i]!,
+      ? Array.from({ length: channels }, (_, i) =>
+          String(parsed.labels?.[i] ?? names[i]).trim() || names[i]!,
         )
       : base.labels
     return {
-      enabled: Array.from({ length: CHANNELS }, (_, i) => Boolean(parsed.enabled?.[i] ?? true)),
-      bias: Array.from({ length: CHANNELS }, (_, i) => Boolean(parsed.bias?.[i] ?? i < 5)),
-      srb2: Array.from({ length: CHANNELS }, (_, i) => Boolean(parsed.srb2?.[i] ?? true)),
-      gains: Array.from({ length: CHANNELS }, (_, i) => {
+      enabled: Array.from({ length: channels }, (_, i) => Boolean(parsed.enabled?.[i] ?? true)),
+      bias: Array.from({ length: channels }, (_, i) => Boolean(parsed.bias?.[i] ?? i < 5)),
+      srb2: Array.from({ length: channels }, (_, i) => Boolean(parsed.srb2?.[i] ?? true)),
+      gains: Array.from({ length: channels }, (_, i) => {
         const g = Number(parsed.gains?.[i] ?? 24)
         return (VALID_GAINS as readonly number[]).includes(g) ? g : 24
       }),
       labels,
       electrodeNames: Array.isArray(parsed.electrodeNames)
-        ? Array.from({ length: CHANNELS }, (_, i) => String(parsed.electrodeNames?.[i] ?? '').trim())
+        ? Array.from({ length: channels }, (_, i) => String(parsed.electrodeNames?.[i] ?? '').trim())
         : undefined,
       positionMode: parsed.positionMode === 'cartesian' || parsed.positionMode === 'spherical' ? parsed.positionMode : 'standard',
-      positionCoordinates: Array.isArray(parsed.positionCoordinates) ? Array.from({ length: CHANNELS }, (_, i) =>
+      positionCoordinates: Array.isArray(parsed.positionCoordinates) ? Array.from({ length: channels }, (_, i) =>
         Array.from({ length: 3 }, (_, j) => String(parsed.positionCoordinates?.[i]?.[j] ?? ''))) : undefined,
       reference:
         Number(parsed.reference) === REFERENCE_SRB2 ? REFERENCE_SRB2 : REFERENCE_SRB1,
@@ -302,7 +318,7 @@ function loadSavedConfig(): ChannelConfig {
 
 function saveConfig(cfg: ChannelConfig): void {
   try {
-    localStorage.setItem(CFG_STORAGE_KEY, JSON.stringify(cfg))
+    localStorage.setItem(configKey(cfg.labels.length), JSON.stringify(cfg))
   } catch {
     /* ignore quota */
   }
@@ -326,15 +342,16 @@ export function AcquisitionDebugPage() {
   const [omniLink, setOmniLink] = useState<OmniLink>(() => loadOmniLink())
   const [omniStream, setOmniStream] = useState<OmniStreamKind>(() => loadOmniStream())
   const [omniProbe, setOmniProbe] = useState('')
+  const [sdkDeviceType, setSdkDeviceType] = useState<OmniDeviceType>(loadSdkDeviceType)
   const [sdkDevices, setSdkDevices] = useState<OmniSdkDevice[]>([])
   const [sdkSearching, setSdkSearching] = useState(false)
-  const [sdkEndpoint, setSdkEndpoint] = useState(() => acqRuntime.omniSdkEndpoint || localStorage.getItem('passive-bci.omni-sdk-endpoint') || '')
+  const [sdkEndpoint, setSdkEndpoint] = useState(() => acqRuntime.omniSdkEndpoint || localStorage.getItem(omniEndpointStorageKey(loadSdkDeviceType())) || '')
   const [sdkMessage, setSdkMessage] = useState('')
   const searchSdk = async () => {
     setSdkSearching(true)
     setSdkMessage('正在搜索附近的 BLE 设备…')
     try {
-      const found = await discoverOmniSdk()
+      const found = await discoverOmniSdk(sdkDeviceType)
       setSdkDevices(found)
       if (!found.some(d => d.endpoint === sdkEndpoint)) setSdkEndpoint(found.find(d => /omni/i.test(d.name))?.endpoint ?? '')
       setSdkMessage(found.length ? `发现 ${found.length} 台设备，请选择后连接。` : '未发现设备，请确认已开机并开启蓝牙。')
@@ -343,8 +360,10 @@ export function AcquisitionDebugPage() {
   }
   useEffect(() => {
     acqRuntime.omniSdkEndpoint = sdkEndpoint
-    localStorage.setItem('passive-bci.omni-sdk-endpoint', sdkEndpoint)
-  }, [sdkEndpoint])
+    acqRuntime.omniSdkDeviceType = sdkDeviceType
+    localStorage.setItem(omniEndpointStorageKey(sdkDeviceType), sdkEndpoint)
+    localStorage.setItem(OMNI_DEVICE_TYPE_KEY, sdkDeviceType)
+  }, [sdkEndpoint, sdkDeviceType])
   const [status, setStatus] = useState<ConnUi>(() => {
     if (acqRuntime.status !== 'idle') return acqRuntime.status
     if (device === 'omni' && loadOmniLink() === 'usb') return supported ? 'idle' : 'unsupported'
@@ -354,6 +373,19 @@ export function AcquisitionDebugPage() {
     () => liveEegHub.meta.detail || deviceDetail(device, supported, loadOmniLink()),
   )
   const [cfg, setCfg] = useState<ChannelConfig>(() => loadSavedConfig())
+  const switchSdkDeviceType = (next: OmniDeviceType) => {
+    if (status === 'connecting' || status === 'open' || status === 'streaming' || status === 'demo' || sdkSearching) return
+    const nextConfig = loadSavedConfig(omniChannelCount(next))
+    setSdkDeviceType(next)
+    setSdkEndpoint(localStorage.getItem(omniEndpointStorageKey(next)) || '')
+    setSdkDevices([])
+    setSdkMessage('')
+    setMontageId('custom')
+    setCfg(nextConfig)
+    setStreamLabels([...nextConfig.labels])
+    resizeBuffers(nextConfig.labels.length)
+    setVisible(Array(nextConfig.labels.length).fill(true))
+  }
   const [montageId, setMontageId] = useState('custom')
   const [eegMode, setEegMode] = useState(1)
   const [viewFiltered, setViewFiltered] = useState(true)
@@ -848,7 +880,7 @@ export function AcquisitionDebugPage() {
       liveEegHub.configure({
         device: 'omni',
         sampleRate: FS,
-        channelNames: cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!),
+        channelNames: cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`),
         detail: msg,
       })
       liveEegHub.markOpen(msg)
@@ -934,9 +966,9 @@ export function AcquisitionDebugPage() {
       /* ignore */
     }
     if (next === 'omni') {
-      resizeBuffers(CHANNELS)
+      resizeBuffers(cfg.labels.length)
       setStreamLabels([...cfg.labels])
-      setVisible(Array.from({ length: CHANNELS }, () => true))
+      setVisible(Array.from({ length: cfg.labels.length }, () => true))
       setSampleRate(FS)
       setCatchupClock(omniLink === 'usb' ? FS : FS, omniLink === 'usb' ? FRAME_BYTES : undefined)
       setStatus(omniLink === 'usb' && !supported ? 'unsupported' : 'idle')
@@ -957,9 +989,12 @@ export function AcquisitionDebugPage() {
     } catch {
       /* ignore */
     }
-    resizeBuffers(CHANNELS)
-    setStreamLabels([...cfg.labels])
-    setVisible(Array.from({ length: CHANNELS }, () => true))
+    const nextConfig = loadSavedConfig(next === 'sdk' ? omniChannelCount(sdkDeviceType) : 8)
+    setMontageId('custom')
+    setCfg(nextConfig)
+    resizeBuffers(nextConfig.labels.length)
+    setStreamLabels([...nextConfig.labels])
+    setVisible(Array.from({ length: nextConfig.labels.length }, () => true))
     setSampleRate(FS)
     setCatchupClock(FS, next === 'usb' ? FRAME_BYTES : undefined)
     setStatus(next === 'usb' && !supported ? 'unsupported' : 'idle')
@@ -1092,7 +1127,8 @@ export function AcquisitionDebugPage() {
       acqRuntime.bcigo = null
       acqRuntime.device = 'omni'
       acqRuntime.omniLink = sdk ? 'sdk' : 'api'
-      resetBuffers(CHANNELS)
+      acqRuntime.omniSdkDeviceType = sdkDeviceType
+      resetBuffers(cfg.labels.length)
       acqRuntime.status = 'connecting'
       liveEegHub.configure({ device: 'omni', sampleRate: FS, channelNames: [...cfg.labels] })
       liveEegHub.markConnecting(sdk ? '正在连接 SDK BLE…' : '正在启动 OmniBCI LSL 桥接…')
@@ -1112,6 +1148,7 @@ export function AcquisitionDebugPage() {
       const client = new OmniWsClient({
         url: omniWsUrl(sdk),
         endpoint: sdk ? sdkEndpoint : undefined,
+        deviceType: sdk ? sdkDeviceType : undefined,
         stream: omniStream,
         onStatus: (s, d) => {
           if (s === 'connecting') {
@@ -1175,10 +1212,10 @@ export function AcquisitionDebugPage() {
             samples: batch.samples,
             channels: batch.channels,
             sampleRate: batch.sampleRate,
-            channelNames: batch.channels === CHANNELS
+            channelNames: batch.channels === acqRuntime.omniSdkChannelNames.length
               ? [...acqRuntime.omniSdkChannelNames] : batch.channelNames,
-            electrodeNames: batch.channels === CHANNELS ? acqRuntime.omniElectrodeNames : undefined,
-            electrodePositions: batch.channels === CHANNELS ? acqRuntime.omniElectrodePositions : undefined,
+            electrodeNames: batch.channels === acqRuntime.omniSdkChannelNames.length ? acqRuntime.omniElectrodeNames : undefined,
+            electrodePositions: batch.channels === acqRuntime.omniSdkChannelNames.length ? acqRuntime.omniElectrodePositions : undefined,
             unit: batch.unit,
             packetLoss: batch.packetLoss,
             packetCount: batch.packetCount,
@@ -1398,7 +1435,7 @@ export function AcquisitionDebugPage() {
         sampleRate,
         channels: names.length,
         channelNames: names,
-        ...(device === 'omni' ? { electrodeNames: cfg.electrodeNames?.map(n => n.trim()),
+        ...(device === 'omni' ? { ...(omniLink === 'sdk' ? { omniDeviceType: sdkDeviceType } : {}), electrodeNames: cfg.electrodeNames?.map(n => n.trim()),
           electrodePositions: omniElectrodePositions(cfg), positionUnit: 'm', positionFrame: 'reve-position-bank',
           positionMode: cfg.positionMode ?? 'standard', positionCoordinates: cfg.positionCoordinates } : {}),
       }
@@ -1409,7 +1446,7 @@ export function AcquisitionDebugPage() {
       frameBytes: FRAME_BYTES,
       sampleRate: FS,
       channels: CHANNELS,
-      channelNames: cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!),
+      channelNames: cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`),
       electrodeNames: cfg.electrodeNames?.map(n => n.trim()),
       electrodePositions: omniElectrodePositions(cfg), positionUnit: 'm', positionFrame: 'reve-position-bank',
       positionMode: cfg.positionMode ?? 'standard', positionCoordinates: cfg.positionCoordinates,
@@ -1488,7 +1525,7 @@ export function AcquisitionDebugPage() {
       return
     }
     resetBuffers(CHANNELS)
-    setStreamLabels(cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!))
+    setStreamLabels(cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`))
     setVisible(Array.from({ length: CHANNELS }, () => true))
     setSampleRate(FS)
     setCatchupClock(FS, FRAME_BYTES)
@@ -1509,7 +1546,7 @@ export function AcquisitionDebugPage() {
       liveEegHub.configure({
         device: 'omni',
         sampleRate: FS,
-        channelNames: cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!),
+        channelNames: cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`),
         detail: streamDetail,
       })
       liveEegHub.markStreaming(streamDetail)
@@ -1637,7 +1674,7 @@ export function AcquisitionDebugPage() {
 
   const applyMontage = (id: string) => {
     const preset = MONTAGE_PRESETS.find((p) => p.id === id)
-    if (!preset) {
+    if (!preset || preset.names.length !== cfg.labels.length) {
       setMontageId('custom')
       return
     }
@@ -1651,7 +1688,7 @@ export function AcquisitionDebugPage() {
   const channelLabels =
     usesBridgeStream(device, omniLink) || status === 'demo'
       ? streamLabels
-      : cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!)
+      : cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`)
 
   useEffect(() => {
     if (channelLabels.length === visible.length) persistHiddenFromMask(channelLabels, visible)
@@ -1894,11 +1931,11 @@ export function AcquisitionDebugPage() {
   // Keep Omni labels in sync for waveform when editing omni config
   useEffect(() => {
     if (device === 'omni' && status !== 'demo') {
-      setStreamLabels(cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!))
-      acqRuntime.omniSdkChannelNames = cfg.labels.map((l, i) => l.trim() || CHANNEL_NAMES[i]!)
+      setStreamLabels(cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`))
+      acqRuntime.omniSdkChannelNames = cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`)
       acqRuntime.omniElectrodeNames = cfg.electrodeNames?.map(n => n.trim())
       acqRuntime.omniElectrodePositions = omniElectrodePositions(cfg)
-      if (liveEegHub.meta.device === 'omni' && liveEegHub.meta.channelNames.length === CHANNELS) liveEegHub.configure({ channelNames: acqRuntime.omniSdkChannelNames })
+      if (liveEegHub.meta.device === 'omni' && liveEegHub.meta.channelNames.length === cfg.labels.length) liveEegHub.configure({ channelNames: acqRuntime.omniSdkChannelNames })
     }
   }, [cfg.labels, cfg.electrodeNames, cfg.positionMode, cfg.positionCoordinates, device, status])
 
@@ -2068,6 +2105,14 @@ export function AcquisitionDebugPage() {
           ) : null}
           {omniSdk ? (
             <>
+              <label className="acq-field">设备型号
+                <select className="select" aria-label="Omni 设备型号" value={sdkDeviceType}
+                  disabled={deviceBusy || deviceLinked || sdkSearching || status === 'demo'}
+                  onChange={e => switchSdkDeviceType(e.target.value as OmniDeviceType)}>
+                  <option value="esp32">ESP32 · 8 通道</option>
+                  <option value="stm32">STM32 / E73 · 32 通道</option>
+                </select>
+              </label>
               <button className="btn" disabled={deviceBusy || deviceLinked || sdkSearching} onClick={() => void searchSdk()}>{sdkSearching ? '搜索中…' : '搜索 BLE 设备'}</button>
               <label className="acq-field">BLE 设备
                 <select className="select" aria-label="BLE 设备" value={sdkEndpoint} disabled={deviceBusy || deviceLinked || sdkSearching} onChange={e => setSdkEndpoint(e.target.value)}>
@@ -2271,7 +2316,7 @@ export function AcquisitionDebugPage() {
         {device === 'omni' ? (
           <details style={{ marginTop: 8 }}>
             <summary>通道名称与电极位置（REVE）</summary>
-            <p className="acq-hint">位置按 CH1–CH8 接线顺序填写，例如 C3、C4；无需重命名通道。位置会单独保存并传给 REVE，更改后重新应用模型。暂不填写仍可采集；若未单独设置位置，模型沿用通道名称查找。</p>
+            <p className="acq-hint">位置按 CH1–CH{cfg.labels.length} 接线顺序填写，例如 C3、C4；无需重命名通道。位置会单独保存并传给 REVE，更改后重新应用模型。暂不填写仍可采集；若未单独设置位置，模型沿用通道名称查找。</p>
             <label className="acq-field">位置输入
               <select className="select" aria-label="电极位置输入方式" value={cfg.positionMode ?? 'standard'} disabled={recording || status === 'connecting' || status === 'streaming'}
                 onChange={event => updateCfg({ positionMode: event.target.value as ChannelConfig['positionMode'], positionCoordinates: undefined })}>
@@ -2291,14 +2336,14 @@ export function AcquisitionDebugPage() {
                   {!cfg.positionMode || cfg.positionMode === 'standard' ? <input className="input" aria-label={`CH${index + 1} 电极位置`} title="REVE 电极位置" placeholder="位置，如 C3" list="omni-electrode-positions" style={{ width: 110 }}
                     value={cfg.electrodeNames?.[index] ?? ''} disabled={recording || status === 'connecting' || status === 'streaming'}
                     onChange={event => { const value = event.target.value; updateCfg(c => {
-                      const names = Array.from({ length: CHANNELS }, (_, i) => c.electrodeNames?.[i] ?? '')
+                      const names = Array.from({ length: c.labels.length }, (_, i) => c.electrodeNames?.[i] ?? '')
                       names[index] = value
                       return { ...c, electrodeNames: names.some(n => n.trim()) ? names : undefined }
                     }) }} /> : (cfg.positionMode === 'spherical' ? ['方位角 °', '仰角 °', '半径 m'] : ['X m', 'Y m', 'Z m']).map((axis, j) =>
                       <input key={`${cfg.positionMode}-${j}`} className="input" type="number" step="any" aria-label={`CH${index + 1} ${axis}`} placeholder={axis} style={{ width: 96 }}
                         value={cfg.positionCoordinates?.[index]?.[j] ?? ''} disabled={recording || status === 'connecting' || status === 'streaming'}
                         onChange={event => { const value = event.target.value; updateCfg(c => ({ ...c,
-                          positionCoordinates: Array.from({ length: CHANNELS }, (_, i) => Array.from({ length: 3 }, (_, k) =>
+                          positionCoordinates: Array.from({ length: c.labels.length }, (_, i) => Array.from({ length: 3 }, (_, k) =>
                             i === index && k === j ? value : c.positionCoordinates?.[i]?.[k] ?? '')) })) }} />)}
                 </div>
               ))}
@@ -2585,7 +2630,7 @@ export function AcquisitionDebugPage() {
               通道名预设
               <select className="select" value={montageId} disabled={recording || status === 'connecting' || status === 'streaming'} onChange={(e) => applyMontage(e.target.value)}>
                 <option value="custom">自定义</option>
-                {MONTAGE_PRESETS.map((p) => (
+                {MONTAGE_PRESETS.filter(p => p.names.length === cfg.labels.length).map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.label}
                   </option>

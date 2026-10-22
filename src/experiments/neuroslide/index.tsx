@@ -6,7 +6,7 @@ import { IceGame, DIRECTIONS, type Direction } from './engine'
 import { LEVELS } from './levels'
 import { KeyboardInput, KEY_DIRECTIONS } from './input'
 import { BciCommandFilter, DEFAULT_FILTER, MI_MAPPING, MAPPING_PRESETS, mappingForLabels,
-  fromModelPrediction, mappingMatches, validFrame, migrateFilterConfig,
+  fromModelPrediction, mappingMatches, validFrame, migrateFilterConfig, stableCountForClass,
   type PredictionFrame, type ClassMapping, type FilterConfig, type MappingPreset } from './bci'
 import { connectNeuroSlide } from './connection'
 import { S04_MODEL_OPTIONS, S04_HEAD } from '../../lib/model-runtime/subjectModels'
@@ -321,16 +321,22 @@ export function NeuroSlidePage() {
             ['threshold', '置信度阈值', .26, 1, .01], ['stableCount', '稳定预测数', 1, 30, 1],
             ['releaseThreshold', '释放阈值', .25, .99, .01], ['releaseCount', '释放预测数', 1, 30, 1],
           ] as const).map(([key, label, min, max, step]) => <label key={key}>{label}<input aria-label={label} type="number" min={min} max={max} step={step} value={settings.config[key]} onChange={e => applySettings(settings.mapping, { ...settings.config, [key]: Number(e.target.value) })}/></label>)}</div>
-          <fieldset className="ns-rest-debug">
-            <legend>rest 独立稳定预测调试</legend>
-            <label>rest 稳定预测数<input aria-label="rest 稳定预测数" type="number" min={1} max={30} step={1}
-              value={settings.config.restStableCount}
-              onChange={e => applySettings(settings.mapping, { ...settings.config, restStableCount: Number(e.target.value) })}/></label>
-            <p>休息类连续 {settings.config.restStableCount} 次达到置信度阈值才确认。其他类别仍使用上方「稳定预测数」。</p>
-            {!Object.values(settings.mapping).includes('rest') && <p>当前映射不含 rest，此项在接入 rest 类后生效。</p>}
-          </fieldset>
+          <p>下方可分别调整四个方向对应类别的稳定预测数。未单独设置的类别沿用上方「稳定预测数」；独立设置随类别保存。</p>
+          {DIRECTIONS.map(direction => {
+            const label = settings.mapping[direction]
+            const count = stableCountForClass(settings.config, label)
+            return <fieldset key={direction} className={`ns-class-debug${label === 'rest' ? ' ns-rest-debug' : ''}`}>
+              <legend>{ARROW[direction]} 向{WORD[direction]} · {label} 独立稳定预测调试</legend>
+              <label>{label} 稳定预测数<input aria-label={`${label} 稳定预测数`} type="number" min={1} max={30} step={1}
+                value={count}
+                onChange={e => applySettings(settings.mapping, label === 'rest'
+                  ? { ...settings.config, restStableCount: Number(e.target.value) }
+                  : { ...settings.config, classStableCounts: { ...settings.config.classStableCounts, [label]: Number(e.target.value) } })}/></label>
+              <p>{CLASS_TEXT[label] ?? label}连续 {count} 次达到置信度阈值才确认向{WORD[direction]}指令。</p>
+            </fieldset>
+          })}
           {configError && <p className="ns-warning">{configError}</p>}
-          <p>连续流：先连续 {settings.config.releaseCount} 次最高概率 ≤ {settings.config.releaseThreshold}，再连续确认同类概率 ≥ {settings.config.threshold}：rest 需 {settings.config.restStableCount} 次，其他类别需 {settings.config.stableCount} 次。持续高置信度不会连续移动；释放不等于 rest 类。</p>
+          <p>连续流：先连续 {settings.config.releaseCount} 次最高概率 ≤ {settings.config.releaseThreshold}，再连续确认同类概率 ≥ {settings.config.threshold}：{DIRECTIONS.map(direction => `${ARROW[direction]} ${settings.mapping[direction]} 需 ${stableCountForClass(settings.config, settings.mapping[direction])} 次`).join('，')}。持续高置信度不会连续移动；释放不等于 rest 类。</p>
           <p>独立试次接口可传 roundId；同一试次最多执行一次，滑行期间试次直接丢弃。操作次数包含撞墙指令。暂停会在本次滑行抵达停点后生效。</p>
         </details>
       </aside>

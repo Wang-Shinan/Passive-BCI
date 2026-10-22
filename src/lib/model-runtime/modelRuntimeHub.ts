@@ -658,7 +658,7 @@ class ModelRuntimeHub {
         lastError: '',
         ...(directSource ? {
           sourceCompatible: true,
-          sourceDetail: 'Omni SDK 直连 · Python 切窗与推理 · 8 导 / 250 Hz',
+          sourceDetail: 'Omni SDK 直连 · Python 切窗与推理 · 250 Hz',
           droppedWindows: message.source_dropped_windows ?? this.snapshotValue.droppedWindows,
         } : {}),
       })

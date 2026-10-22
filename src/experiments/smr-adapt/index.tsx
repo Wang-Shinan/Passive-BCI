@@ -16,7 +16,7 @@ import {
 } from '../../lib/model-runtime'
 import { randomSeed } from '../../lib/rng'
 import { preferredModelHead, saveModelHeadPreference, notifyModelSubjectChanged } from '../../lib/model-runtime/modelHeadPreference'
-import { connectSmrModel, S04_HEAD } from '../../lib/model-runtime/connectSmrModel'
+import { connectEegnetSmr, connectSmrModel, S04_HEAD } from '../../lib/model-runtime/connectSmrModel'
 import {
   startExperimentRecording,
   stopExperimentRecording,
@@ -119,7 +119,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
   const [autoProbe, setAutoProbe] = useState(true)
   const [minimumGain, setMinimumGain] = useState(0.02)
   const [maximumRecallDrop, setMaximumRecallDrop] = useState(0)
-  const [autoLora, setAutoLora] = useState(true)
+  const [autoLora, setAutoLora] = useState(false)
   const [loraEpochs, setLoraEpochs] = useState(5)
   const [loraLr, setLoraLr] = useState(.0001)
   const probe = useGroupedProbe({ minimumGain, maximumRecallDrop,
@@ -175,6 +175,12 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         if (ac.signal.aborted) return
         // Visiting a page must never replace a running participant model.
         if (!autoStartModel || cursorDrive !== 'reve') return
+        if (groupedAcquisition) {
+          modelRuntimeHub.setUrl('ws://127.0.0.1:8773/v1/model')
+          if (!modelRuntimeHub.snapshot.enabled) modelRuntimeHub.setEnabled(true)
+          else if (!['ready', 'connecting'].includes(modelRuntimeHub.snapshot.status)) modelRuntimeHub.connect()
+          return
+        }
         if (status.running && status.task === 'smr_control') {
           if (!modelRuntimeHub.snapshot.enabled) modelRuntimeHub.setEnabled(true)
           else if (!['ready', 'connecting'].includes(modelRuntimeHub.snapshot.status)) modelRuntimeHub.connect()
@@ -186,7 +192,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       }
     })()
     return () => ac.abort()
-  }, [cursorDrive, autoStartModel, subjectId])
+  }, [cursorDrive, autoStartModel, subjectId, groupedAcquisition])
 
   const montage = useMemo(
     () => resolveLaplacianMontage(eeg.meta.channelNames),
@@ -206,7 +212,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
     connectionController.current?.abort()
     const controller = new AbortController()
     connectionController.current = controller
-    await connectSmrModel(controller.signal, setNotice, preferredModelHead('smr_control', subjectId))
+    await (groupedAcquisition ? connectEegnetSmr(controller.signal, setNotice) : connectSmrModel(controller.signal, setNotice, preferredModelHead('smr_control', subjectId)))
     controller.signal.throwIfAborted()
     const hello = modelRuntimeHub.snapshot.serviceHello
     if (!hello) throw new Error('模型握手未返回服务信息')
@@ -577,10 +583,10 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
           <label>每轮组数<input type="number" min={1} max={50} value={groupCount} onChange={e => setGroupCount(Number(e.target.value))} /></label>
           <label>每组试次数<input type="number" min={4} max={200} step={4} value={groupTrials} onChange={e => setGroupTrials(Number(e.target.value))} /></label>
           <label>光标驱动<select value={cursorDrive} onChange={e => setCursorDrive(e.target.value as CursorDrive)}>
-            <option value="reve">REVE 四分类</option><option value="features">C3/C4 mu</option>
+            <option value="reve">{groupedAcquisition ? 'EEGNet 四分类' : 'REVE 四分类'}</option><option value="features">C3/C4 mu</option>
           </select></label>
           <label className="smr-operator-check"><input type="checkbox" checked={autoProbe} disabled={!autoTrainingCompatible} onChange={e => setAutoProbe(e.target.checked)} />组间自动训练并评估接管</label>
-          {!autoTrainingCompatible && <p>当前导入模型的预处理尚未接入组间训练，已关闭自动训练。推理和原始数据保存照常进行。</p>}
+          {!autoTrainingCompatible && <p>{runtime.serviceHello?.model_type === 'eegnet' ? '当前是随机初始化 EEGNet：左手、右手、舌头、休息。本页分组采集并保存原始 EEG 与试次标签；组间不做 LoRA。之后对这份数据做线性探测，再微调。' : '当前导入模型的预处理尚未接入组间训练，已关闭自动训练。推理和原始数据保存照常进行。'}</p>}
           {autoProbe && cursorDrive === 'reve' && <>
             <label className="smr-operator-check"><input type="checkbox" checked={autoLora} onChange={e => setAutoLora(e.target.checked)} />轮末 LoRA（同被试历史数据）</label>
             {autoLora && <>
@@ -628,7 +634,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
           {embedded ? <h2>运动想象 · 个体化适配</h2> : <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">{groupedAcquisition ? 'SMR 分组采集与训练' : 'SMR 个体化适配'}</h1>}
           {!embedded && !groupedAcquisition && <Link to="/smr-gaze" className="btn mt-3">全屏 SMR 采集</Link>}
           <p className="muted mt-1 max-w-2xl text-sm">
-            {groupedAcquisition ? '四方向均衡随机采集；每组保存后训练分类头、评估并选择模型，就绪后手动继续下一组。请先连接 EEG 并开流。' : <>
+            {groupedAcquisition ? '四方向均衡随机采集，光标由 8773 上随机初始化的 EEGNet 驱动。请先在采集页开流，再点开始本轮采集。组间不做 LoRA；之后线性探测再微调。' : <>
             Stieger 式连续光标：左手左、右手右、舌头上、休息下。光标可选 REVE 四分类或原来的 C3/C4 mu。SMR 头冻结，不在线微调。只展示上下可去{' '}
             <Link to="/smr-ud" style={{ color: 'var(--accent)' }}>
               SMR 上下控制

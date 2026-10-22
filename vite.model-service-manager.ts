@@ -431,7 +431,7 @@ export function modelServiceManagerPlugin(): Plugin {
       )
 
       const spawnArgs = [scriptPath, '--backend', backend]
-      if (omniSource) spawnArgs.push('--omni-relay', '--omni-endpoint', omniSource.endpoint, '--omni-channels', omniSource.channelNames.join(','))
+      if (omniSource) spawnArgs.push('--omni-relay', '--omni-endpoint', omniSource.endpoint, '--omni-device-type', omniSource.deviceType ?? 'esp32', '--omni-channels', omniSource.channelNames.join(','))
       if (omniSource?.electrodeNames) spawnArgs.push('--omni-electrodes', omniSource.electrodeNames.join(','))
       if (omniSource?.electrodePositions) spawnArgs.push('--omni-positions', JSON.stringify(omniSource.electrodePositions))
       if (backend === 'reve') {

@@ -35,7 +35,7 @@ async def serve_omni_model_service(
     contract = hello["input"]
     assembler = OmniWindowAssembler(config.channel_names, contract["window_sec"], contract["step_sec"],
                                     electrode_names=config.electrode_names, electrode_positions=config.electrode_positions)
-    hello["input"] = {**contract, "source": "omni-sdk", "channel_names": list(config.channel_names), "sample_rate": 250}
+    hello["input"] = {**contract, "source": "omni-sdk", "device_type": config.device_type, "channel_names": list(config.channel_names), "sample_rate": 250}
     if config.electrode_names is not None:
         hello["input"]["electrode_names"] = config.electrode_names
     if config.electrode_positions is not None:
@@ -174,7 +174,7 @@ async def serve_omni_model_service(
         except asyncio.CancelledError:
             board = await connection
             raise
-        await _blocking(validate_board, board)
+        await _blocking(validate_board, board, config.channels)
         await _blocking(board.start)
         started = True
         if tcp_enabled:

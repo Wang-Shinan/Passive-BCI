@@ -1,10 +1,11 @@
 /** Dev-server helpers to auto-start local acquisition bridges. */
+import type { OmniDeviceType } from './omni/device'
 
 export type BridgeName = 'bcigo' | 'neuracle' | 'omni' | 'omni-sdk'
 
-export type OmniSdkDevice = { name: string; endpoint: string; rssi: number | null }
-export async function discoverOmniSdk(): Promise<OmniSdkDevice[]> {
-  const res = await fetch('/api/bridge/omni-sdk/discover', { method: 'POST' })
+export type OmniSdkDevice = { name: string; endpoint: string; rssi: number | null; deviceType?: OmniDeviceType }
+export async function discoverOmniSdk(deviceType: OmniDeviceType = 'esp32'): Promise<OmniSdkDevice[]> {
+  const res = await fetch(`/api/bridge/omni-sdk/discover?deviceType=${deviceType}`, { method: 'POST' })
   const body = await res.json() as { ok: boolean; devices?: OmniSdkDevice[]; message?: string }
   if (!res.ok || !body.ok) throw new Error(body.message || 'BLE 搜索失败')
   return body.devices ?? []

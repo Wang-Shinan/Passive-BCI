@@ -1,6 +1,9 @@
 {
   "nccCommit": "d5c30dcff18557045dbbabec8f18c797ef9663eb",
   "copiedAt": "2026-10-16T09:28:10.427Z",
+  "localChanges": [
+    "2026-10-19: synchronized omni_source.py, omni_service.py, omni_relay.py and serve_reve_model.py with the sibling NCC working tree for explicit ESP32/STM32 selection"
+  ],
   "files": [
     "src/bci_dayloop/__init__.py",
     "src/bci_dayloop/runtime/__init__.py",

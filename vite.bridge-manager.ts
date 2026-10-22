@@ -8,6 +8,7 @@
  */
 
 import type { Plugin } from 'vite'
+import { isOmniDeviceType } from './src/acquisition/omni/device.js'
 import type { Connect } from 'vite'
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { findNcc, findPython as findModelPython } from './scripts/run-model-service.mjs'
@@ -579,8 +580,10 @@ export function bridgeManagerPlugin(): Plugin {
     }
     if (url === '/api/bridge/omni-sdk/discover' && req.method === 'POST') {
       const spec = SPECS['omni-sdk']
+      const deviceType = new URL(req.url ?? '/', 'http://localhost').searchParams.get('deviceType') ?? 'esp32'
+      if (!isOmniDeviceType(deviceType)) { sendJson(res, 400, { ok: false, message: '无效的 Omni 设备类型' }); return }
       try {
-        execFile(spec.resolvePython(projectRoot), [path.join(projectRoot, spec.script), '--discover'], {
+        execFile(spec.resolvePython(projectRoot), [path.join(projectRoot, spec.script), '--discover', '--device-type', deviceType], {
           env: spec.buildEnv(projectRoot), windowsHide: true, timeout: 25000, encoding: 'utf8',
         }, (error, stdout, stderr) => {
           if (error) { sendJson(res, 500, { ok: false, message: stderr.trim() || error.message }); return }

@@ -10,7 +10,7 @@ export function sphericalToCartesian(azimuth: number, elevation: number, radius:
 export function omniElectrodePositions(config: Pick<ChannelConfig, 'positionMode' | 'positionCoordinates'>): number[][] | undefined {
   if (!config.positionMode || config.positionMode === 'standard') return undefined
   const rows = config.positionCoordinates
-  if (!rows || rows.length !== 8) return []
+  if (!rows || ![8, 32].includes(rows.length)) return []
   const points: number[][] = []
   for (const row of rows) {
     if (row.length !== 3 || row.some(v => !v.trim() || !Number.isFinite(Number(v)))) return []

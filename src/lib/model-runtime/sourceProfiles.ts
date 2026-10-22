@@ -35,6 +35,11 @@ export const MODEL_SOURCE_PROFILES: readonly ModelSourceProfile[] = [
     channelNames: OMNI_CHANNEL_NAMES,
     label: 'OmniBCI 8 导',
   },
+  {
+    id: 'omni32', device: 'omni',
+    channelNames: Array.from({ length: 32 }, (_, i) => `CH${i + 1}`),
+    label: 'OmniBCI 32 导',
+  },
 ]
 
 function normalizeChannelName(name: string): string {
@@ -77,7 +82,8 @@ export function matchModelSourceProfile(
     if (profile.device !== batch.device) continue
     // Omni columns are hardware ordered. Preserve the user's montage instead of
     // replacing electrode names with the default CH1..CH8 labels.
-    if (profile.id === 'omni8' && batch.channels === profile.channelNames.length) {
+    if (profile.device === 'omni') {
+      if (batch.channels !== profile.channelNames.length) continue
       if (batch.channelNames.length !== batch.channels) return null
       return {
         profile: { ...profile, channelNames: [...batch.channelNames] },

@@ -3,9 +3,9 @@
 ## 在采集调试页使用 SDK BLE
 
 1. 刷新「采集调试」页面，设备选择 **OmniBCI**，链路选择 **SDK BLE 直连**。
-2. 点击 **搜索 BLE 设备**，选择 OmniBCI 后点击 **连接**。页面会自动启动本机 SDK 采集进程，无需设置环境变量。
-3. 点击 **开始采集** 查看 8 通道波形并录制原始 μV 数据；**停止**结束本次录制，**断开**解除页面订阅。
-4. 展开 **通道名称与电极位置（REVE）**，按硬件 CH1→CH8 顺序填写位置。显示名称可保留 CH1…CH8 或自定义，不再承担位置映射；位置可稍后填写，不影响波形与录制。
+2. 在 **设备型号** 中选择 **ESP32 · 8 通道** 或 **STM32 / E73 · 32 通道**，点击 **搜索 BLE 设备**，选择设备后点击 **连接**。搜索使用对应硬件的 BLE 服务，页面自动启动本机 SDK 采集进程。
+3. 点击 **开始采集** 查看所选设备的全部通道并录制原始 μV 数据；**停止**结束本次录制，**断开**解除页面订阅。连接或采集期间不能切换型号。
+4. 展开 **通道名称与电极位置（REVE）**，按硬件 CH1→CH8 或 CH1→CH32 顺序填写位置。8/32 通道的配置和上次设备分别保存；显示名称可保留 CH 编号。位置可稍后填写，不影响波形与录制。
 5. 需要模型时，先连接 SDK 并填写电极位置，再在模型面板应用 REVE 分类头，之后开始录制。模型与采集页共享同一个 SDK 设备连接；模型从本机 SDK 进程接收原始批次，自行切窗，不经过浏览器回传。
 
 页面与模型都断开后才停止设备采样。若模型仍在运行，仅断开采集页不会释放板子；可在模型面板停止服务后更换设备或交回 OmniBCI 应用。录制期间不能更换模型或通道配置。SDK BLE 尚不支持页面阻抗测量。
@@ -16,20 +16,36 @@
 
 OmniBCI 各链路均可保存独立的通道显示名称和位置。SDK BLE 与 LSL 模型输入会携带位置，保持硬件列顺序不变。未配置独立位置时兼容旧方式：使用通道名称查找位置。设置保存在当前浏览器；录制元数据保存 `channelNames`、`electrodeNames` 或 `electrodePositions`，以及坐标输入方式。采集期间禁止修改，修改后需重新应用模型。
 
-- **标准电极位置**：按实际接线填写 C3、C4 等名称，由官方 REVE 位置库转换为三维坐标，8 路必须全部匹配且互不重复。
+- **标准电极位置**：按实际接线填写 C3、C4 等名称，由官方 REVE 位置库转换为三维坐标，所选设备的 8/32 路必须全部匹配且互不重复。
 - **XYZ**：直接输入每路的 X、Y、Z，单位米，须对齐 REVE 位置库的原点、方向和尺度。X 向右、Y 向前、Z 向上，不自动居中或归一化。
 - **球坐标**：每路填写方位角（度）、仰角（度）、半径（米）。方位角由 +X 朝 +Y 为正，仰角从 XY 平面朝 +Z 为正。转换公式为 `x=r*cos(e)*cos(a), y=r*cos(e)*sin(a), z=r*sin(e)`。二维头皮图上的角度与平面半径不能直接作为球坐标；不同软件的角度约定需先转换。
 
 REVE 接收 `[batch, channels, time]` 的 200 Hz EEG 和 `[batch, channels, 3]` 的位置；本地服务将 Omni 250 Hz 数据重采样到 200 Hz，使用 2 秒窗口。位置名和坐标是两种输入方式，坐标方式优先；切换坐标输入方式会清空坐标，防止把角度误当米。参考：[官方位置库说明](https://huggingface.co/brain-bzh/reve-positions)。
 
+## Python SDK 版本与安装
+
+2026-10-19 本机已升级至官方 `32ch` 分支的 **omnibci 0.2.0 开发构建**，同时支持 ESP32 和 STM32。对应 Python 提交 `65945c6591a10218b6184e1dea0334e627e9bb7d`、内置 Rust SDK `40ac92a3f78cf2232df944f87c90fe89c160e50d`，来源为 [官方 CI run 39188901810](https://github.com/Omni-Intel/omnibci-python/actions/runs/39188901810)。这是 CI 开发包，尚非正式 0.2.0 Release。
+
+Windows x64 / Python 3.11+，从 Passive-BCI 目录安装或校验：
+
+```powershell
+& ..\NCC-OI-BCI\.venv\Scripts\python.exe ..\NCC-OI-BCI\scripts\install_omni_sdk.py --check-only
+& ..\NCC-OI-BCI\.venv\Scripts\python.exe ..\NCC-OI-BCI\scripts\install_omni_sdk.py --download
+```
+
+安装器优先使用工作区 `.tools/omni-0.2.0/` 缓存；缺失时通过 nightly.link 获取官方 CI 产物，并校验 GitHub 公布的压缩包 SHA-256 和解压后 wheel 的 SHA-256。CI 产物会过期，请保留缓存，也可通过 `--wheel <本地文件>` 指定同一构建。现有模型环境须已安装 NumPy ≥1.26。wheel SHA-256 为 `8d303762bca91efd5a864a8fd70daf1ecdf594e590425549d599c441b1a3b958`。
+
+本地 Rust 仓库已更新到 `19eda53`，但上述 Python wheel 仍固定在 `40ac92a`，**不包含后续 ACK 接收解耦等修复**。更新 Rust 检出目录不会替换 wheel 内的原生库，后续需重新构建并验证绑定才能用上这些修复。当前不能声称已获得最新 SDK 的延迟收益。
+
+8 通道仍兼容旧 0.1.2；`requirements-omni-windows.txt` 仅用于回退 ESP32，不能在需要 32 通道的环境中重新安装它。升级后应结束当前采集、停止使用同一设备的模型并重启 SDK 桥接，让新进程加载新版本。
+
 ## ESP32 BLE → Python 模型直连
 
 模型可通过官方 `omnibci` Python 绑定直接控制 ESP32 8 通道板子。数据路径为 **BLE → SDK → Python 连续切窗 → REVE → WebSocket 预测**，浏览器不再接收并回传模型输入窗口。原有 LSL 采集入口仍可单独使用。
 
-当前采用 `omnibci-python` **0.1.2**，内含 SDK **0.1.2 / 86539ffd**；这是官方现成 ESP32 绑定，并不是 Rust SDK 0.2.0 的 STM32 32 通道绑定。安装在模型所用的 Python 环境中。以下 PowerShell 命令均从 **Passive-BCI 项目目录**执行：
+以下 ESP32 示例默认使用 8 通道；Python 环境安装方式见上节。PowerShell 命令从 **Passive-BCI 项目目录**执行：
 
 ```powershell
-& ..\NCC-OI-BCI\.venv\Scripts\python.exe -m pip install -r ..\NCC-OI-BCI\requirements-omni-windows.txt
 & ..\NCC-OI-BCI\.venv\Scripts\python.exe ..\NCC-OI-BCI\scripts\omni_devices.py
 ```
 
@@ -63,6 +79,24 @@ npm run model-service:reve -- --step-sec 0.1
 - 面板 `SDK交付→推理 P50/P95` 使用主机单调时钟，包含 SDK 交付后排队及计算，**不包含硬件采样/BLE 传输和浏览器接收延迟**。它不是端到端延迟，也不能直接与旧面板的纯计算耗时比较。
 
 2026-10-11 本机验证：官方 Windows wheel 安装成功；BLE 探测及约 3 秒采集得到 762 个样本，0 无效样本、0 索引断点，并正常停止/关闭。模型接入另有模拟测试；实际电极布局未确认，尚未测量真实 REVE 脑控效果或新旧链路的延迟差。
+
+## STM32 / E73 32 通道
+
+页面选择 STM32 后会自动传递设备类型，模型复用同一个 SDK 连接，完整保留 32 路 EEG 与电极位置。命令行需要显式选择：
+
+```powershell
+& ..\NCC-OI-BCI\.venv\Scripts\python.exe ..\NCC-OI-BCI\scripts\omni_devices.py --device-type stm32
+$env:MODEL_OMNI_DEVICE_TYPE = 'stm32'
+$env:MODEL_OMNI_ENDPOINT = 'ble://<STM32 发现结果中的 key>'
+$env:MODEL_OMNI_CHANNELS = '<32个按硬件顺序排列的真实电极位置，逗号分隔>'
+npm run model-service:reve -- --step-sec 0.1
+```
+
+也可传 `--omni-device-type stm32`；独立 Python 服务支持 STM32 `serial://COMx`，页面目前提供 SDK BLE。切回 ESP32 时改为 `esp32` 并使用 8 路配置。模型要求已确认的 EEG 模式、全部通道启用且关闭 LOFF 激励。不要把其他设备的训练布局直接当作这块板子的布局；S04 31 电极双轴模型仍拒绝 Omni 输入。
+
+STM32 绑定要求支持 AE/BE 完整配置事务的 32.0.5 系列固件，以及兼容的 E73 SPI 桥接/BLE 固件；具体约束见 [官方 STM32 文档](https://github.com/Omni-Intel/omnibci-python/blob/65945c6591a10218b6184e1dea0334e627e9bb7d/docs/stm32.rst)。
+
+2026-10-19 验证覆盖官方 wheel 的软件测试、8/32 路共享连接、切窗与缺口重置，以及浏览器模拟搜索/连接/录制/模型参数和配置持久化；未进行本次 32 通道实机采集或端到端延迟对比。
 
 ## LSL 桥接
 
