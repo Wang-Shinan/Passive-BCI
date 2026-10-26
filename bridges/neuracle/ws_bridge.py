@@ -4,8 +4,8 @@
 Reuses oi-mi's `collect.neuracle_api.DataServerThread` (博睿康转发协议).
 
 Usage:
-  OI_MI_ROOT=/path/to/oi-mi python bridges/neuracle/ws_bridge.py
-  # default OI_MI_ROOT: ../../oi-mi next to Passive BCI, or ~/Documents/oi-mi
+  npm run neuracle-bridge
+  # Uses the bundled TCP reader and project Python environment.
 
 WebSocket: ws://127.0.0.1:8766/v1/stream
 Subscribe: {"type":"subscribe","host":"127.0.0.1",  # omit host/port to auto-detect
@@ -76,47 +76,6 @@ NEURACLE_59_EEG_CHANNEL_NAMES: tuple[str, ...] = (
 )
 
 
-def _oi_mi_candidates(explicit: str | None) -> list[Path]:
-    here = Path(__file__).resolve()
-    raw = [
-        explicit,
-        os.environ.get("OI_MI_ROOT"),
-        here.parents[2].parent / "oi-mi",
-        Path.home() / "Documents" / "oi-mi",
-    ]
-    out: list[Path] = []
-    seen: set[Path] = set()
-    for item in raw:
-        if not item:
-            continue
-        path = Path(item).expanduser().resolve()
-        if path in seen:
-            continue
-        seen.add(path)
-        out.append(path)
-    return out
-
-
-def _ncc_src_candidates() -> list[Path]:
-    here = Path(__file__).resolve()
-    raw = [
-        os.environ.get("NCC_OI_BCI_SRC"),
-        here.parents[2].parent / "NCC-OI-BCI" / "src",
-        Path.home() / "Desktop" / "NCC-OI-BCI" / "src",
-    ]
-    out: list[Path] = []
-    seen: set[Path] = set()
-    for item in raw:
-        if not item:
-            continue
-        path = Path(item).expanduser().resolve()
-        if path in seen:
-            continue
-        seen.add(path)
-        out.append(path)
-    return out
-
-
 def _ensure_optional_edf_stub() -> None:
     """neuracle_api imports pyedflib only for BDF save; live TCP does not need it."""
     try:
@@ -136,32 +95,12 @@ def _ensure_optional_edf_stub() -> None:
 
 
 def import_data_server(explicit_oi_mi: str | None):
-    """Load official DataServerThread from oi-mi, or the NCC vendor copy."""
+    """Use the bundled official TCP reader; no other repository is searched."""
     _ensure_optional_edf_stub()
-    for root in _oi_mi_candidates(explicit_oi_mi):
-        api = root / "collect" / "neuracle_api.py"
-        if not api.is_file():
-            continue
-        sys.path.insert(0, str(root))
-        from collect.neuracle_api import DataServerThread  # type: ignore
-
-        print(f"[neuracle-bridge] using oi-mi at {root}")
-        return DataServerThread
-
-    for src in _ncc_src_candidates():
-        api = src / "bci_dayloop" / "vendor" / "neuracle" / "neuracle_api.py"
-        if not api.is_file():
-            continue
-        sys.path.insert(0, str(src))
-        from bci_dayloop.vendor.neuracle.neuracle_api import DataServerThread  # type: ignore
-
-        print(f"[neuracle-bridge] using NCC vendor neuracle_api at {src}")
-        return DataServerThread
-
-    raise SystemExit(
-        "找不到博睿康 DataServerThread。请设置 OI_MI_ROOT（需含 collect/neuracle_api.py），"
-        "或把 NCC-OI-BCI 放在与 Passive-BCI 同级目录。"
-    )
+    src = Path(__file__).resolve().parents[2] / 'embedded' / 'ncc' / 'src'
+    sys.path.insert(0, str(src))
+    from bci_dayloop.vendor.neuracle.neuracle_api import DataServerThread
+    return DataServerThread
 
 
 def normalize_name(name: str) -> str:

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { useLiveEeg } from '../eeg/useLiveEeg'
+import type { ModelWeightOption } from './modelServiceTypes'
 import {
   ensureModelService,
   modelServiceStatus,
@@ -50,6 +52,26 @@ function ModelServiceLaunchBar({
   onReveTaskChange?: (task: ReveTaskId) => void
 }) {
   const [busy, setBusy] = useState(false)
+  const [architecture, setArchitecture] = useState<'reve' | 'eegnet'>('reve')
+  const [weightId, setWeightId] = useState('')
+  const [weights, setWeights] = useState<ModelWeightOption[]>([])
+  const [weightError, setWeightError] = useState('')
+  const [seed, setSeed] = useState(20261022)
+  const { meta: eegMeta } = useLiveEeg()
+  const refreshWeights = async (signal?: AbortSignal) => {
+    try {
+      const response = await fetch('/api/model-service/weights', { signal })
+      const body = await response.json() as { ok: boolean; weights: ModelWeightOption[]; message?: string }
+      if (!response.ok || !body.ok) throw new Error(body.message || '读取权重失败')
+      if (!signal?.aborted) { setWeights(body.weights); setWeightError('') }
+    } catch (error) { if (!signal?.aborted) setWeightError(error instanceof Error ? error.message : String(error)) }
+  }
+  useEffect(() => {
+    const controller = new AbortController()
+    void refreshWeights(controller.signal)
+    return () => controller.abort()
+  }, [])
+
   const [details, setDetails] = useState<ModelServiceEnsureResult | null>(null)
   const proc = useAppliedModel()
   const [launchError, setLaunchError] = useState('')
@@ -108,11 +130,15 @@ function ModelServiceLaunchBar({
       const result = await ensureModelService({
         backend,
         force,
-        task: backend === 'reve' ? reveTask : undefined,
+        task: backend === 'reve' ? reveTask : backend === 'eegnet' ? 'smr_control' : undefined,
+        weightId: backend === 'mock' ? undefined : weightId,
+        eegnetChannels: eegMeta.channelNames.length || 32,
+        eegnetSeed: seed,
         headId: backend === 'reve' ? selectedHead : undefined,
         stepSec: backend === 'reve' ? (liveStepSec ?? liveStepSecForReveTask(reveTask)) : undefined,
       })
       setDetails(result)
+      void refreshWeights()
       afterReady()
     } catch (error) {
       setLaunchError(error instanceof Error ? error.message : String(error))
@@ -148,28 +174,39 @@ function ModelServiceLaunchBar({
   const desiredId = selectedHead || (task === 'gaze_smr' ? 'gaze_smr_active.pt' : '')
   const selectedRevision = knownS04Revision(selectedHead)
   const sameWeights = Boolean(selectedRevision && runtime.serviceHello?.model_revision === selectedRevision)
-  const pendingSelection = Boolean(proc?.running && !sameWeights && (proc.task !== task || desiredId !== loadedId || (selectedOption?.configurationKey && proc.configurationKey && selectedOption.configurationKey !== proc.configurationKey)))
-  const runningLabel = !proc?.running ? '未运行' : sameWeights ? (selectedHead || defaultHeadLabel) : (proc.headId || proc.loadedHead || defaultHeadLabel)
+  const pendingSelection = Boolean(proc?.running && (proc.backend !== architecture || (proc.weightId || '') !== weightId ||
+    (architecture === 'reve' && !sameWeights && (proc.task !== task || desiredId !== loadedId ||
+      (selectedOption?.configurationKey && proc.configurationKey && !proc.configurationKey.startsWith(selectedOption.configurationKey))))))
+  const runningLabel = !proc?.running ? '未运行' : proc.backend === 'eegnet' ? (proc.modelRevision || 'EEGNet') : sameWeights ? (selectedHead || defaultHeadLabel) : (proc.headId || proc.loadedHead || defaultHeadLabel)
 
   return (
     <div className="mb-3 space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <div style={{ minWidth: 220, maxWidth: '100%' }}>
-          <HeadSelector heads={heads} task={task} value={selectedHead} disabled={recording || starting || headsLoading}
+        <label className="acq-field">模型架构<select className="input" value={architecture} disabled={starting} onChange={event => { setArchitecture(event.target.value as 'reve' | 'eegnet'); setWeightId('') }}>
+          <option value="reve">REVE</option><option value="eegnet">EEGNet</option>
+        </select></label>
+        <label className="acq-field" style={{ minWidth: 220, maxWidth: '100%' }}>模型权重<select className="input" value={weightId} disabled={starting} onChange={event => setWeightId(event.target.value)}>
+          <option value="">{architecture === 'eegnet' ? '重新随机初始化（不读取旧权重）' : '跟随所选分类头／默认权重'}</option>
+          {weights.filter(item => item.backend === architecture).map(item => <option key={item.id} value={item.id}>{item.kind === 'backbone' ? '骨干' : item.kind === 'adapter' ? 'LoRA' : '完整权重'} · {item.name}</option>)}
+        </select></label>
+        <button className="btn" disabled={starting} onClick={() => void refreshWeights()}>刷新权重</button>
+        {architecture === 'eegnet' && !weightId && <label className="acq-field">随机种子<input className="input" type="number" min={0} max={4294967295} step={1} value={seed} disabled={starting} onChange={event => setSeed(Number(event.target.value))} /></label>}
+        {architecture === 'reve' && <><div style={{ minWidth: 220, maxWidth: '100%' }}>
+          <HeadSelector heads={heads} task={task} value={selectedHead} disabled={starting || headsLoading}
             defaultLabel={task === 'gaze_smr' ? '当前激活 gaze 头及其报告' : task === 'smr_control' ? 'LoRA 自带线性头（新被试默认）' : '默认配置'}
             onChange={(value) => {
               try { selectModelHeadPreference(task, value); setLaunchError('') }
               catch (error) { setLaunchError(String(error)) }
             }} />
         </div>
-        <button className="btn" disabled={recording || starting || headsLoading} onClick={() => void refreshHeads()}>{headsLoading ? '读取中…' : '刷新线性头'}</button>
+        <button className="btn" disabled={starting || headsLoading} onClick={() => void refreshHeads()}>{headsLoading ? '读取中…' : '刷新线性头'}</button>
         {onReveTaskChange ? (
           <label className="acq-field" style={{ minWidth: 220 }}>
             任务头
             <select
               className="input"
               value={reveTask ?? 'passive_rating'}
-              disabled={recording || starting}
+              disabled={starting}
               onChange={(event) => onReveTaskChange(event.target.value as ReveTaskId)}
             >
               {REVE_TASKS.map((item) => (
@@ -179,16 +216,16 @@ function ModelServiceLaunchBar({
               ))}
             </select>
           </label>
-        ) : null}
+        ) : null}</>}
         <button
           type="button"
           className="btn btn-primary"
-          disabled={recording || starting || headsLoading || invalidHead}
-          onClick={() => void launch('reve', forceReplace)}
+          disabled={starting || (architecture === 'reve' && (headsLoading || invalidHead)) || !!(weightId && !weights.some(item => item.id === weightId && item.backend === architecture))}
+          onClick={() => void launch(architecture, forceReplace || (architecture === 'eegnet' && !weightId))}
         >
-          {starting ? '正在启动…' : pendingSelection && !leavePort ? '应用线性头并重启' : reveLaunchLabel(reveTask, forceReplace)}
+          {starting ? '正在启动…' : architecture === 'eegnet' ? weightId ? '加载 EEGNet 权重' : '初始化 EEGNet' : weightId ? '应用 REVE 权重与分类头' : pendingSelection && !leavePort ? '应用线性头并重启' : reveLaunchLabel(reveTask, forceReplace)}
         </button>
-        <button type="button" className="btn" disabled={recording || starting} onClick={() => void launch('mock', !leavePort && occupied)}>
+        <button type="button" className="btn" disabled={starting} onClick={() => void launch('mock', !leavePort && occupied)}>
           启动 Mock
         </button>
         <button type="button" className="btn" disabled={!canStop} onClick={() => void stop()}>
@@ -196,16 +233,19 @@ function ModelServiceLaunchBar({
         </button>
         <span className="muted text-sm">
           {starting
-            ? `加载中${proc?.backend ? ` · ${proc.backend}` : ''}（REVE 首次可能要一两分钟）`
+            ? `加载中 · ${architecture}${architecture === 'reve' ? '（首次可能要一两分钟）' : ''}`
             : details?.message || '开发服务可一键拉起本地模型'}
         </span>
       </div>
-      <p className="muted m-0 text-xs">已运行：{runningLabel}。待应用：{selectedHead || defaultHeadLabel}。{sameWeights ? '当前连接的模型版本与所选分类头相同。' : leavePort ? `页面连接 ${proc?.proxyPort}，${proc?.port} 上的原服务保持运行。` : pendingSelection ? '选择尚未生效；点击应用后切换。' : '选择后点击启动按钮生效。'}</p>
-      {recording && <p role="status" className="muted m-0 text-xs">录制中：任务、模型和连接地址已锁定。停止服务会中断脑控，但不会删除录制。</p>}
-      {selectedOption && <p className="muted m-0 text-xs">配套编码器：{selectedOption.encoderId} · {selectedOption.classes} 类。启动时自动匹配。</p>}
-      {!headsLoading && !taskHeads.length && <p className="muted m-0 text-xs">当前任务暂无已保存线性头。将文件放入 recordings/.reve-heads 后刷新列表。</p>}
-      {(headsError || invalidHead) && <p className="m-0 text-xs" style={{ color: 'var(--danger)' }}>{headsError || selectedOption?.reason || '当前任务的列表中未找到所选分类头，请刷新列表或重新选择。'}</p>}
-      {reveTask === 'smr_control' ? (
+      <p className="muted m-0 text-xs">已运行：{proc?.backend} / {proc?.weightId || (proc?.backend === 'eegnet' ? '随机初始化' : '默认权重')} / {runningLabel}。待应用：{architecture} / {weightId || (architecture === 'eegnet' ? '重新随机初始化' : selectedHead || defaultHeadLabel)}。{sameWeights ? '当前连接的模型版本与所选分类头相同。' : leavePort ? `页面连接 ${proc?.proxyPort}，${proc?.port} 上的原服务保持运行。` : pendingSelection ? '选择尚未生效；点击应用后切换。' : '选择后点击启动按钮生效。'}</p>
+      {weightError && <p role="alert" className="m-0 text-xs" style={{ color: 'var(--danger)' }}>{weightError}</p>}
+      {architecture === 'eegnet' && <p className="muted m-0 text-xs">完整 checkpoint 同时加载编码器和分类器。文件放入 checkpoints/eegnet 或 recordings/.eegnet 后刷新。随机初始化使用当前 EEG 通道数（未连接时为 32），固定种子可复现，不代表已训练的脑控模型。</p>}
+      {architecture === 'reve' && <p className="muted m-0 text-xs">可选基座或 LoRA 权重；独立分类头须与编码器配套。基座无配套头时使用未训练头。</p>}
+      {recording && <p role="status" className="muted m-0 text-xs">录制中可更换模型：应用时自动保存当前段，切换后从新段开始录制。停止服务会中断脑控，但不会删除数据。</p>}
+      {architecture === 'reve' && selectedOption && <p className="muted m-0 text-xs">配套编码器：{selectedOption.encoderId} · {selectedOption.classes} 类。启动时自动匹配。</p>}
+      {architecture === 'reve' && !headsLoading && !taskHeads.length && <p className="muted m-0 text-xs">当前任务暂无已保存线性头。将文件放入 recordings/.reve-heads 后刷新列表。</p>}
+      {architecture === 'reve' && (headsError || invalidHead) && <p className="m-0 text-xs" style={{ color: 'var(--danger)' }}>{headsError || selectedOption?.reason || '当前任务的列表中未找到所选分类头，请刷新列表或重新选择。'}</p>}
+      {architecture === 'reve' && reveTask === 'smr_control' ? (
         <p className="m-0 text-xs" style={{ color: 'var(--warn)' }}>
           SMR 头冻结，不在线微调。光标仍可由 REVE 驱动。
         </p>
@@ -236,7 +276,7 @@ export function ModelServicePanel({
   onReveTaskChange?: (task: ReveTaskId) => void
 }) {
   const state = useModelRuntime()
-  const { recording, busy: operationBusy } = useModelConfiguration(reveTask ?? 'passive_rating')
+  const { busy: operationBusy } = useModelConfiguration(reveTask ?? 'passive_rating')
   const [url, setUrl] = useState(state.url)
   const [debugOpen, setDebugOpen] = useState(false)
   const prediction = state.latestPrediction
@@ -257,17 +297,17 @@ export function ModelServicePanel({
           <input
             type="checkbox"
             checked={state.enabled}
-            disabled={!state.enabled && (recording || operationBusy)}
+            disabled={!state.enabled && (operationBusy)}
             onChange={(event) => modelRuntimeHub.setEnabled(event.target.checked)}
           />
-          启用 NCC 模型旁路
+          启用模型服务
         </label>
         <label className="acq-field" style={{ minWidth: 280, flex: '1 1 280px' }}>
           WebSocket
           <input
             className="input"
             value={url}
-            disabled={recording || operationBusy}
+            disabled={operationBusy}
             onChange={(event) => setUrl(event.target.value)}
             onBlur={() => modelRuntimeHub.setUrl(url)}
             onKeyDown={(event) => {
@@ -281,7 +321,7 @@ export function ModelServicePanel({
               key={preset.id}
               type="button"
               className="btn"
-              disabled={recording || operationBusy}
+              disabled={operationBusy}
               onClick={() => {
                 setUrl(preset.url)
                 modelRuntimeHub.setUrl(preset.url)
@@ -293,10 +333,9 @@ export function ModelServicePanel({
           <button
             type="button"
             className="btn"
-            disabled={operationBusy || !state.enabled || state.status === 'connecting' || (recording && url !== state.url)}
+            disabled={operationBusy || !state.enabled || state.status === 'connecting'}
             onClick={() => {
-              modelRuntimeHub.setUrl(url)
-              modelRuntimeHub.connect()
+              void modelRuntimeHub.setUrl(url).then(() => modelRuntimeHub.connect())
             }}
           >
             重新连接

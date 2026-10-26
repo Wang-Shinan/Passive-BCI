@@ -19,12 +19,13 @@ it('uses the saved head when experiments auto-start REVE, but respects an explic
   expect(JSON.parse(calls[1]![1].body as string).headId).toBe('')
 })
 
-it('blocks both launcher and picker API calls while recording, not only disabled UI buttons', async () => {
+it('allows choosing and applying a model with an active session', async () => {
   sessionHub.attach({ id: 'test-recording', rel: 'recordings/test' })
-  const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher)
-  await expect(ensureModelService({ task: 'gaze_smr', headId: 'gaze-smr/old/head.pt' })).rejects.toThrow('录制期间')
-  expect(() => selectModelHeadPreference('smr_control', 'other.pt')).toThrow('结束录制')
-  expect(fetcher).not.toHaveBeenCalled()
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ ok: true })))
+  vi.stubGlobal('fetch', fetcher)
+  expect(() => selectModelHeadPreference('smr_control', 'other.pt')).not.toThrow()
+  await ensureModelService({ task: 'gaze_smr', headId: 'gaze-smr/old/head.pt' })
+  expect(fetcher).toHaveBeenCalled()
 })
 it('preserves explicit historical gaze selection and an explicit active default', async () => {
   vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ gaze_smr: 'gaze-smr/old/head.pt' }) })

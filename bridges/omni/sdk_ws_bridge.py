@@ -2,11 +2,10 @@
 import argparse
 import asyncio
 import json
-import os
 from pathlib import Path
 import sys
 
-root = Path(os.environ.get("NCC_OI_BCI_ROOT", Path(__file__).resolve().parents[3] / "NCC-OI-BCI"))
+root = Path(__file__).resolve().parents[2] / "embedded" / "ncc"
 sys.path.insert(0, str(root / "src"))
 
 

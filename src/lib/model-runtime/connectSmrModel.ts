@@ -95,22 +95,25 @@ export async function connectSmrModel(signal: AbortSignal, progress: (message: s
   progress('已接入现有模型 · 正在接收 EEG 四分类预测')
 }
 
-const EEGNET_WS = 'ws://127.0.0.1:8773/v1/model'
 const SMR_CLASS_NAMES = 'left_hand,right_hand,tongue,rest'
 
 /** Grouped SMR acquisition uses the random EEGNet, not the REVE service. */
 export async function connectEegnetSmr(signal: AbortSignal, progress: (message: string) => void): Promise<void> {
-  progress('正在连接随机初始化 EEGNet…')
-  modelRuntimeHub.setUrl(EEGNET_WS)
-  if (modelRuntimeHub.snapshot.url !== EEGNET_WS) throw new Error('当前模型地址被锁定，无法连接 EEGNet')
+  progress('正在连接选定的 EEGNet…')
+  const status = await modelServiceStatus(signal)
+  if (status.running && status.backend !== 'eegnet') throw new Error('请先在模型设置中选择 EEGNet 并应用；不会自动替换当前模型')
+  if (!status.running) await ensureModelService({ backend: 'eegnet', eegnetChannels: liveEegHub.meta.channelNames.length || 32, signal })
+  const url = modelUrlPresets().find(item => item.id === 'proxy')!.url
+  await modelRuntimeHub.setUrl(url)
+  checkCancelled(signal)
   const previous = modelRuntimeHub.snapshot
   if (!previous.enabled) modelRuntimeHub.setEnabled(true)
   else if (previous.status !== 'ready') modelRuntimeHub.connect()
   await waitFor(() => modelRuntimeHub.snapshot.status === 'ready', signal, 15000,
-    () => modelRuntimeHub.snapshot.lastError || 'EEGNet 握手超时，请确认 8773 上的服务仍在运行')
+    () => modelRuntimeHub.snapshot.lastError || 'EEGNet 握手超时，请确认托管服务仍在运行')
   const hello = modelRuntimeHub.snapshot.serviceHello
   if (hello?.model_type !== 'eegnet' || hello.class_names?.join(',') !== SMR_CLASS_NAMES) {
-    throw new Error(`8773 上的模型不是四分类 EEGNet：${hello?.class_names?.join(' / ') || '未报告类别'}`)
+    throw new Error(`当前服务不是四分类 EEGNet：${hello?.class_names?.join(' / ') || '未报告类别'}`)
   }
   if (!(acqRuntime.streaming && liveEegHub.isFresh())) {
     throw new Error('EEGNet 已连接，但没有可录制的原始 EEG。请先在采集页开流。')
@@ -122,5 +125,5 @@ export async function connectEegnetSmr(signal: AbortSignal, progress: (message: 
     return modelRuntimeHub.snapshot.status === 'ready' && Boolean(prediction && prediction.observation_id !== previousId &&
       performance.now() - prediction.received_at_ms < 1500)
   }, signal, 20000, () => `EEGNet 已连接，但未收到新预测。${modelRuntimeHub.snapshot.lastError || modelRuntimeHub.snapshot.sourceDetail}`)
-  progress('已接入随机初始化 EEGNet · 左手 / 右手 / 舌头 / 休息')
+  progress('已接入选定的 EEGNet · 左手 / 右手 / 舌头 / 休息')
 }

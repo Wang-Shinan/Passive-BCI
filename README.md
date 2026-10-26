@@ -1,10 +1,10 @@
 # Passive-BCI：实验、采集与光标控制
 
-基于 React、TypeScript 和 Vite 的脑机接口实验工作区，提供实验目录、EEG 设备接入、会话录制、SMR 光标控制，以及依赖外部模型后端的 REVE 推理与线性探测入口。
+基于 React、TypeScript 和 Vite 的脑机接口实验工作区，提供实验目录、EEG 设备接入、会话录制、SMR 光标控制，以及内置的 REVE 推理与线性探测后端。
 
-根地址 `/` 直接显示新版目录，支持搜索、分类和亮色／深色切换。目前目录包含 **8 个实验范式、4 个光标控制入口、6 个采集与数据工具**。
+根地址 `/` 直接显示新版目录，支持搜索、分类和亮色／深色切换。目前目录包含 实验范式、光标控制和采集工具，具体入口以目录为准。
 
-> 网页可启动不代表 EEG 或模型服务已经就绪。真实设备采集需要设备桥接及相应驱动；REVE 推理和训练仍依赖兼容版本的外部 `NCC-OI-BCI`。本文末尾的自动采集与微调流程是规划，尚未实现。
+> 网页可启动不代表 EEG 或模型服务已经就绪。真实设备采集需要设备桥接及相应驱动；REVE 推理和训练使用本仓库后端，需另行准备 Python 依赖和模型权重。本文末尾的自动采集与微调流程是规划，尚未实现。
 
 ## 快速启动
 
@@ -66,6 +66,10 @@ try {
 ```
 
 本次在 macOS Node 25.9.0 上使用该设置，42 个测试文件、197 个测试通过；这不代表 Windows GPU 或真实设备链路已验证。
+
+## 视频观看与脑电反馈
+
+新增 `/#/video`：导入本机视频、查看实时 EEG 特征，并将模型分类头的类别映射到影片切换。支持信心门槛、连续确认、冷却与会话录制。使用方法及与 PsychoPy 原项目的范围区别见 [视频实验说明](src/experiments/video/README.md)。
 
 ## 页面入口
 
@@ -132,42 +136,27 @@ try {
 
 ## 模型服务与训练依赖
 
-### 当前结构
+录制期间允许选择并应用模型。应用时先保存当前录制段，再切换模型，成功后沿用被试、实验和设备配置开始新段；未录制时不自动开录。保存或启动失败会提示并保留已保存数据。切换过程仍串行执行，避免重叠操作。
 
-```text
-浏览器实验与采集界面
-  ├─ EEG 桥接：设备数据 → WebSocket
-  ├─ Vite 本地 API：会话写入、训练任务、服务启动管理
-  └─ NCC-OI-BCI：REVE 推理、特征提取和训练依赖
-```
+### 本仓库后端
 
-模型 WebSocket 默认地址为 `ws://127.0.0.1:8768/v1/model`。输入窗长以服务端 `hello` 协议为准；REVE 当前使用 2 秒窗。预处理、通道、采样率、encoder／LoRA 和分类头必须匹配。协议和任务配置见 [模型接入文档](bridges/model/README.md)。
+服务和训练源码已内置在 `embedded/ncc/`，不需要额外克隆 NCC-OI-BCI。REVE、Mock、runtime package、分类头列表、HDF5、linear probing 与 gaze 训练统一使用本地代码；轮末 LoRA 复用本地 `scripts/round_lora.py`。
 
-启动器会查找环境变量 `NCC_OI_BCI_ROOT`，然后查找相邻目录及用户 Desktop／Documents 下的 `NCC-OI-BCI`。Python 优先使用 `NCC_PYTHON`，其次查找 NCC 的 `.venv` 和 `bci-dayloop` Conda 环境。
+Python 优先使用 `PASSIVE_BCI_PYTHON`，或项目 `.venv`。权重默认放在项目 `checkpoints/backbones` 和 `checkpoints/adapters`，也可用 `REVE_CHECKPOINT_ROOT`、`REVE_ADAPTER_ROOT` 指定。Git 不包含权重和 Python 环境。
 
-新主机应显式指定路径，避免选错环境。Windows PowerShell 示例（请替换为实际路径）：
+模型设置可在 REVE 与 EEGNet 间切换，并独立选择基座／LoRA／完整 EEGNet 权重。EEGNet 可重新随机初始化或加载已有 checkpoint，详见内置后端部署文档。
 
-```powershell
-$env:NCC_OI_BCI_ROOT = 'D:\BCI\NCC-OI-BCI'
-$env:NCC_PYTHON = 'D:\BCI\NCC-OI-BCI\.venv\Scripts\python.exe'
-$env:MODEL_DEVICE = 'cuda'
+网页启停、状态与 `/ws/model` 代理统一指向 8768。旧 `model-service:embed` 命令仍可使用，但不再需要单独启用内置模式。
+
+```sh
+npm run backend:doctor
+npm run test:ncc-embed
+npm run model-service:mock
+# 有匹配权重后：
 npm run model-service:reve:smr
 ```
 
-如果通过网页启动服务，应先在同一个 PowerShell 中设置环境变量，再执行 `npm run dev`。上述配置不会自动安装 Python 依赖或下载模型权重。
-
-所选 NCC 版本必须包含对应脚本，例如 `scripts/serve_reve_model.py`、`scripts/fit_smr_control_head.py`，以及训练入口依赖的 `bci_dayloop` 模块。仅有名为 NCC-OI-BCI 的目录不足以保证兼容。
-
-| 命令 | 用途 |
-| --- | --- |
-| `npm run model-service:reve` | REVE 默认任务服务 |
-| `npm run model-service:reve:smr` | `smr_control` 任务服务 |
-| `npm run model-service:reve:tetris` | `tetris_action` 任务服务 |
-| `npm run model-service:mock` | 模拟模型协议，仍需要 NCC 中的 mock 服务脚本 |
-| `npm run model-service:reve:smr:export` | 调用外部后端导出 SMR 数据 |
-| `npm run model-service:reve:smr:fit` | 调用外部后端拟合 SMR 分类头 |
-
-当前 SMR 默认配置仍引用特定历史被试的模型头和适配器。新主机须提供对应文件或显式指定经过验证的配置；不能把该默认值直接当作新被试的通用模型。模型头及其报告、LoRA 和基座需要成套迁移。
+Windows 环境安装、资产目录、训练命令和验收边界见 [内置后端部署](docs/bundled-backend.md)。安装脚本不会随网页启动自动执行。设备 SDK 仍按相应桥接文档配置。
 
 ### Windows 与 RTX 5060
 
@@ -177,7 +166,7 @@ RTX 5060 属于 Blackwell（compute capability 12.0），桌面版标准显存�
 - [PyTorch Blackwell 支持说明](https://pytorch.org/blog/pytorch-2-7/)
 - [PyTorch 各版本 Windows 安装组合](https://pytorch.org/get-started/previous-versions/)
 
-这些是硬件和框架的支持条件，不代表本项目已经通过 5060 实机验证。本仓库目前没有锁定并验证完整的 Windows GPU 后端环境。部署需同时验证驱动、PyTorch CUDA 构建、模型算子、权重加载、推理延迟、linear probing 和 LoRA 显存占用；仅能识别 GPU 或打开网页不足以证明整套流程可用。
+这些是硬件和框架的支持条件，不代表本项目已经通过 5060 实机验证。本仓库已提供核心依赖版本清单和 Windows 安装脚本，但本次内置版本尚未在新的 Windows GPU 环境验收。部署需同时验证驱动、PyTorch CUDA 构建、模型算子、权重加载、推理延迟、linear probing 和 LoRA 显存占用；仅能识别 GPU 或打开网页不足以证明整套流程可用。
 
 部分辅助 npm 脚本使用 Bash，不能直接视为 Windows 原生命令。设备依赖按各桥接文档配置。
 
@@ -191,7 +180,7 @@ RTX 5060 属于 Blackwell（compute capability 12.0），桌面版标准显存�
 
 轮末 LoRA 已在 RTX 5060 上使用真实 REVE-base 和合成 EEG 完成两次连续训练与产物重载检查（包含从上一 adapter 继续训练），重载 logits 一致，测试试次未进入训练或评估。可用 `python scripts/smoke-round-lora.py --ncc ../NCC-OI-BCI --output test-results/round-lora-check` 复现；该检查不启动在线服务或发布被试模型。
 
-本机已接入同级 `NCC-OI-BCI` 的 `mystery@9fae013`，下载官方 REVE-base 与位置库，并在 RTX 5060 / torch 2.7.1+cu128 上通过真实基座推理、合成数据线性头更新和最小 LoRA 单步验证。WebSocket 直连与 Vite 代理均通过。2026-10-11 已部署用户指定的 `stieger2021_4class_reve_lora_r16_mi5init/best.pt`，同时加载 LoRA 和其内置四分类头。重启工作区运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1`，然后在普通 SMR 页启动模型；加 `-Bootstrap` 可回到未训练基座验收模式。当前 serving 为 2 秒、200 Hz、400 点输入，checkpoint 记录训练输入 800 点，真实 EEG 效果与训练／推理输入一致性尚待验证。完整环境与校验记录在同级 NCC 仓库的 `docs/windows-reve.md`。
+本机已接入同级 `NCC-OI-BCI` 的 `mystery@9fae013`，下载官方 REVE-base 与位置库，并在 RTX 5060 / torch 2.7.1+cu128 上通过真实基座推理、合成数据线性头更新和最小 LoRA 单步验证。WebSocket 直连与 Vite 代理均通过。2026-10-11 已部署用户指定的 `stieger2021_4class_reve_lora_r16_mi5init/best.pt`，同时加载 LoRA 和其内置四分类头。重启工作区运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1`，然后在普通 SMR 页启动模型；加 `-Bootstrap` 可回到未训练基座验收模式。当前 serving 为 2 秒、200 Hz、400 点输入，checkpoint 记录训练输入 800 点，真实 EEG 效果与训练／推理输入一致性尚待验证。完整环境与校验记录在当时同级 NCC 仓库的 `docs/windows-reve.md`；这是迁移前的历史记录，不代表本次内置版本已重新通过硬件验收。
 
 **以下为完整目标流程：组间 probing、轮末 LoRA、评估与接管已接入首版；全部历史保留版本在统一快照上的 best 评选尚未接入。**
 

@@ -77,7 +77,7 @@ try {
   const stoppedSockets=await page.evaluate(()=>window.__socketStarts)
   await page.waitForTimeout(2300)
   assert.equal(await page.evaluate(()=>window.__socketStarts),stoppedSockets,'stop must not reconnect')
-  assert.equal(await page.getByRole('checkbox',{name:'启用 NCC 模型旁路',exact:true}).isChecked(),false)
+  assert.equal(await page.getByRole('checkbox',{name:'启用模型服务',exact:true}).isChecked(),false)
   assert.ok(events.some(e=>e.type==='brain_model_binding' && e.data.headId==='smr-b.pt'),'recording captures loaded head identity')
   console.log('[ui] recording lock, direct API and stop verified')
   recording=false;await page.getByRole('button',{name:'Fixture finish',exact:true}).click()
@@ -96,7 +96,7 @@ try {
   assert.ok(release,'pending launch not observed')
   await page.getByRole('button',{name:'停止服务（不自动重连）',exact:true}).click()
   release();await page.waitForTimeout(500)
-  assert.equal(await page.getByRole('checkbox',{name:'启用 NCC 模型旁路',exact:true}).isChecked(),false,'late launch must not re-enable runtime')
+  assert.equal(await page.getByRole('checkbox',{name:'启用模型服务',exact:true}).isChecked(),false,'late launch must not re-enable runtime')
   assert.deepEqual(errors,[])
   const summary={passed:true,scenarios:['traditional head A launch','select B without applying','apply B','recording locks picker/task/Mock','direct API cannot bypass recording lock','stop cancels reconnect','historical gaze selection','stop during launch rejects late success'],limitations:'Mock HTTP/WS and recording attachment; no EEG hardware or model inference.'}
   writeFileSync('test-results/ui-summary.json',JSON.stringify(summary,null,2));console.log(JSON.stringify(summary))

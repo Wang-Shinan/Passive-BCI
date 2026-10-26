@@ -10,6 +10,7 @@ export type DirectoryEntry = {
 }
 
 export const experiments: DirectoryEntry[] = [
+  { icon: 'cards', path: '/video', name: '视频观看与脑电反馈', description: '播放本机视频，监控 EEG 特征，由模型分类头切换视频。', requirement: '手动播放无需设备；自动切换需真实 EEG、分类模型和类别映射。' },
   { icon: 'memory', path: '/nback', name: 'N-back 工作记忆', description: '1–3-back 字母匹配；记录命中、漏报、误报与反应时。', requirement: '空格响应；可同步录制 EEG。' },
   { icon: 'blocks', path: '/tetris', name: '压力自适应俄罗斯方块', description: '标准方块游戏；支持压力调速、SMR 控制与教师协作。', requirement: '可键盘操作；脑控需连接 EEG 和模型。' },
   { icon: 'graph', path: '/rl-graph', name: '人脑反馈强化学习', description: '图或网格上的路径任务；支持 TAMER、Q-learning 和 AI 分配 Q。', requirement: '按键 1–5 评分；可添加文字反馈。' },

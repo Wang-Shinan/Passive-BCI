@@ -130,7 +130,7 @@ class SplitTests(unittest.TestCase):
                           baselineOutput=str(root / 'baseline.pt'), minimumGain=.02, maximumRecallDrop=0.)
             job_file = root / 'job.json'
             job_file.write_text(json.dumps(dict(id='adaptive', kind='fit', config=config)), encoding='utf-8')
-            with patch.object(sys, 'argv', ['training-job.py', '--ncc', str(NCC), '--job', str(job_file)]), \
+            with patch.object(sys, 'argv', ['training-job.py', '--job', str(job_file)]), \
                     patch.object(reve, 'ReveModelBackend', Backend), patch.object(fit_smr_control_head, 'encode_windows', encode):
                 job.main()
             report = json.loads((root / 'report.json').read_text(encoding='utf-8'))
@@ -200,7 +200,7 @@ class SplitTests(unittest.TestCase):
                           loraCheckpoint=None, epochs=3, lr=.02, headOutput=str(root / 'published.pt'))
             job_file = root / 'job.json'
             job_file.write_text(json.dumps(dict(id='test', kind='fit', config=config)), encoding='utf-8')
-            with patch.object(sys, 'argv', ['training-job.py', '--ncc', str(NCC), '--job', str(job_file)]), \
+            with patch.object(sys, 'argv', ['training-job.py', '--job', str(job_file)]), \
                     patch.object(reve, 'ReveModelBackend', Backend), patch.object(fit_smr_control_head, 'encode_windows', encode):
                 job.main()
             report = json.loads((root / 'report.json').read_text(encoding='utf-8'))
@@ -211,6 +211,6 @@ class SplitTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    NCC = Path(sys.argv.pop(1))
-    sys.path[:0] = [str(NCC / 'src'), str(NCC / 'scripts')]
+    backend = Path(__file__).resolve().parents[1] / 'embedded' / 'ncc'
+    sys.path[:0] = [str(backend / 'src'), str(backend / 'scripts')]
     unittest.main()

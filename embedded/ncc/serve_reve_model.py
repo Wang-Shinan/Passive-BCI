@@ -75,6 +75,7 @@ def main() -> None:
     parser.add_argument("--omni-channels", help="8 (ESP32) or 32 (STM32) channel names in hardware order; no assumed montage.")
     parser.add_argument("--omni-electrodes", help="Optional electrode position names separate from channel labels.")
     parser.add_argument("--omni-positions", help="Optional JSON array of XYZ triples, one per channel, metres in the REVE position-bank frame.")
+    parser.add_argument('--model-dir', type=Path, help='Explicit complete backbone directory')
     args = parser.parse_args()
     if args.task == 'smr_dual_axis':
         if args.state_file is None:
@@ -101,7 +102,7 @@ def main() -> None:
         except ValueError as error:
             parser.error(str(error))
     root = args.checkpoint_root.resolve()
-    model_dir = root / f"reve-{args.size}"
+    model_dir = args.model_dir.resolve() if args.model_dir else root / f"reve-{args.size}"
     positions_dir = root / "reve-positions"
     if not (model_dir / "model.safetensors").is_file():
         raise SystemExit(f"Missing REVE weights: {model_dir / 'model.safetensors'}")

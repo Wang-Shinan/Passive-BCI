@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { VideoExperiment } from './experiments/video'
 import { Home } from './Home'
 import { TrainingPage } from './training'
 import { AcquisitionDebugPage } from './acquisition'
@@ -51,6 +52,7 @@ export default function App({ home, autoStartModels = true, pageHeader }: { home
         <Route path="/draw-guess" element={<DrawGuessExperiment />} />
         <Route path="/dino" element={<DinoExperiment />} />
         <Route path="/schulte" element={<SchulteExperiment />} />
+        <Route path="/video" element={<VideoExperiment />} />
         <Route path="/nback" element={<NBackExperiment />} />
         <Route path="/stress-remote" element={<StressRemotePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

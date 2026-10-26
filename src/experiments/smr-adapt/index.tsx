@@ -176,7 +176,8 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         // Visiting a page must never replace a running participant model.
         if (!autoStartModel || cursorDrive !== 'reve') return
         if (groupedAcquisition) {
-          modelRuntimeHub.setUrl('ws://127.0.0.1:8773/v1/model')
+          if (!status.running || status.backend !== 'eegnet') return
+          await modelRuntimeHub.setUrl(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/model`)
           if (!modelRuntimeHub.snapshot.enabled) modelRuntimeHub.setEnabled(true)
           else if (!['ready', 'connecting'].includes(modelRuntimeHub.snapshot.status)) modelRuntimeHub.connect()
           return

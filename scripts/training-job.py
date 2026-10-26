@@ -35,10 +35,10 @@ def grouped_split(labels, groups, seed):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--ncc', required=True)
     parser.add_argument('--job', required=True)
     args = parser.parse_args()
-    sys.path[:0] = [str(Path(args.ncc) / 'src'), str(Path(args.ncc) / 'scripts')]
+    backend = Path(__file__).resolve().parents[1] / 'embedded' / 'ncc'
+    sys.path[:0] = [str(backend / 'src'), str(backend / 'scripts')]
     job_file = Path(args.job)
     job = json.loads(job_file.read_text(encoding='utf-8'))
     config = job['config']

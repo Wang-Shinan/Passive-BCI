@@ -6,7 +6,7 @@ import path from 'node:path'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 import { summarizeSessionDir } from './vite.record-library.ts'
 import { listModelHeads, selectModelHead } from './vite.model-heads.ts'
-import { findNcc } from './scripts/run-model-service.mjs'
+import { adapterRoot } from './scripts/backend-paths.mjs'
 import { operationGate } from './vite.operation-gate.ts'
 import { appendRound, createRound, readRound, roundDirectory, loraHistory } from './vite.training-rounds.ts'
 
@@ -165,9 +165,7 @@ export function trainingPlugin(): Plugin {
                   let lora = head?.loraCheckpoint ?? null
                   const size = head?.size ?? (body.modelName === 'reve-large' ? 'large' : 'base')
                   if (!head && body.baselineRevision !== `reve-${size}`) {
-                    const ncc = findNcc()
-                    if (!ncc) throw new Error('找不到 NCC-OI-BCI')
-                    lora = process.env.MODEL_REVE_LORA || path.join(ncc, 'checkpoints', 'adapters', body.baselineRevision, 'best.pt')
+                    lora = process.env.MODEL_REVE_LORA || path.join(adapterRoot, body.baselineRevision, 'best.pt')
                     if (!existsSync(lora) || path.basename(path.dirname(lora)) !== body.baselineRevision) throw new Error('无法定位当前模型的 LoRA，请选择明确的分类头')
                   }
                   config = { ...config, roundId, seed: round.seed, splitBy: 'trial', size, loraCheckpoint: lora,

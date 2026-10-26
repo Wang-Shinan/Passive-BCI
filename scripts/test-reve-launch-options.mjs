@@ -18,26 +18,26 @@ test('new SMR subject uses the embedded head without a saved subject state', () 
 })
 
 test('embedded SMR default resolves the general LoRA, not a previous subject adapter', t => {
-  const { ncc } = fixture(t)
-  const base = path.join(ncc, 'checkpoints', 'adapters', 'stieger2021_4class_reve_lora_r16_mi5init', 'best.pt')
+  const { projectRoot } = fixture(t)
+  const base = path.join(projectRoot, 'checkpoints', 'adapters', 'stieger2021_4class_reve_lora_r16_mi5init', 'best.pt')
   mkdirSync(path.dirname(base), { recursive: true }); writeFileSync(base, 'base adapter')
-  const options = { task: 'smr_control', ncc, argv: ['--checkpoint-head'] }
+  const options = { task: 'smr_control', projectRoot, argv: ['--checkpoint-head'] }
   assert.deepEqual(resolveReveLoraArgs(options), ['--lora-checkpoint', base])
   assert.deepEqual(resolveReveLoraArgs({ ...options, env: { MODEL_REVE_LORA: 'chosen.pt' } }), ['--lora-checkpoint', 'chosen.pt'])
 })
 
 function fixture(t, extra = {}) {
-  const ncc = mkdtempSync(path.join(os.tmpdir(), 'gaze-merge-'))
-  t.after(() => rmSync(ncc, { recursive: true, force: true }))
-  const stateFile = path.join(ncc, 'gaze_smr_active.pt')
+  const projectRoot = mkdtempSync(path.join(os.tmpdir(), 'gaze-merge-'))
+  t.after(() => rmSync(projectRoot, { recursive: true, force: true }))
+  const stateFile = path.join(projectRoot, 'gaze_smr_active.pt')
   writeFileSync(stateFile, 'fixture head')
-  const paired = path.join(ncc, 'checkpoints', 'adapters', 'trained-encoder', 'best.pt')
+  const paired = path.join(projectRoot, 'checkpoints', 'adapters', 'trained-encoder', 'best.pt')
   mkdirSync(path.dirname(paired), { recursive: true })
   writeFileSync(paired, 'fixture adapter')
   const report = { task: 'gaze_smr', encoderId: 'trained-encoder',
     headSha256: createHash('sha256').update('fixture head').digest('hex'), ...extra }
   writeFileSync(stateFile.replace(/\.pt$/, '.json'), JSON.stringify(report))
-  return { task: 'gaze_smr', ncc, stateFile, paired }
+  return { task: 'gaze_smr', projectRoot, stateFile, paired }
 }
 
 test('legacy gaze reports resolve their exact encoder, ignoring environment defaults', t => {

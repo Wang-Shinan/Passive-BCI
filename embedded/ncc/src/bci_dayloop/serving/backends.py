@@ -113,7 +113,7 @@ class RuntimePackageBackend:
         )
 
     def predict(self, window: ParsedWindow) -> PredictionResult:
-        raise ProtocolError("runtime package backend stays on the external NCC checkout", code="internal_error", request_id=window.request_id)
+        from bci_dayloop.runtime.types import RawEEGWindow
         raw = RawEEGWindow(
             data=window.data,
             channel_names=list(window.channel_names),

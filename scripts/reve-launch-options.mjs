@@ -23,7 +23,7 @@ export function resolveReveHeadMode({ task, argv = [], env = {} }) {
 }
 
 /** Keep a deployed gaze head paired with its training encoder, not today's defaults. */
-export function resolveReveLoraArgs({ task, stateFile, ncc, argv = [], env = {} }) {
+export function resolveReveLoraArgs({ task, stateFile, projectRoot, argv = [], env = {} }) {
   const explicit = option(argv, '--lora-checkpoint')
   const noLora = argv.includes('--no-lora') || (!explicit && env.MODEL_REVE_NO_LORA === '1')
   if (explicit && argv.includes('--no-lora')) {
@@ -54,11 +54,11 @@ export function resolveReveLoraArgs({ task, stateFile, ncc, argv = [], env = {} 
     if (!frozenBase) {
       // NCC PR #1 reports encoderId but older reports omit loraCheckpoint.
       paired = typeof report.loraCheckpoint === 'string' && report.loraCheckpoint
-        ? path.resolve(ncc, report.loraCheckpoint)
-        : path.join(ncc, 'checkpoints', 'adapters', encoder, 'best.pt')
+        ? path.resolve(projectRoot, report.loraCheckpoint)
+        : path.join(env.REVE_ADAPTER_ROOT || path.join(projectRoot, 'checkpoints', 'adapters'), encoder, 'best.pt')
       if (!existsSync(paired)) throw new Error(`Missing paired LoRA: ${paired}`)
       if (noLora) throw new Error('The selected gaze head requires its paired LoRA; remove --no-lora')
-      if (explicit && (!existsSync(path.resolve(ncc, explicit)) || realpathSync(path.resolve(ncc, explicit)) !== realpathSync(paired))) {
+      if (explicit && (!existsSync(path.resolve(projectRoot, explicit)) || realpathSync(path.resolve(projectRoot, explicit)) !== realpathSync(paired))) {
         throw new Error('Explicit LoRA differs from the gaze head training encoder')
       }
     } else if (explicit) {
@@ -68,7 +68,7 @@ export function resolveReveLoraArgs({ task, stateFile, ncc, argv = [], env = {} 
   if (frozenBase || noLora) return ['--no-lora']
   let checkpoint = paired || explicit || env.MODEL_REVE_LORA
   if (!checkpoint && task === 'smr_control' && argv.includes('--checkpoint-head')) {
-    checkpoint = path.join(ncc, 'checkpoints', 'adapters', 'stieger2021_4class_reve_lora_r16_mi5init', 'best.pt')
+    checkpoint = path.join(env.REVE_ADAPTER_ROOT || path.join(projectRoot, 'checkpoints', 'adapters'), 'stieger2021_4class_reve_lora_r16_mi5init', 'best.pt')
     if (!existsSync(checkpoint)) throw new Error('Missing initial SMR LoRA checkpoint; select one with MODEL_REVE_LORA or --lora-checkpoint')
   }
   return checkpoint ? ['--lora-checkpoint', checkpoint] : []

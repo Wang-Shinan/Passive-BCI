@@ -1,6 +1,7 @@
-export type ModelServiceBackend = 'reve' | 'mock'
+export type ModelServiceBackend = 'reve' | 'mock' | 'eegnet'
 
 export type ModelServiceEnsureResult = {
+  weightId?: string | null
   headId?: string | null
   configurationKey?: string | null
   gazeReport?: GazeModelReport | null
@@ -35,3 +36,5 @@ export type ModelHeadOption = {
   id: string; name: string; task: string | null; encoderId: string | null
   classes: number | null; available: boolean; reason: string
 }
+
+export type ModelWeightOption = { id: string; name: string; backend: 'reve' | 'eegnet'; kind: 'backbone' | 'adapter' | 'checkpoint' }

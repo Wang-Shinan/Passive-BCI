@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { findNcc } from './scripts/run-model-service.mjs'
 import { resolveReveLoraArgs } from './scripts/reve-launch-options.mjs'
 import type { ModelHead } from './vite.model-heads.ts'
 
@@ -14,7 +13,7 @@ function contained(root: string, file: string): string {
 }
 
 /** Opaque, allowlisted IDs, not arbitrary client-supplied filesystem paths. */
-export function readGazeHead(root: string, id = 'gaze_smr_active.pt', ncc = findNcc()): ModelHead {
+export function readGazeHead(root: string, id = 'gaze_smr_active.pt', assetRoot = root): ModelHead {
   if (id !== 'gaze_smr_active.pt' && !/^gaze-smr\/[A-Za-z0-9_-]+\/head\.pt$/.test(id)) throw new Error('无效的 gaze 模型 ID')
   const headsRoot = path.join(root, 'recordings', '.reve-heads')
   const stateFile = contained(headsRoot, path.join(headsRoot, id))
@@ -31,9 +30,8 @@ export function readGazeHead(root: string, id = 'gaze_smr_active.pt', ncc = find
   if (!Array.isArray(activeClasses) || !['left|right', DIRECTIONS.join('|')].includes(activeClasses.join('|'))) throw new Error('不支持的 gaze 类别子集')
   const hash = createHash('sha256').update(readFileSync(stateFile)).digest('hex')
   if (report.headSha256 !== hash) throw new Error('gaze 头与报告校验和不匹配')
-  if (!ncc) throw new Error('找不到 NCC-OI-BCI，请设置 NCC_OI_BCI_ROOT')
   const size = report.encoderId === 'reve-large' ? 'large' : 'base'
-  const args = resolveReveLoraArgs({ task: 'gaze_smr', stateFile, ncc, argv: ['--report-file', reportFile, '--size', size] })
+  const args = resolveReveLoraArgs({ task: 'gaze_smr', stateFile, projectRoot: assetRoot, env: process.env, argv: ['--report-file', reportFile, '--size', size] })
   const checkpointIndex = args.indexOf('--lora-checkpoint')
   return {
     id, name: id === 'gaze_smr_active.pt' ? '当前激活 gaze 模型' : `${report.subjectId} · ${path.basename(path.dirname(id))}`,

@@ -77,3 +77,6 @@ pip-log.txt
 *.pickle
 *.zip
 !package-lock.json
+
+# Provisioned model assets are not source files.
+/checkpoints/

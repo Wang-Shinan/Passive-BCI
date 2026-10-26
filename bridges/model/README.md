@@ -1,3 +1,7 @@
+# 内置模型服务
+
+当前所有服务入口使用本仓库 `embedded/ncc`，无需外部 NCC。Python 与权重配置、安装及验证见 [内置后端部署](../../docs/bundled-backend.md)。下文保留协议与历史任务配置，旧外部仓库路径需迁移为本机明确的资产路径。
+
 # NCC Runtime 模型服务接入
 
 Passive BCI 负责采集与切窗；推理和在线适配留在独立的 [NCC-OI-BCI](https://github.com/ttkx-web/NCC-OI-BCI) Python 服务里。

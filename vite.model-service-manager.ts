@@ -1,3 +1,4 @@
+import { listModelWeights, selectModelWeight, modelWeightArgs } from './vite.model-weights.ts'
 import { operationGate } from './vite.operation-gate.ts'
 import { parseOmniModelSource, type OmniModelSource } from './vite.omni-source.ts'
 import { readGazeHead } from './vite.gaze-heads.ts'
@@ -22,9 +23,11 @@ import { existsSync } from 'node:fs'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 import { listModelHeads, selectModelHead, modelHeadArgs } from './vite.model-heads.ts'
 
-export type ModelServiceBackend = 'reve' | 'mock'
+export type ModelServiceBackend = 'reve' | 'mock' | 'eegnet'
 
 interface ManagedService {
+  weightId?: string | null
+  weightKey?: string | null
   omniSourceKey?: string
   configurationKey?: string | null
   modelRevision?: string | null
@@ -42,6 +45,7 @@ interface ManagedService {
 }
 
 export interface EnsureResult {
+  weightId?: string | null
   configurationKey?: string | null
   modelRevision?: string | null
   gazeReport?: GazeModelReport | null
@@ -63,12 +67,13 @@ export interface EnsureResult {
 }
 
 const PORT = 8768
-// Temporary: browser sockets follow the embedded service. Start and stop still use 8768.
-const PROXY_PORT: number = 8770
+// Management and browser sockets always address the same bundled service.
+const PROXY_PORT: number = PORT
 const READY_PATTERN = /\[model-service\].*waiting for (?:Passive BCI|Omni SDK) windows/i
 const TIMEOUT_MS: Record<ModelServiceBackend, number> = {
   reve: 180_000,
   mock: 25_000,
+  eegnet: 25_000,
 }
 
 function sleep(ms: number): Promise<void> {
@@ -226,7 +231,9 @@ async function freePort(port: number) {
 }
 
 function parseBackend(value: unknown): ModelServiceBackend {
-  return value === 'mock' ? 'mock' : 'reve'
+  if (value == null || value === 'reve') return 'reve'
+  if (value === 'mock' || value === 'eegnet') return value
+  throw new Error('未知模型架构')
 }
 
 function parseReveTask(value: unknown): string {
@@ -275,6 +282,7 @@ export function modelServiceManagerPlugin(): Plugin {
       task: extra.task ?? state.task,
       stepSec: extra.stepSec ?? state.stepSec,
       headId: state.headId ?? null,
+      weightId: state.weightId ?? null,
       configurationKey: state.configurationKey ?? null,
       modelRevision: state.modelRevision ?? null,
       gazeReport: state.gazeReport ?? null,
@@ -334,6 +342,9 @@ export function modelServiceManagerPlugin(): Plugin {
     stepSec: number,
     headId: string | null,
     omniSource: OmniModelSource | null = null,
+    weightId = '',
+    eegnetChannels = 32,
+    eegnetSeed = 20261022,
   ): Promise<EnsureResult> {
     if (state.starting) {
       return snapshot({ ok: false, message: '模型正在加载，请等待完成后再切换线性头' })
@@ -347,12 +358,18 @@ export function modelServiceManagerPlugin(): Plugin {
       const selected = backend !== 'reve' ? null : task === 'gaze_smr'
         ? readGazeHead(projectRoot, headId || 'gaze_smr_active.pt')
         : headId ? selectModelHead(await listModelHeads(projectRoot), headId, task) : null
+      const weight = selectModelWeight(projectRoot, weightId, backend)
+      const weightArgs = modelWeightArgs(weight, selected)
+      if (backend === 'eegnet' && (!Number.isInteger(eegnetChannels) || eegnetChannels < 1 || eegnetChannels > 128 || !Number.isInteger(eegnetSeed) || eegnetSeed < 0 || eegnetSeed > 0xffffffff)) throw new Error('EEGNet 通道数或随机种子无效')
+      const weightKey = weight?.key ?? (backend === 'eegnet' ? `random:${eegnetChannels}:${eegnetSeed}` : null)
+      const configurationKey = [selected?.configurationKey ?? '', weightKey ?? ''].join('|')
+      if (weight && process.env.MODEL_PACKAGE) throw new Error('MODEL_PACKAGE 与独立权重选择不能同时使用')
       if (selected && process.env.MODEL_PACKAGE) throw new Error('当前使用 MODEL_PACKAGE，不能选择 REVE 线性头')
       const listening = await isPortOpen(PORT)
       assertCurrent()
       const alive = Boolean(state.child && state.child.exitCode === null && !state.child.killed)
 
-      const wantedTask = backend === 'reve' ? task : null
+      const wantedTask = backend === 'reve' ? task : backend === 'eegnet' ? 'smr_control' : null
       if (omniSource && backend !== 'reve') throw new Error('SDK 模型直连需要 REVE')
       const omniSourceKey = JSON.stringify(omniSource)
       const hopOk = backend !== 'reve' || hopMatches(state.stepSec, stepSec)
@@ -361,10 +378,11 @@ export function modelServiceManagerPlugin(): Plugin {
         alive &&
         state.owned &&
         state.backend === backend &&
+        (state.weightKey ?? null) === weightKey &&
         state.task === wantedTask &&
         (state.omniSourceKey ?? 'null') === omniSourceKey &&
         (state.headId ?? null) === (selected?.id ?? null) &&
-        (state.configurationKey ?? null) === (selected?.configurationKey ?? null) &&
+        (state.configurationKey ?? null) === configurationKey &&
         hopOk &&
         !force
       ) {
@@ -416,12 +434,14 @@ export function modelServiceManagerPlugin(): Plugin {
 
       state.lastError = ''
       state.logBuf = ''
+      state.weightId = weightId || null
+      state.weightKey = weightKey
       state.backend = backend
       state.task = wantedTask
       state.omniSourceKey = omniSourceKey
-      state.stepSec = backend === 'reve' ? stepSec : null
+      state.stepSec = backend === 'reve' ? stepSec : backend === 'eegnet' ? 0.1 : null
       state.headId = selected?.id ?? null
-      state.configurationKey = selected?.configurationKey ?? null
+      state.configurationKey = configurationKey
       state.gazeReport = selected?.gazeReport ?? null
       state.modelRevision = selected?.modelRevision ?? selected?.gazeReport?.modelRevision ?? null
       console.log(
@@ -440,9 +460,11 @@ export function modelServiceManagerPlugin(): Plugin {
         if (task === 'smr_control' || task === 'gaze_smr') spawnArgs.push('--strategy', 'none')
         if (selected) spawnArgs.push(...modelHeadArgs(selected))
       }
+      spawnArgs.push(...weightArgs)
+      if (backend === 'eegnet') spawnArgs.push('--channels', String(eegnetChannels), '--seed', String(eegnetSeed))
       const child = spawn(process.execPath, spawnArgs, {
         cwd: projectRoot,
-        env: { ...process.env, PYTHONUNBUFFERED: '1' },
+        env: { ...process.env, MODEL_SERVICE_PORT: String(PORT), PYTHONUNBUFFERED: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       })
@@ -452,6 +474,10 @@ export function modelServiceManagerPlugin(): Plugin {
       const onChunk = (chunk: Buffer) => {
         const text = chunk.toString('utf8')
         state.logBuf = (state.logBuf + text).slice(-8000)
+        if (backend === 'eegnet') {
+          const revision = state.logBuf.match(/EEGNet revision=(eegnet-[a-f0-9]+)/)?.[1]
+          if (revision) state.modelRevision = revision
+        }
         for (const line of text.split(/\r?\n/).filter(Boolean)) {
           console.log(`\x1b[36m[model-service]\x1b[0m ${line}`)
         }
@@ -480,13 +506,13 @@ export function modelServiceManagerPlugin(): Plugin {
             owned: false,
             pid: null,
             backend,
-            message: `${state.lastError || '模型服务启动失败'}。请确认 NCC-OI-BCI 与 bci-dayloop 环境可用。`,
+            message: `${state.lastError || '模型服务启动失败'}。请运行 npm run backend:doctor 检查本地 Python 环境和模型资产。`,
           })
         }
         if (!sawReadyLog && READY_PATTERN.test(state.logBuf)) sawReadyLog = true
         if (sawReadyLog && (await isPortOpen(PORT))) {
           assertCurrent()
-          if ((selected || task === 'gaze_smr') && !state.logBuf.includes('[reve] state-file loaded')) {
+          if (backend === 'reve' && (selected || task === 'gaze_smr') && !state.logBuf.includes('[reve] state-file loaded')) {
             if (child.pid) killPidTree(child.pid)
             state.lastError = '所选线性头未成功加载（任务或编码器维度不匹配），已停止本次启动。'
             return snapshot({ ok: false, running: false, message: state.lastError })
@@ -500,7 +526,7 @@ export function modelServiceManagerPlugin(): Plugin {
             message:
               backend === 'reve'
                 ? `已启动本地 REVE（${task}，pid ${child.pid}，${stepSec}s 步；窗口按所选模型配置）`
-                : `已启动 dev mock（pid ${child.pid}）`,
+                : `已启动 ${backend}（pid ${child.pid}）`,
           })
         }
         await sleep(250)
@@ -602,6 +628,9 @@ export function modelServiceManagerPlugin(): Plugin {
           sendJson(res, 200, { ok: true, heads: heads.map(({ stateFile: _state, loraCheckpoint: _lora, reportFile: _report, ...head }) => head) })
           return
         }
+        if (action === 'weights' && req.method === 'GET') {
+          sendJson(res, 200, { ok: true, weights: listModelWeights(projectRoot).map(({ file: _file, key: _key, ...item }) => item) }); return
+        }
         if (action === 'status' && (req.method === 'GET' || req.method === 'POST')) {
           sendJson(res, 200, await statusOf())
           return
@@ -615,6 +644,9 @@ export function modelServiceManagerPlugin(): Plugin {
             parseStepSec(body.stepSec ?? body.step_sec, parseReveTask(body.task)),
             typeof body.headId === 'string' && body.headId ? body.headId : null,
             parseOmniModelSource(body.omniSource),
+            typeof body.weightId === 'string' ? body.weightId : '',
+            body.eegnetChannels == null ? 32 : Number(body.eegnetChannels),
+            body.eegnetSeed == null ? 20261022 : Number(body.eegnetSeed),
           )
           sendJson(res, result.ok ? 200 : 409, result)
           return

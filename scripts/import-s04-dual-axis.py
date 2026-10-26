@@ -9,7 +9,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--source-dir', type=Path, default=ROOT.parent / 'NCC-OI-BCI/checkpoints/imports/s04_reve_20261015/binary_4s')
+parser.add_argument('--source-dir', type=Path, default=ROOT / 'checkpoints/imports/s04_reve_20261015/binary_4s')
 parser.add_argument('--output', type=Path, default=ROOT / 'recordings/.reve-dual-axis/s04_binary_4s.json')
 args = parser.parse_args()
 checks = json.loads((args.source_dir / 'SHA256.json').read_text(encoding='utf-8'))
