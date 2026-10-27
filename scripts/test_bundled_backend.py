@@ -25,7 +25,7 @@ class BundledBackendTests(unittest.TestCase):
         torch.set_num_threads(1)
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / 'data.h5'
-            labels = np.tile(np.arange(4), 4)
+            labels = np.tile(np.arange(4, dtype=np.int64), 4)
             eeg = np.arange(16 * 2 * 50, dtype=np.float32).reshape(16, 2, 50)
             write_hdf5(target, eeg, labels, np.ones(16, dtype=int), ['session'] * 16, np.arange(16), HDF5Metadata(25, ['C3', 'C4'], ['left', 'right', 'tongue', 'rest'], 'uV', 'fixture'))
             loaded = EEGHDF5(target).load()

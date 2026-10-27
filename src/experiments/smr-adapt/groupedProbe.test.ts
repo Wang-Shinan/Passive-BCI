@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mock = vi.hoisted(() => ({
   revision: 'old', status: 'ready', headId: 'old.pt', hasPrediction: true, windowSec: 2,
   supportsGroupTraining: true,
+  modelType: 'reve', weightId: '',
   ensure: vi.fn(), stop: vi.fn(), progress: vi.fn(), statusApi: vi.fn(),
 }))
 vi.mock('../../lib/model-runtime/modelServiceApi', () => ({
@@ -10,7 +11,7 @@ vi.mock('../../lib/model-runtime/modelServiceApi', () => ({
 }))
 vi.mock('../../lib/model-runtime/modelRuntimeHub', () => ({ modelRuntimeHub: {
   get snapshot() { return { status: mock.status, serviceHello: { strategy: 'none', model_revision: mock.revision,
-    model_name: 'reve-base', window_sec: mock.windowSec, supports_group_training: mock.supportsGroupTraining,
+    model_name: 'reve-base', model_type: mock.modelType, window_sec: mock.windowSec, supports_group_training: mock.supportsGroupTraining,
     class_names: ['left_hand', 'right_hand', 'tongue', 'rest'] } } },
   latestObservation: () => mock.hasPrediction ? ({ model_revision: mock.revision, class_names: ['left_hand', 'right_hand', 'tongue', 'rest'],
     prepare_latency_ms: 1, inference_latency_ms: 10 }) : null,
@@ -36,7 +37,7 @@ function server(result: Partial<ProbeReport> = report(), failed = false) {
     let data: unknown = { ok: true }
     if (url.endsWith('/jobs') && body) data = { ok: true, job: { id: body.kind } }
     if (url.endsWith('/jobs/export')) data = { ok: true, job: { status: 'complete' }, report: {} }
-    if (url.endsWith('/jobs/fit') || url.endsWith('/jobs/lora')) data = { ok: true, job: { status: failed ? 'failed' : 'complete', error: 'GPU error' }, report: result }
+    if (url.endsWith('/jobs/fit') || url.endsWith('/jobs/lora') || url.endsWith('/jobs/finetune')) data = { ok: true, job: { status: failed ? 'failed' : 'complete', error: 'GPU error' }, report: result }
     return new Response(JSON.stringify(data), { status: 200 })
   }))
   return requests
@@ -47,16 +48,41 @@ beforeEach(() => {
   mock.hasPrediction = true
   mock.windowSec = 2
   mock.supportsGroupTraining = true
-  mock.statusApi.mockImplementation(async () => ({ running: true, owned: true, backend: 'reve', task: 'smr_control', headId: mock.headId, stepSec: .5 }))
+  mock.modelType = 'reve'; mock.weightId = ''
+  mock.statusApi.mockImplementation(async () => ({ running: true, owned: true, backend: mock.modelType, weightId: mock.weightId,
+    modelRevision: mock.revision, task: 'smr_control', headId: mock.headId, stepSec: .5 }))
   mock.stop.mockResolvedValue({ ok: true })
-  mock.ensure.mockImplementation(async ({ headId }: { headId: string }) => {
+  mock.ensure.mockImplementation(async ({ headId, weightId }: { headId: string; weightId?: string }) => {
     mock.headId = headId; mock.revision = headId === 'new.pt' ? 'new' : 'old'
+    if (weightId) { mock.weightId = weightId; mock.revision = weightId.endsWith('new.pt') ? 'new' : 'old' }
     return { running: true }
   })
 })
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('group boundary probing', () => {
+  it('runs EEGNet LP and round-end full training with exact checkpoint activation and rollback', async () => {
+    mock.modelType = 'eegnet'; mock.headId = ''; mock.weightId = 'eegnet:old.pt'
+    const baseline = await currentProbeBaseline(new AbortController().signal)
+    expect(baseline).toMatchObject({ backend: 'eegnet', weightId: 'eegnet:old.pt' })
+    const result = { ...report(), headId: '', baselineHeadId: '', weightId: 'eegnet:new.pt', baselineWeightId: 'eegnet:old.pt' }
+    let requests = server(result)
+    const state = { ...round(), baseline }
+    await runGroupProbe(state, options, new AbortController().signal, mock.progress)
+    expect(requests.find(r => r.body?.kind === 'fit')?.body).toMatchObject({ backend: 'eegnet', weightId: 'eegnet:old.pt' })
+    expect(mock.ensure).toHaveBeenLastCalledWith(expect.objectContaining({ backend: 'eegnet', weightId: 'eegnet:new.pt' }))
+    mock.weightId = 'eegnet:old.pt'; mock.revision = 'old'; state.baseline = baseline
+    requests = server(result)
+    mock.ensure.mockRejectedValueOnce(new Error('checkpoint failed'))
+    await runRoundLora(state, options, { epochs: 2, lr: .001, rank: 4, alpha: 8, batchSize: 1, accumulationSteps: 8 }, new AbortController().signal, mock.progress)
+    expect(requests.find(r => r.body?.kind === 'finetune')?.body).toMatchObject({ backend: 'eegnet', epochs: 2 })
+    expect(requests.find(r => r.body?.kind === 'export')?.body).toMatchObject({ scope: 'history', backend: 'eegnet' })
+    expect(state.baseline).toEqual(baseline)
+    expect(mock.ensure).toHaveBeenLastCalledWith(expect.objectContaining({ backend: 'eegnet', weightId: 'eegnet:old.pt' }))
+    server({ ...result, decision: { promote: false, reason: '未达标' } })
+    await runGroupProbe(state, options, new AbortController().signal, mock.progress)
+    expect(state.baseline).toEqual(baseline)
+  })
   it('accepts a supported four-second model round and rejects an explicit training block', async () => {
     mock.windowSec = 4
     await expect(currentProbeBaseline(new AbortController().signal)).resolves.toMatchObject({ windowSec: 4 })

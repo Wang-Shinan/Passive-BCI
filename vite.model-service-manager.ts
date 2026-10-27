@@ -512,6 +512,11 @@ export function modelServiceManagerPlugin(): Plugin {
         if (!sawReadyLog && READY_PATTERN.test(state.logBuf)) sawReadyLog = true
         if (sawReadyLog && (await isPortOpen(PORT))) {
           assertCurrent()
+          if (backend === 'eegnet' && !weight) {
+            const configLine = state.logBuf.match(/^\[eegnet\] (\{[^\r\n]+\})/m)?.[1]
+            const checkpoint = configLine ? JSON.parse(configLine).checkpoint : null
+            state.weightId = checkpoint ? listModelWeights(projectRoot).find(item => item.file === path.resolve(checkpoint))?.id ?? null : null
+          }
           if (backend === 'reve' && (selected || task === 'gaze_smr') && !state.logBuf.includes('[reve] state-file loaded')) {
             if (child.pid) killPidTree(child.pid)
             state.lastError = '所选线性头未成功加载（任务或编码器维度不匹配），已停止本次启动。'

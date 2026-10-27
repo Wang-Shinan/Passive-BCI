@@ -2,11 +2,12 @@ import { ensureModelService, modelServiceStatus, stopModelService } from '../../
 import { modelRuntimeHub } from '../../lib/model-runtime/modelRuntimeHub'
 import { liveStepSecForReveTask } from '../../lib/model-runtime/reveTasks'
 
-export type ProbeBaseline = { headId: string; revision: string; modelName: string; stepSec: number; windowSec: number }
+export type ProbeBaseline = { backend?: 'reve' | 'eegnet'; weightId?: string; headId: string; revision: string; modelName: string; stepSec: number; windowSec: number }
 export type ProbeRound = { id: string; subjectId: string; seed: number; sessions: string[]; baseline: ProbeBaseline }
 export type LoraOptions = { epochs: number; lr: number; rank: number; alpha: number; batchSize: number; accumulationSteps: number }
 export type ProbeReport = {
   skipped?: boolean; reason?: string; headId: string; baselineHeadId: string
+  weightId?: string; baselineWeightId?: string
   baselineRevision: string; modelRevision: string; validationSnapshot: string
   baseline: { balancedAccuracy: number }; metrics: { validation: { balancedAccuracy: number } }
   decision: { promote: boolean; reason: string }
@@ -41,7 +42,11 @@ export async function currentProbeBaseline(signal: AbortSignal): Promise<ProbeBa
   if (modelRuntimeHub.snapshot.status !== 'ready' || !hello?.model_revision) {
     throw new Error('模型尚未就绪，请先连接后再采集')
   }
+  if (hello.model_type === 'eegnet' && (!status.weightId || status.modelRevision !== hello.model_revision)) {
+    throw new Error('无法定位正在运行的 EEGNet 权重，请在模型设置中重新加载权重')
+  }
   return { headId: status.headId || status.loadedHead || '', revision: hello.model_revision,
+    ...(hello.model_type === 'eegnet' ? { backend: 'eegnet', weightId: status.weightId! } : {}),
     modelName: hello.model_name || 'reve', stepSec: status.stepSec ?? liveStepSecForReveTask('smr_control'),
     windowSec: hello.window_sec && [2, 4].includes(hello.window_sec) ? hello.window_sec : 4 }
 }
@@ -61,7 +66,8 @@ export async function waitForProbePrediction(baseline: ProbeBaseline, signal: Ab
 
 export async function loadProbeBaseline(baseline: ProbeBaseline, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted()
-  const result = await ensureModelService({ backend: 'reve', task: 'smr_control', headId: baseline.headId,
+  const result = await ensureModelService({ backend: baseline.backend ?? 'reve', task: 'smr_control', headId: baseline.headId,
+    weightId: baseline.weightId,
     stepSec: baseline.stepSec, signal })
   if (!result.running) throw new Error('模型未启动')
   modelRuntimeHub.disconnect()
@@ -82,7 +88,7 @@ export async function loadProbeBaseline(baseline: ProbeBaseline, signal: AbortSi
 async function runJob(config: Record<string, unknown>, signal: AbortSignal): Promise<{ id: string; report: ProbeReport }> {
   const { job } = await trainingRequest<{ job: { id: string } }>('jobs', config, signal)
   try {
-    const timeoutMinutes = config.kind === 'lora' ? 120 : 30
+    const timeoutMinutes = config.kind === 'lora' || config.kind === 'finetune' ? 120 : 30
     const deadline = Date.now() + timeoutMinutes * 60 * 1000
     while (Date.now() < deadline) {
       const result = await trainingRequest<{ job: { status: string; error?: string }; report: ProbeReport }>(`jobs/${job.id}`, undefined, signal)
@@ -119,10 +125,12 @@ export async function runRoundLora(round: ProbeRound, options: { minimumGain: nu
 
 async function runAdaptiveTraining(round: ProbeRound, options: { minimumGain: number; maximumRecallDrop: number },
   signal: AbortSignal, progress: (message: string) => void, lora?: LoraOptions): Promise<string> {
-  const stage = lora ? '轮末 LoRA' : '组间 probing'
   const original = { ...round.baseline }
+  const eegnet = original.backend === 'eegnet'
+  const kind = lora ? (eegnet ? 'finetune' : 'lora') : 'fit'
+  const stage = lora ? (eegnet ? '轮末全量微调' : '轮末 LoRA') : '组间 LP'
   const actual = await currentProbeBaseline(signal)
-  if (actual.headId !== original.headId || actual.revision !== original.revision) throw new Error('模型在本组期间被更换，停止自动接管')
+  if (actual.headId !== original.headId || actual.weightId !== original.weightId || actual.revision !== original.revision) throw new Error('模型在本组期间被更换，停止自动接管')
   progress(`${stage}：释放推理模型，准备导出${lora ? '同被试历史' : '本轮累计'}数据…`)
   await stopModelService(signal)
   let chosen = original
@@ -131,11 +139,13 @@ async function runAdaptiveTraining(round: ProbeRound, options: { minimumGain: nu
   try {
     const exported = await runJob({
       kind: 'export', roundId: round.id, sessions: round.sessions, labelSource: 'trial', subjectId: 1,
+      backend: original.backend ?? 'reve',
       windowSec: original.windowSec,
       ...(lora ? { scope: 'history' } : {}),
     }, signal)
-    progress(lora ? '轮末休息：联合训练 LoRA 与分类头，在相同历史验证快照上比较…' : '组间休息：均衡训练分类头，并在固定验证集上比较…')
-    const fitted = await runJob({ kind: lora ? 'lora' : 'fit', roundId: round.id, datasetId: exported.id, splitBy: 'trial',
+    progress(lora ? `轮末休息：${eegnet ? '全量微调 EEGNet' : '联合训练 LoRA 与分类头'}，在相同历史验证快照上比较…` : '组间休息：均衡训练分类头，并在固定验证集上比较…')
+    const fitted = await runJob({ kind, backend: original.backend ?? 'reve', weightId: original.weightId,
+      roundId: round.id, datasetId: exported.id, splitBy: 'trial',
       headId: original.headId, baselineRevision: original.revision, modelName: original.modelName,
       seed: round.seed, device: 'auto', epochs: 100, lr: .001, ...options, ...lora }, signal)
     report = fitted.report
@@ -143,7 +153,9 @@ async function runAdaptiveTraining(round: ProbeRound, options: { minimumGain: nu
     else {
       if (report.baselineRevision !== original.revision) throw new Error('评估基线版本不一致')
       const promote = report.decision.promote
+      if (eegnet && (!report.weightId || !report.baselineWeightId)) throw new Error('训练结果缺少 EEGNet 权重')
       chosen = { ...original, headId: promote ? report.headId : report.baselineHeadId,
+        ...(eegnet ? { weightId: promote ? report.weightId : report.baselineWeightId } : {}),
         revision: promote ? report.modelRevision : original.revision }
       message = `${report.decision.reason}。验证平衡准确率 ${(report.baseline.balancedAccuracy * 100).toFixed(1)}% → ${(report.metrics.validation.balancedAccuracy * 100).toFixed(1)}%`
     }
@@ -158,13 +170,13 @@ async function runAdaptiveTraining(round: ProbeRound, options: { minimumGain: nu
     await loadProbeBaseline(chosen, signal)
   } catch (error) {
     signal.throwIfAborted()
-    if (chosen.headId === original.headId) throw error
+    if (chosen.revision === original.revision) throw error
     progress('候选载入检查失败，正在恢复原模型…')
     await loadProbeBaseline(original, signal)
     chosen = original
     message = `候选未通过载入检查，已恢复原模型：${error instanceof Error ? error.message : String(error)}`
   }
-  await recordRound(round, 'model_decision', { stage: lora ? 'lora' : 'probe', previous: original, selected: chosen,
+  await recordRound(round, 'model_decision', { stage: lora ? kind : 'probe', previous: original, selected: chosen,
     validationSnapshot: report?.validationSnapshot ?? null, message }, signal)
   round.baseline = chosen
   return `${stage}：${message}。模型已就绪。`

@@ -453,7 +453,7 @@ class ModelRuntimeHub {
 
   private enqueueSource(batch: RawBridgeBatch): void {
     if (!this.snapshotValue.enabled) return
-    if (batch.device === 'omni' && acqRuntime?.omniLink === 'sdk') return
+    if (batch.device === 'omni' && acqRuntime?.omniLink === 'sdk' && !this.snapshotValue.serviceHello?.accepts_window_stream) return
     if (this.snapshotValue.serviceHello?.input_source === 'omni-sdk') return
     if (this.sourceQueue.length >= MAX_SOURCE_BATCHES) {
       this.sourceQueue = []
@@ -469,7 +469,9 @@ class ModelRuntimeHub {
     this.sourceQueue.push(batch)
     if (this.sourceDraining) return
     this.sourceDraining = true
-    setTimeout(() => this.drainSource(), 0)
+    // ponytail: drain at most 8 queued batches before the next browser task;
+    // per-sample timers cannot keep up with 250 Hz. Use a time budget if this cap grows.
+    queueMicrotask(() => this.drainSource())
   }
 
   private drainSource(): void {
@@ -510,7 +512,7 @@ class ModelRuntimeHub {
         })
       }
     }
-    setTimeout(() => this.drainSource(), 0)
+    queueMicrotask(() => this.drainSource())
   }
 
   private enqueue(packet: ModelWindowPacket): void {

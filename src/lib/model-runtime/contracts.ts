@@ -47,6 +47,8 @@ export type ModelServiceHello = {
   step_sec?: number
   slide_sec?: number
   supports_group_training?: boolean
+  /** Needs browser-built windows even when acquisition uses the Omni SDK. */
+  accepts_window_stream?: boolean
   input_source?: 'omni-sdk'
   follow?: {
     transport?: string
@@ -186,6 +188,7 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
     step_sec: stepSec && stepSec > 0 ? stepSec : undefined,
     slide_sec: finiteNumber(input?.slide_sec) && Number(input.slide_sec) > 0 ? Number(input.slide_sec) : undefined,
     supports_group_training: typeof value.supports_group_training === 'boolean' ? value.supports_group_training : undefined,
+    accepts_window_stream: typeof value.accepts_window_stream === 'boolean' ? value.accepts_window_stream : undefined,
     input_source: input?.source === 'omni-sdk' ? 'omni-sdk' : undefined,
     follow: parseFollow(value.follow),
   }

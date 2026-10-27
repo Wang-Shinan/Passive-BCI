@@ -1,4 +1,4 @@
-"""Export labeled SMR EEG and fit frozen-REVE linear probes from the exported H5."""
+"""Export labeled SMR EEG and train REVE or EEGNet with fixed trial holdouts."""
 import argparse
 from datetime import datetime, timezone
 import json
@@ -33,6 +33,93 @@ def grouped_split(labels, groups, seed):
     raise ValueError('无法让三个独立分组都包含所有类别；请补充会话/试次，或更换分组方式')
 
 
+def fit_eegnet(out, job, loaded, meta, indices, snapshot, history_counts):
+    from copy import deepcopy
+    import hashlib
+    import numpy as np
+    import torch
+    from serve_eegnet_tetris import fit_window, load_model
+    config = job['config']
+    torch.set_num_threads(4)
+    device = config['device']
+    if device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    baseline = load_model(Path(config['baselineCheckpoint']))
+    if baseline.config['revision'] != config['baselineRevision']:
+        raise ValueError('离线 EEGNet 权重与采集模型版本不一致')
+    payload = torch.load(config['baselineCheckpoint'], map_location='cpu', weights_only=True)
+    if payload.get('channel_names') and payload['channel_names'] != meta.channel_names:
+        raise ValueError('EEGNet 通道顺序与录制数据不一致')
+    # Reserved tests are neither preprocessed nor passed through the encoder.
+    usable = np.concatenate(indices[:2])
+    inputs = torch.cat([fit_window(baseline, dict(channels=loaded['data'].shape[1],
+        samples=loaded['data'].shape[2], sample_rate=meta.sample_rate),
+        loaded['data'][i].astype('<f4').tobytes()) for i in usable]).to(device)
+    labels = torch.tensor(loaded['labels'][usable], dtype=torch.long, device=device)
+    train = torch.arange(len(indices[0]), device=device)
+    val = torch.arange(len(train), len(usable), device=device)
+    baseline.to(device).eval()
+    before = classification_metrics(baseline, inputs[val], labels[val])
+    candidate = deepcopy(baseline)
+    torch.manual_seed(config['seed'])
+    history = []
+    if job['kind'] == 'fit':
+        with torch.no_grad():
+            features = candidate.encoder(inputs).flatten(1)
+        balanced_probe(candidate.classifier, features[train], labels[train], features[val], labels[val],
+                       config['epochs'], config['lr'], config['seed'])
+        assert all(torch.equal(a, b) for a, b in zip(candidate.encoder.state_dict().values(), baseline.encoder.state_dict().values()))
+    else:
+        optimizer = torch.optim.AdamW(candidate.parameters(), lr=config['lr'], weight_decay=1e-4)
+        classes = [(labels[train] == label).nonzero().flatten() for label in range(4)]
+        per_class = max(len(idx) for idx in classes)
+        best_score, best_state, best_epoch = -1., None, 0
+        for epoch in range(1, config['epochs'] + 1):
+            candidate.train()
+            selected = torch.cat([idx[torch.randint(len(idx), (per_class,), device=device)] for idx in classes])
+            selected = selected[torch.randperm(len(selected), device=device)]
+            for batch in selected.split(16):
+                optimizer.zero_grad(set_to_none=True)
+                loss = torch.nn.functional.cross_entropy(candidate(inputs[batch]), labels[batch], label_smoothing=.05)
+                if not torch.isfinite(loss):
+                    raise ValueError('EEGNet 训练损失非有限值')
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(candidate.parameters(), 1., error_if_nonfinite=True)
+                optimizer.step()
+            candidate.eval()
+            accuracy = classification_metrics(candidate, inputs[val], labels[val])['balancedAccuracy']
+            history.append(dict(epoch=epoch, balancedAccuracy=accuracy))
+            if accuracy > best_score:
+                best_score, best_state, best_epoch = accuracy, deepcopy(candidate.state_dict()), epoch
+            if epoch - best_epoch >= 20:
+                break
+        candidate.load_state_dict(best_state)
+    candidate.eval()
+    metrics = {name: classification_metrics(candidate, inputs[idx], labels[idx]) for name, idx in (('train', train), ('validation', val))}
+    decision = promotion_decision(before, metrics['validation'], config['minimumGain'], config['maximumRecallDrop'])
+    payload.update(init='lp' if job['kind'] == 'fit' else 'finetune', normalization_version='dc-centered-v2',
+                   channel_names=meta.channel_names, trained_at=datetime.now(timezone.utc).isoformat(),
+                   state_dict={key: value.detach().cpu() for key, value in candidate.state_dict().items()})
+    head = out / 'head.pt'
+    with head.open('xb') as handle:
+        torch.save(payload, handle)
+    published = Path(config['headOutput'])
+    published.parent.mkdir(parents=True, exist_ok=True)
+    with head.open('rb') as source, published.open('xb') as target:
+        shutil.copyfileobj(source, target)
+    restored = load_model(published).to(device)
+    with torch.no_grad():
+        torch.testing.assert_close(restored(inputs[val]), candidate(inputs[val]), rtol=0, atol=0)
+    assert 'eegnet-' + hashlib.sha256(Path(config['baselineCheckpoint']).read_bytes()).hexdigest()[:16] == config['baselineRevision']
+    return dict(kind=job['kind'], backend='eegnet', method=payload['init'], headId='', baselineHeadId='',
+                weightId=config['weightId'], baselineWeightId=config['baselineWeightId'],
+                modelRevision=restored.config['revision'], baselineRevision=config['baselineRevision'],
+                baseline=before, metrics=metrics, decision=decision, validationSnapshot=snapshot,
+                splitIndices=[idx.tolist() for idx in indices], testReserved=len(indices[2]),
+                ignoredChannels=payload.get('ignored_channels', []), history=history, historyCounts=history_counts,
+                epochs=config['epochs'], lr=config['lr'], seed=config['seed'])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--job', required=True)
@@ -60,6 +147,13 @@ def main():
         print(f'[export] extracting labeled {window_sec:g}s non-overlapping windows', flush=True)
         windows = extract_all_labeled_windows([Path(p) for p in config['sessions']], window_sec=window_sec, hop_sec=window_sec, label_source=config['labelSource'])
         kept = [w for w in windows if not w.padded]
+        if config.get('backend') == 'eegnet':
+            # ponytail: one first complete window per trial avoids duration bias;
+            # longer-trial augmentation can be added within the same fixed split.
+            trials = {}
+            for window in kept:
+                trials.setdefault((window.session_id, window.trial_index), window)
+            kept = list(trials.values())
         target = out / 'dataset.h5'
         windows_to_hdf5(kept, target, subject_id=config['subjectId'])
         # Older recordings may lack trial IDs. Keep those sessions together rather
@@ -84,7 +178,7 @@ def main():
             raise ValueError('EEG 包含非有限数值，请先检查采集数据')
         report = {'kind': 'export', 'shape': list(loaded['data'].shape), 'sampleRate': dataset.metadata.sample_rate,
                   'classNames': dataset.metadata.class_names, 'counts': np.bincount(loaded['labels'], minlength=4).tolist(),
-                  'sessions': dataset.sessions(), 'windowSec': window_sec, 'hopSec': window_sec, 'droppedPadded': len(windows) - len(kept),
+                  'sessions': dataset.sessions(), 'windowSec': window_sec, 'hopSec': window_sec, 'droppedPadded': sum(w.padded for w in windows),
                   'missingTrialIdSessions': sorted(session_groups)}
         if config.get('roundId'):
             report.update(roundId=config['roundId'], subjectLabel=config['subjectLabel'])
@@ -92,8 +186,6 @@ def main():
             report['history'] = config['history']
     else:
         import torch
-        from bci_dayloop.serving.reve import ReveModelBackend, default_checkpoint_root
-        from fit_smr_control_head import encode_windows, train_linear_head
         dataset = EEGHDF5(config['dataset'])
         loaded = dataset.load()
         meta = dataset.metadata
@@ -113,7 +205,7 @@ def main():
         snapshot = None
         if adaptive:
             try:
-                if lora:
+                if lora or job['kind'] == 'finetune':
                     for item in config['history']['rounds']:
                         seal_recordings(item['sessions'], item['recordingManifest'])
                     indices, snapshot, history_counts = history_split(loaded['labels'], groups, loaded['session_ids'], config['history'])
@@ -126,6 +218,13 @@ def main():
         else:
             indices = grouped_split(loaded['labels'], groups, config['seed'])
         print('[fit] grouped train/validation/test sizes:', [len(i) for i in indices], flush=True)
+        if config.get('backend') == 'eegnet':
+            report = fit_eegnet(out, job, loaded, meta, indices, snapshot, history_counts)
+            save_report(out, report)
+            print(json.dumps(report, ensure_ascii=True), flush=True)
+            return
+        from bci_dayloop.serving.reve import ReveModelBackend, default_checkpoint_root
+        from fit_smr_control_head import encode_windows, train_linear_head
         torch.manual_seed(config['seed'])
         root = default_checkpoint_root()
         backend = ReveModelBackend(model_dir=root / ('reve-' + config['size']), positions_dir=root / 'reve-positions',

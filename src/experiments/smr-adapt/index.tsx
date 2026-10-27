@@ -119,9 +119,9 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
   const [autoProbe, setAutoProbe] = useState(true)
   const [minimumGain, setMinimumGain] = useState(0.02)
   const [maximumRecallDrop, setMaximumRecallDrop] = useState(0)
-  const [autoLora, setAutoLora] = useState(false)
-  const [loraEpochs, setLoraEpochs] = useState(5)
-  const [loraLr, setLoraLr] = useState(.0001)
+  const [autoLora, setAutoLora] = useState(groupedAcquisition)
+  const [loraEpochs, setLoraEpochs] = useState(groupedAcquisition ? 100 : 5)
+  const [loraLr, setLoraLr] = useState(groupedAcquisition ? .001 : .0001)
   const probe = useGroupedProbe({ minimumGain, maximumRecallDrop,
     lora: groupedAcquisition && autoLora ? { epochs: loraEpochs, lr: loraLr, rank: 4, alpha: 8, batchSize: 1, accumulationSteps: 8 } : undefined })
   const probeRef = useRef(probe)
@@ -148,6 +148,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
   const warmupV = useRef<Welford>({ n: 0, mean: 0, m2: 0 })
   const cursorDriveRef = useRef(cursorDrive)
   const runtime = useModelRuntime()
+  const eegnetTraining = groupedAcquisition || runtime.serviceHello?.model_type === 'eegnet'
   const eeg = useLiveEeg()
   const autoTrainingCompatible = runtime.serviceHello?.supports_group_training !== false
     && (!runtime.serviceHello?.window_sec || [2, 4].includes(runtime.serviceHello.window_sec))
@@ -320,7 +321,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         live
           ? cursorDrive === 'features'
             ? `C3/C4 mu 驱动光标。${notes.filter(Boolean).join(' ')}`
-            : `REVE 驱动光标；SMR 头冻结，不在线微调。${notes.filter(Boolean).join(' ')}`
+            : `${eegnetTraining ? 'EEGNet' : 'REVE'} 驱动光标；试次期间模型冻结。${notes.filter(Boolean).join(' ')}`
           : notes.join(' '),
       )
     } catch (error) {
@@ -476,7 +477,16 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       const pred = useReve && recordingLive.current ? modelRuntimeHub.latestObservation(LIVE_PREDICTION_MAX_AGE_MS) : null
       if (useReve && recordingLive.current && (modelRuntimeHub.snapshot.status !== 'ready' || !pred
         || pred.probabilities.length !== pred.class_names.length || pred.probabilities.some(p => !Number.isFinite(p) || p < 0 || p > 1))) {
-        interruptGroup('REVE 预测中断')
+        const model = modelRuntimeHub.snapshot
+        loggerRef.current.log('prediction_interrupted', {
+          modelRevision: model.serviceHello?.model_revision,
+          status: model.status, error: model.lastError,
+          predictionAgeMs: model.latestPrediction ? now - model.latestPrediction.received_at_ms : null,
+          source: liveEegHub.meta,
+          pendingWindows: model.pendingWindows, inFlightWindows: model.inFlightWindows,
+          droppedWindows: model.droppedWindows, droppedSourceBatches: model.droppedSourceBatches,
+        })
+        interruptGroup(`模型预测中断（${model.status}）${model.lastError ? `：${model.lastError}` : ''}`)
         return
       }
       if (pred && canLabelSmrHead(pred.class_names) && pred.probabilities.length === pred.class_names.length) {
@@ -587,19 +597,19 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
             <option value="reve">{groupedAcquisition ? 'EEGNet 四分类' : 'REVE 四分类'}</option><option value="features">C3/C4 mu</option>
           </select></label>
           <label className="smr-operator-check"><input type="checkbox" checked={autoProbe} disabled={!autoTrainingCompatible} onChange={e => setAutoProbe(e.target.checked)} />组间自动训练并评估接管</label>
-          {!autoTrainingCompatible && <p>{runtime.serviceHello?.model_type === 'eegnet' ? '当前是随机初始化 EEGNet：左手、右手、舌头、休息。本页分组采集并保存原始 EEG 与试次标签；组间不做 LoRA。之后对这份数据做线性探测，再微调。' : '当前导入模型的预处理尚未接入组间训练，已关闭自动训练。推理和原始数据保存照常进行。'}</p>}
+          {!autoTrainingCompatible && <p>当前模型不支持自动训练，请重新加载已更新的内置模型服务。</p>}
           {autoProbe && cursorDrive === 'reve' && <>
-            <label className="smr-operator-check"><input type="checkbox" checked={autoLora} onChange={e => setAutoLora(e.target.checked)} />轮末 LoRA（同被试历史数据）</label>
+            <label className="smr-operator-check"><input type="checkbox" checked={autoLora} onChange={e => setAutoLora(e.target.checked)} />{eegnetTraining ? '轮末全量微调' : '轮末 LoRA'}（同被试历史数据）</label>
             {autoLora && <>
-              <label>LoRA epochs<input type="number" min={1} max={100} value={loraEpochs} onChange={e => setLoraEpochs(Number(e.target.value))} /></label>
-              <label>LoRA 学习率<input type="number" min={.000001} max={.01} step={.00001} value={loraLr} onChange={e => setLoraLr(Number(e.target.value))} /></label>
+              <label>轮末训练 epochs<input type="number" min={1} max={100} value={loraEpochs} onChange={e => setLoraEpochs(Number(e.target.value))} /></label>
+              <label>轮末学习率<input type="number" min={.000001} max={.01} step={.00001} value={loraLr} onChange={e => setLoraLr(Number(e.target.value))} /></label>
             </>}
             <label>最小提升（百分点）<input type="number" min={0} max={100} value={minimumGain * 100} onChange={e => setMinimumGain(Number(e.target.value) / 100)} /></label>
             <label>单类召回最多下降（百分点）<input type="number" min={0} max={100} value={maximumRecallDrop * 100} onChange={e => setMaximumRecallDrop(Number(e.target.value) / 100)} /></label>
           </>}
         </fieldset>
         <p className="smr-operator-status">准备 2 秒 · 提示 2 秒 · 执行最多 6 秒 · 结束 1 秒。每组前半水平、后半垂直；只控制一个轴，各方向等量随机，组间保存后继续。</p>
-        {autoProbe && autoLora && cursorDrive === 'reve' && <p className="smr-operator-status">轮末从当前模型初始化，联合更新 LoRA 与分类头；rank 4 / alpha 8，batch 1，累积 8 步。历史验证与测试试次不进入训练；验证达标且模型载入检查通过后，下一轮使用选定模型。失败则恢复原模型。</p>}
+        {autoProbe && autoLora && cursorDrive === 'reve' && <p className="smr-operator-status">{eegnetTraining ? '每组保存后自动 LP（冻结编码器）；轮末从当前权重全量微调 EEGNet。' : '轮末从当前模型初始化，联合更新 LoRA 与分类头。'}历史验证与测试试次不进入训练；验证达标且模型载入检查通过后，下一轮使用选定模型。失败则恢复原模型。</p>}
         {cursorDrive === 'features' && <p className="smr-operator-status">C3/C4 模式仅采集，不自动训练或接管。{!montage && live ? '当前导联缺少 C3/C4。' : ''}</p>}
         {cursorDrive === 'reve' && <fieldset disabled={workflowLocked} style={{ border: 0, padding: 0 }}>
           <TemporalFilterControls config={temporalConfig} onChange={setTemporalConfig} compact />
@@ -635,7 +645,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
           {embedded ? <h2>运动想象 · 个体化适配</h2> : <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">{groupedAcquisition ? 'SMR 分组采集与训练' : 'SMR 个体化适配'}</h1>}
           {!embedded && !groupedAcquisition && <Link to="/smr-gaze" className="btn mt-3">全屏 SMR 采集</Link>}
           <p className="muted mt-1 max-w-2xl text-sm">
-            {groupedAcquisition ? '四方向均衡随机采集，光标由 8773 上随机初始化的 EEGNet 驱动。请先在采集页开流，再点开始本轮采集。组间不做 LoRA；之后线性探测再微调。' : <>
+            {groupedAcquisition ? '四方向均衡随机采集，光标由内置 EEGNet 驱动。请先在采集页开流，再开始本轮采集。每组保存后自动 LP，轮末全量微调，并评估是否接管。' : <>
             Stieger 式连续光标：左手左、右手右、舌头上、休息下。光标可选 REVE 四分类或原来的 C3/C4 mu。SMR 头冻结，不在线微调。只展示上下可去{' '}
             <Link to="/smr-ud" style={{ color: 'var(--accent)' }}>
               SMR 上下控制
@@ -729,12 +739,12 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
               <label>每轮组数 <input type="number" min={1} max={50} value={groupCount} onChange={e => setGroupCount(Number(e.target.value))} /></label>
               <label>每组试次数 <input type="number" min={4} max={200} step={4} value={groupTrials} onChange={e => setGroupTrials(Number(e.target.value))} /></label>
               <p className="muted text-sm">左手→左，右手→右，舌头→上，休息→下。准备 2 秒、提示 2 秒、执行最多 6 秒、结束 1 秒。</p>
-              <label><input type="checkbox" checked={autoProbe} disabled={!autoTrainingCompatible} onChange={e => setAutoProbe(e.target.checked)} />组间自动训练并评估接管（REVE 四分类）</label>
+              <label><input type="checkbox" checked={autoProbe} disabled={!autoTrainingCompatible} onChange={e => setAutoProbe(e.target.checked)} />组间自动 LP 并评估接管（{eegnetTraining ? 'EEGNet' : 'REVE'} 四分类）</label>
               {!autoTrainingCompatible && <p>当前导入模型的预处理尚未接入组间训练，已关闭自动训练。推理和原始数据保存照常进行。</p>}
               {autoProbe && cursorDrive === 'reve' && <>
                 <label>最小提升（百分点） <input type="number" min={0} max={100} step={1} value={minimumGain * 100} onChange={e => setMinimumGain(Number(e.target.value) / 100)} /></label>
                 <label>单类召回最多下降（百分点） <input type="number" min={0} max={100} step={1} value={maximumRecallDrop * 100} onChange={e => setMaximumRecallDrop(Number(e.target.value) / 100)} /></label>
-                <p className="muted text-sm">试运行参数：本轮累计训练，首次足量数据固定验证／测试试次；每类至少 3 个有效试次。休息时训练 100 轮，完成模型检查后手动继续。轮末 LoRA 尚未接入。</p>
+                <p className="muted text-sm">本轮累计训练，首次足量数据固定验证／测试试次；每类至少 3 个有效试次。休息时自动 LP，完成模型检查后继续下一组；轮末训练可在操作者面板配置。</p>
               </>}
               {autoProbe && cursorDrive === 'features' && <p className="muted text-sm">C3/C4 模式仅分组采集；切换到 REVE 四分类后可使用自动训练与接管。</p>}
             </fieldset>}

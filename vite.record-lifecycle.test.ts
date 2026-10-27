@@ -31,28 +31,43 @@ function setup() {
   return { root, request }
 }
 
-it('finishing waits for accepted request bodies and refuses new chunks before releasing the model lock', async () => {
+it('finishing waits for accepted request bodies and refuses new chunks during model changes', async () => {
   const { root, request } = setup()
   const started = await request('/api/record/start', 'POST', '{"filename":"lifecycle.bin"}').done
   const id = started.body.id as string
-  expect(() => operationGate.beginModelChange()).toThrow('录制')
-  const chunk = request(`/api/record/${id}/chunk`)
-  chunk.stream.write(Buffer.alloc(8, 1))
-  const finish = request(`/api/record/${id}/finish`, 'POST', '{"incomplete":true}')
-  let finished = false
-  void finish.done.then(() => { finished = true })
-  await new Promise(resolve => setTimeout(resolve, 10))
-  expect(finished).toBe(false)
-  expect((await request(`/api/record/${id}/chunk`, 'POST', Buffer.alloc(4)).done).status).toBe(409)
-  chunk.stream.end(Buffer.alloc(8, 2))
-  expect((await chunk.done).status).toBe(200)
-  const result = await finish.done
-  expect(result.status).toBe(409)
-  expect(result.body.bytes).toBe(16)
-  const manifest = JSON.parse(readFileSync(join(root, 'recordings/lifecycle/session.json'), 'utf8'))
-  expect(manifest.status).toBe('interrupted')
-  expect(readFileSync(join(root, 'recordings/lifecycle/eeg.bin'))).toEqual(Buffer.concat([Buffer.alloc(8, 1), Buffer.alloc(8, 2)]))
-  expect((await request('/api/record/active', 'GET', '').done).body.id).toBeNull()
   const release = operationGate.beginModelChange()
-  release()
+  try {
+    const chunk = request(`/api/record/${id}/chunk`)
+    chunk.stream.write(Buffer.alloc(8, 1))
+    const finish = request(`/api/record/${id}/finish`, 'POST', '{"incomplete":true}')
+    let finished = false
+    void finish.done.then(() => { finished = true })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(finished).toBe(false)
+    expect((await request(`/api/record/${id}/chunk`, 'POST', Buffer.alloc(4)).done).status).toBe(409)
+    chunk.stream.end(Buffer.alloc(8, 2))
+    expect((await chunk.done).status).toBe(200)
+    const result = await finish.done
+    expect(result.status).toBe(409)
+    expect(result.body.bytes).toBe(16)
+    const manifest = JSON.parse(readFileSync(join(root, 'recordings/lifecycle/session.json'), 'utf8'))
+    expect(manifest.status).toBe('interrupted')
+    expect(readFileSync(join(root, 'recordings/lifecycle/eeg.bin'))).toEqual(Buffer.concat([Buffer.alloc(8, 1), Buffer.alloc(8, 2)]))
+    expect((await request('/api/record/active', 'GET', '').done).body.id).toBeNull()
+  } finally { release() }
+})
+
+it('starts and saves a recording while a model operation is in progress', async () => {
+  const { root, request } = setup()
+  const release = operationGate.beginModelChange()
+  try {
+    const started = await request('/api/record/start', 'POST', '{"filename":"during-model.bin"}').done
+    expect(started.status).toBe(200)
+    const id = started.body.id as string
+    const data = Buffer.alloc(16, 3)
+    expect((await request(`/api/record/${id}/chunk`, 'POST', data).done).status).toBe(200)
+    expect((await request(`/api/record/${id}/finish`, 'POST', '{"expectedBytes":16}').done).status).toBe(200)
+    expect(readFileSync(join(root, 'recordings/during-model/eeg.bin'))).toEqual(data)
+    expect(JSON.parse(readFileSync(join(root, 'recordings/during-model/session.json'), 'utf8')).status).toBe('complete')
+  } finally { release() }
 })

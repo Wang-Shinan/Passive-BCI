@@ -101,8 +101,11 @@ def load_model(checkpoint: Path | None = None, *, seed: int = SEED, channels: in
         initialization = 'random'
     if any(not torch.isfinite(tensor).all() for tensor in model.state_dict().values()):
         raise ValueError('Checkpoint contains non-finite weights')
+    ignored = payload.get('ignored_channels', [])
+    if not isinstance(ignored, list) or any(type(i) is not int or not 0 <= i < channels for i in ignored) or len(set(ignored)) != len(ignored) or len(ignored) >= channels:
+        raise ValueError('Invalid ignored_channels in checkpoint')
     model.config = dict(channels=channels, samples=samples, sample_rate=rate, class_names=classes,
-                        revision=revision, initialization=initialization, checkpoint=str(saved_path))
+                        revision=revision, initialization=initialization, checkpoint=str(saved_path), ignored_channels=ignored)
     model.eval()
     print('[eegnet] ' + json.dumps(model.config), flush=True)
     if initialization == 'random':
@@ -123,11 +126,14 @@ def fit_window(model: EEGNet, header: dict, payload: bytes) -> torch.Tensor:
     if header.get('unit', 'uV') != 'uV' or header.get('layout', 'CT') != 'CT':
         raise ValueError('Expected uV channel-major EEG')
     data = np.frombuffer(payload, dtype='<f4').reshape(channels, samples).copy()
+    data[cfg['ignored_channels'], :] = 0
     if not np.isfinite(data).all():
         raise ValueError('EEG contains non-finite samples')
     tensor = torch.from_numpy(data).unsqueeze(0)
     if samples != cfg['samples']:
         tensor = torch.nn.functional.interpolate(tensor, size=cfg['samples'], mode='linear', align_corners=False)
+    # Remove the DC offset first: float32 means can mis-center a constant ADC rail.
+    tensor = tensor - tensor[..., :1]
     mean = tensor.mean(dim=-1, keepdim=True)
     std = tensor.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
     return ((tensor - mean) / std).unsqueeze(1)
@@ -158,7 +164,7 @@ def hello_payload(model: EEGNet) -> dict:
                 online=dict(model_revision=cfg['revision'], strategy='none'),
                 input=dict(window_sec=cfg['samples']/cfg['sample_rate'], step_sec=STEP_SEC, slide_sec=STEP_SEC,
                            channels=cfg['channels'], sample_rate=cfg['sample_rate'], unit='uV', layout='CT'),
-                initialization=cfg['initialization'], supports_group_training=False)
+                initialization=cfg['initialization'], supports_group_training=True, accepts_window_stream=True)
 
 
 async def handle(websocket, model: EEGNet) -> None:
