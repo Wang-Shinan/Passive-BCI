@@ -8,11 +8,11 @@
  */
 
 import type { Plugin } from 'vite'
+import { isOmniDeviceType } from './src/acquisition/omni/device.js'
 import type { Connect } from 'vite'
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { findNcc, findPython as findModelPython } from './scripts/run-model-service.mjs'
+import { backendEnv, findPython as findModelPython } from './scripts/backend-paths.mjs'
 import net from 'node:net'
-import os from 'node:os'
 import path from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
@@ -61,8 +61,8 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
   'omni-sdk': {
     name: 'omni-sdk', port: 8772, script: 'bridges/omni/sdk_ws_bridge.py',
     readyPattern: /\[omni-sdk-bridge\].*ready/i,
-    buildEnv: () => ({ ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', NCC_OI_BCI_ROOT: findNcc() }),
-    resolvePython: () => { const ncc = findNcc(); if (!ncc) throw new Error('找不到 NCC-OI-BCI'); return findModelPython(ncc) },
+    buildEnv: () => backendEnv(),
+    resolvePython: () => findModelPython(),
   },
   omni: {
     name: 'omni',
@@ -70,7 +70,7 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
     script: 'bridges/omni/lsl_ws_bridge.py',
     readyPattern: /\[omni-lsl-bridge\].*ready/i,
     buildEnv: () => ({ ...process.env, PYTHONUNBUFFERED: '1' }),
-    resolvePython: () => process.env.OMNI_LSL_PYTHON || findPython(),
+    resolvePython: () => process.env.OMNI_LSL_PYTHON || findModelPython(),
   },
   bcigo: {
     name: 'bcigo',
@@ -81,7 +81,7 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
     resolvePython: (root) => {
       if (process.env.BCIGO_PYTHON) return process.env.BCIGO_PYTHON
       const local = path.resolve(root, '..', '.tools', 'bcigo-runtime', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
-      return existsSync(local) ? local : findPython()
+      return existsSync(local) ? local : findModelPython()
     },
   },
   neuracle: {
@@ -89,84 +89,9 @@ const SPECS: Record<BridgeName, BridgeSpec> = {
     port: 8766,
     script: 'bridges/neuracle/ws_bridge.py',
     readyPattern: /\[neuracle-bridge\].*waiting/i,
-    buildEnv: (root) => {
-      const env: NodeJS.ProcessEnv = { ...process.env, PYTHONUNBUFFERED: '1' }
-      const oi = resolveOiMiRoot()
-      if (oi) env.OI_MI_ROOT = oi
-      else delete env.OI_MI_ROOT
-      const ncc = resolveNccSrc(root)
-      if (ncc) env.NCC_OI_BCI_SRC = ncc
-      return env
-    },
-    resolvePython: (root) => {
-      const oi = resolveOiMiRoot()
-      const ncc = resolveNccSrc(root)
-      const venvCandidates = [
-        oi && path.join(oi, '.venv', 'Scripts', 'python.exe'),
-        oi && path.join(oi, '.venv', 'bin', 'python'),
-        ncc && path.join(ncc, '..', '.venv', 'Scripts', 'python.exe'),
-        ncc && path.join(ncc, '..', '.venv', 'bin', 'python'),
-      ]
-      for (const venvPy of venvCandidates) {
-        if (venvPy && existsSync(venvPy)) return venvPy
-      }
-      return process.env.NEURACLE_PYTHON || findPython()
-    },
+    buildEnv: () => backendEnv(),
+    resolvePython: () => process.env.NEURACLE_PYTHON || findModelPython(),
   },
-}
-
-function resolveOiMiRoot(): string | undefined {
-  const raw = [
-    process.env.OI_MI_ROOT,
-    path.join(os.homedir(), 'Documents', 'oi-mi'),
-  ]
-  for (const item of raw) {
-    if (!item) continue
-    if (existsSync(path.join(item, 'collect', 'neuracle_api.py'))) return item
-  }
-  return undefined
-}
-
-function resolveNccSrc(projectRoot: string): string | undefined {
-  const raw = [
-    process.env.NCC_OI_BCI_SRC,
-    path.resolve(projectRoot, '..', 'NCC-OI-BCI', 'src'),
-    path.join(os.homedir(), 'Desktop', 'NCC-OI-BCI', 'src'),
-  ]
-  for (const item of raw) {
-    if (!item) continue
-    if (existsSync(path.join(item, 'bci_dayloop', 'vendor', 'neuracle', 'neuracle_api.py'))) {
-      return item
-    }
-  }
-  return undefined
-}
-
-/** Windows `python3` is often the Microsoft Store stub (exit 9009). Probe real interpreters. */
-function findPython(): string {
-  const win = process.platform === 'win32'
-  const names = win
-    ? [process.env.PYTHON, 'python', 'py', 'python3']
-    : [process.env.PYTHON, 'python3', 'python']
-  for (const name of names.filter((n): n is string => Boolean(n))) {
-    try {
-      const args =
-        name === 'py'
-          ? ['-3', '-c', 'import sys; print(sys.executable)']
-          : ['-c', 'import sys; print(sys.executable)']
-      const out = execFileSync(name, args, {
-        encoding: 'utf8',
-        timeout: 8000,
-        windowsHide: true,
-      })
-      const exe = out.trim().split(/\r?\n/).find((line) => line.length > 0)
-      if (exe && existsSync(exe)) return exe
-      if (exe) return exe
-    } catch {
-      /* try next */
-    }
-  }
-  return win ? 'python' : 'python3'
 }
 
 function isPortOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
@@ -316,7 +241,7 @@ export function bridgeManagerPlugin(): Plugin {
                 : '请用桥接的 Python 执行 -m pip install -r bridges/bcigo/requirements.txt（要求 bcigo-sdk 2.1.2）'
               : name === 'omni'
                 ? '请执行 pip install -r bridges/omni/requirements.txt'
-                : '请确认 OI_MI_ROOT / oi-mi 与 neuracle 依赖可用'
+                : '请确认本项目 Python 环境与 Neuracle 依赖可用'
           return {
             ok: false,
             name,
@@ -579,8 +504,10 @@ export function bridgeManagerPlugin(): Plugin {
     }
     if (url === '/api/bridge/omni-sdk/discover' && req.method === 'POST') {
       const spec = SPECS['omni-sdk']
+      const deviceType = new URL(req.url ?? '/', 'http://localhost').searchParams.get('deviceType') ?? 'esp32'
+      if (!isOmniDeviceType(deviceType)) { sendJson(res, 400, { ok: false, message: '无效的 Omni 设备类型' }); return }
       try {
-        execFile(spec.resolvePython(projectRoot), [path.join(projectRoot, spec.script), '--discover'], {
+        execFile(spec.resolvePython(projectRoot), [path.join(projectRoot, spec.script), '--discover', '--device-type', deviceType], {
           env: spec.buildEnv(projectRoot), windowsHide: true, timeout: 25000, encoding: 'utf8',
         }, (error, stdout, stderr) => {
           if (error) { sendJson(res, 500, { ok: false, message: stderr.trim() || error.message }); return }

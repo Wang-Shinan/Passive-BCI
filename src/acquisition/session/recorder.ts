@@ -31,6 +31,7 @@ export interface RecordStopResult {
   sink: RecordSinkKind
   path?: string
   rel?: string
+  error?: string
 }
 
 export interface RecordFinishExtra {
@@ -212,6 +213,8 @@ export class BinRecorder {
   private startedAt: number | null = null
   private sessionId = ''
   private filename = ''
+  private startOptions: RecordStartOptions = { filenamePrefix: 'omni_ads1299' }
+  get restartOptions(): RecordStartOptions { return structuredClone(this.startOptions) }
   private sink: RecordSink | null = null
   private flushChain: Promise<void> = Promise.resolve()
   private flushQueuedBytes = 0
@@ -249,8 +252,10 @@ export class BinRecorder {
     return this.flushQueuedBytes
   }
 
-  async start(opts: RecordStartOptions = { filenamePrefix: 'omni_ads1299' }): Promise<RecordSinkKind> {
-    if (modelOperation.busy) throw new Error('模型正在切换，暂不能开始录制')
+  async start(opts: RecordStartOptions = { filenamePrefix: 'omni_ads1299' }, modelChangeSignal?: AbortSignal): Promise<RecordSinkKind> {
+    modelChangeSignal?.throwIfAborted()
+    if (modelOperation.busy && !modelChangeSignal) throw new Error('模型正在切换，暂不能开始录制')
+    this.startOptions = structuredClone(opts)
     if (this.startedAt !== null) await this.discard()
     this.pending = new Uint8Array(this.flushBytes)
     this.pendingLen = 0
@@ -267,7 +272,8 @@ export class BinRecorder {
       this.sink =
         (await DiskSink.open(this.filename, opts.meta)) ?? new MemorySink(this.filename)
     }
-    return this.sink.kind
+    if (modelChangeSignal?.aborted) { await this.stop(); modelChangeSignal.throwIfAborted() }
+    return this.sink!.kind
     } catch (error) { this.resetLocal(); throw error }
   }
 
@@ -319,7 +325,7 @@ export class BinRecorder {
       }
     } catch (err) {
       console.error('[record] finish failed', err)
-      return { bytes, name, sink: kind }
+      return { bytes, name, sink: kind, error: err instanceof Error ? err.message : String(err) }
     }
   }
 

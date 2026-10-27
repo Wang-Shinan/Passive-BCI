@@ -1,0 +1,319 @@
+{
+  "nccCommit": "d5c30dcff18557045dbbabec8f18c797ef9663eb",
+  "copiedAt": "2026-10-16T09:28:10.427Z",
+  "localChanges": [
+    "2026-10-19: synchronized omni_source.py, omni_service.py, omni_relay.py and serve_reve_model.py with the sibling NCC working tree for explicit ESP32/STM32 selection"
+  ],
+  "files": [
+    "src/bci_dayloop/__init__.py",
+    "src/bci_dayloop/runtime/__init__.py",
+    "src/bci_dayloop/runtime/types.py",
+    "src/bci_dayloop/serving/__init__.py",
+    "src/bci_dayloop/serving/backends.py",
+    "src/bci_dayloop/serving/embed_paths.py",
+    "src/bci_dayloop/serving/omni_relay.py",
+    "src/bci_dayloop/serving/omni_service.py",
+    "src/bci_dayloop/serving/omni_source.py",
+    "src/bci_dayloop/serving/profiles.py",
+    "src/bci_dayloop/serving/protocol.py",
+    "src/bci_dayloop/serving/reve.py",
+    "src/bci_dayloop/serving/reve_dual_axis.py",
+    "src/bci_dayloop/serving/reve_lora.py",
+    "src/bci_dayloop/serving/reve_s04.py",
+    "src/bci_dayloop/serving/server.py",
+    "src/bci_dayloop/serving/session.py",
+    "src/bci_dayloop/serving/smr_sessions.py",
+    "src/bci_dayloop/serving/task_dominance.py",
+    "src/bci_dayloop/serving/tcp_broadcast.py"
+  ],
+  "cuts": [
+    "profiles.py no longer imports bci_dayloop.realtime",
+    "backends.py no longer imports the runtime-package loader at module import",
+    "checkpoint and adapter roots resolve outside this tree"
+  ],
+  "integration": {
+    "date": "2026-10-26",
+    "upstreamRepository": "https://github.com/Wang-Shinan/NCC-OI-BCI",
+    "upstreamCommit": "d5c30dcff18557045dbbabec8f18c797ef9663eb",
+    "notes": [
+      "Preserved existing serving and Omni modifications.",
+      "Added local data, training, runtime-package dependencies and Neuracle TCP reader.",
+      "Local bootstrap, weight paths and CLI defaults adapted for Passive-BCI.",
+      "External checkout discovery removed; source tree is maintained in place."
+    ],
+    "upstreamFiles": [
+      {
+        "path": "scripts/_bootstrap.py",
+        "blob": "1593346835ab796a9c5c8a095759eb8a7c595862"
+      },
+      {
+        "path": "scripts/export_smr_control_hdf5.py",
+        "blob": "85adc8bf9a06c142eb2799c40ae4db9760f6e5ab"
+      },
+      {
+        "path": "scripts/fit_gaze_smr_head.py",
+        "blob": "3417dd05de64eaa7e00b9620aa3f99989b878be5"
+      },
+      {
+        "path": "scripts/fit_smr_control_head.py",
+        "blob": "e9db6574fabb54c28225eda00026d3dd06c3e096"
+      },
+      {
+        "path": "scripts/serve_dev_mock_model.py",
+        "blob": "a66ee60317a5745b2ad635ad201aa0d6274ee71a"
+      },
+      {
+        "path": "scripts/serve_runtime_model.py",
+        "blob": "c4890c3641fbc84240959d29e3f6d6913947c7d5"
+      },
+      {
+        "path": "src/bci_dayloop/__init__.py",
+        "blob": "fc9b3877f081769453f023cf9b8a5b4247ae4a1d"
+      },
+      {
+        "path": "src/bci_dayloop/data/__init__.py",
+        "blob": "3b51805fbef0db4ffd32cb50431e7b1e79ea8d75"
+      },
+      {
+        "path": "src/bci_dayloop/data/hdf5_dataset.py",
+        "blob": "fdc1852f3c9b98e8039f7370cc8e589b9d919c5c"
+      },
+      {
+        "path": "src/bci_dayloop/data/preprocessing.py",
+        "blob": "e4b114581e3797a12b596082d00fbbc77f99988f"
+      },
+      {
+        "path": "src/bci_dayloop/models/__init__.py",
+        "blob": "82e015c68cb411859ecac44064254ad84e8b5994"
+      },
+      {
+        "path": "src/bci_dayloop/models/base.py",
+        "blob": "e2178ce5a43e869fdd08cf1a343b521752a2bd4b"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/__init__.py",
+        "blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/backbone.py",
+        "blob": "1589128fe0e9f34e5726935d1be843e7a09f8081"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/backend.py",
+        "blob": "13f84a026c25dc35e65af095b33eb34bfd48f757"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/classifier.py",
+        "blob": "350712368dfc186ed7589e0d5fd625634ffe5af9"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/config.py",
+        "blob": "6e9aa81489986eb560afbfeab4baea4239b4f4e5"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/preprocessing.py",
+        "blob": "59c8d73c768fd18d2e88f706b580b6724bca9f30"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/runtime.py",
+        "blob": "e419dad42703035817acdfd07c42dc95e31e78af"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/vendor/__init__.py",
+        "blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/vendor/cbramod.py",
+        "blob": "f520b160e255efa8a34b9f64c163267e1c82e48d"
+      },
+      {
+        "path": "src/bci_dayloop/models/cbramod/vendor/criss_cross_transformer.py",
+        "blob": "8f76374c54d0e60bebd75ba42c0de389bd56d91d"
+      },
+      {
+        "path": "src/bci_dayloop/models/labram_backbone.py",
+        "blob": "68b0440b4a6403393bb24c78f00ec491091bd874"
+      },
+      {
+        "path": "src/bci_dayloop/models/labram_backend.py",
+        "blob": "1b116b49fed82260d55ff6244ce3393cc1a73162"
+      },
+      {
+        "path": "src/bci_dayloop/models/labram_linear.py",
+        "blob": "e5796a62c41c10f55de4921934273908dff0efa4"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/__init__.py",
+        "blob": "371c3b8dbc0d11d1f44050730c703ae45e765650"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/adapter.py",
+        "blob": "ca64fb1bedb4b2e6cd75bd77fd8d89f1aeb51eb6"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/backbone.py",
+        "blob": "f39fa9232e3c219c5e8f54ed527398a07cc13db5"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/backend.py",
+        "blob": "fea1b92d781b53f5aa815dd6e81f8acf325cafe0"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/classifier.py",
+        "blob": "91925eb3863a8365b8f5763a648311120b959d04"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/config.py",
+        "blob": "0cdaa692aee957e7ed90f3406f95153237d7c390"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/lora.py",
+        "blob": "b0ffb8e58bf45ea512baf9ff4f337fb6797b57bd"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/preprocessing.py",
+        "blob": "3232cd6e7dc5b91ce59fea792937e62fb04f1eed"
+      },
+      {
+        "path": "src/bci_dayloop/models/model_50m/tokenization.py",
+        "blob": "1fd1961b322667643a9da6babcd6914234dc807c"
+      },
+      {
+        "path": "src/bci_dayloop/models/online_features.py",
+        "blob": "d78df8141d90bdbbdf6c78b0ef5f6478de76543a"
+      },
+      {
+        "path": "src/bci_dayloop/packages/__init__.py",
+        "blob": "d142c0ad592d82692d6a3085fc79420a3adf0752"
+      },
+      {
+        "path": "src/bci_dayloop/packages/loader.py",
+        "blob": "7ea919122f50e2fcb80521351cacda0f8dbc903e"
+      },
+      {
+        "path": "src/bci_dayloop/preprocessing/__init__.py",
+        "blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "src/bci_dayloop/preprocessing/base.py",
+        "blob": "944d994e2586280fe8d85e62f04fd6b49c2f303a"
+      },
+      {
+        "path": "src/bci_dayloop/preprocessing/canonical.py",
+        "blob": "882b4d008fc17c524975a66e8a329088a5dcb12c"
+      },
+      {
+        "path": "src/bci_dayloop/preprocessing/labram.py",
+        "blob": "d1ad5d9f4b21eee4eed74c39eedbf6a9a2c82fa9"
+      },
+      {
+        "path": "src/bci_dayloop/preprocessing/model_50m.py",
+        "blob": "4ce9b12488c94110f1d9f681efc8a420289e6e02"
+      },
+      {
+        "path": "src/bci_dayloop/runtime/__init__.py",
+        "blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "src/bci_dayloop/runtime/model.py",
+        "blob": "2a1f0a26d3c11008b941eec22eb925a0bfe3a6eb"
+      },
+      {
+        "path": "src/bci_dayloop/runtime/types.py",
+        "blob": "a66c44e6ec3e5d7e6ce8e70f0a10cec730ece5a7"
+      },
+      {
+        "path": "src/bci_dayloop/serving/__init__.py",
+        "blob": "56cbc654902881c99d5e0cb4d4830bd66b1536e1"
+      },
+      {
+        "path": "src/bci_dayloop/serving/backends.py",
+        "blob": "5c2d3206688809549000104f84b72abcc03ac6d8"
+      },
+      {
+        "path": "src/bci_dayloop/serving/omni_relay.py",
+        "blob": "a6961ff8d0f1aaa389dcd57ebbf2509097e00610"
+      },
+      {
+        "path": "src/bci_dayloop/serving/omni_service.py",
+        "blob": "dd6dda5194e1ec8350a7b91552d517fd74a1740f"
+      },
+      {
+        "path": "src/bci_dayloop/serving/omni_source.py",
+        "blob": "f6d3b873e61229a34e88de25549f54aeb01dcb05"
+      },
+      {
+        "path": "src/bci_dayloop/serving/profiles.py",
+        "blob": "8953fb914c924bef0b23e20ea11c5d8cbfb43b3a"
+      },
+      {
+        "path": "src/bci_dayloop/serving/protocol.py",
+        "blob": "909688496f8c3e4dd385beb37865eb21aed1fc0d"
+      },
+      {
+        "path": "src/bci_dayloop/serving/reve.py",
+        "blob": "6b1d7cbb2d98591f97f17b66106a34aef9efba57"
+      },
+      {
+        "path": "src/bci_dayloop/serving/reve_dual_axis.py",
+        "blob": "28080cf7b69d5e9440d3ef8bf1d5cc390c8b53a4"
+      },
+      {
+        "path": "src/bci_dayloop/serving/reve_lora.py",
+        "blob": "7bf1d2a9f1a6f2bc3793376d1100d264de89a467"
+      },
+      {
+        "path": "src/bci_dayloop/serving/reve_s04.py",
+        "blob": "71131f328306f38cdd6cce4b9750abb2560441b5"
+      },
+      {
+        "path": "src/bci_dayloop/serving/server.py",
+        "blob": "99f66f9b95281f2c72a2745ae406d59826345bea"
+      },
+      {
+        "path": "src/bci_dayloop/serving/session.py",
+        "blob": "63a798fbbdd01b59f65d365927f027c7d71ce444"
+      },
+      {
+        "path": "src/bci_dayloop/serving/smr_sessions.py",
+        "blob": "a5c3f916eafef9bfc5340549e3f718f3aecf3845"
+      },
+      {
+        "path": "src/bci_dayloop/serving/task_dominance.py",
+        "blob": "2071f914a35e16d2fb337a17edf0bed01a3fe302"
+      },
+      {
+        "path": "src/bci_dayloop/serving/tcp_broadcast.py",
+        "blob": "b1ebae00e7e52d8bf0aebe4aca75691c393be86a"
+      },
+      {
+        "path": "src/bci_dayloop/utils/__init__.py",
+        "blob": "df849617913fc9125fa676e20a3ebd393d4b449f"
+      },
+      {
+        "path": "src/bci_dayloop/utils/config.py",
+        "blob": "600b4caf7e3465addd0228fc77212e30b54127a2"
+      },
+      {
+        "path": "src/bci_dayloop/vendor/__init__.py",
+        "blob": "22e73b422bf1d14207ccae8c69d678224c94ff39"
+      },
+      {
+        "path": "src/bci_dayloop/vendor/neuracle/README.md",
+        "blob": "5ce7ab3062730a555bc3d774ce932dc987249306"
+      },
+      {
+        "path": "src/bci_dayloop/vendor/neuracle/__init__.py",
+        "blob": "0b02c5b45a5cddf5b901861e3da41351d68b635a"
+      },
+      {
+        "path": "src/bci_dayloop/vendor/neuracle/backend.py",
+        "blob": "aaf42db05e8213bc59d74bb829265fcabc13b2f6"
+      },
+      {
+        "path": "src/bci_dayloop/vendor/neuracle/neuracle_api.py",
+        "blob": "5142da374e2fca60f1d97e02573c3e25f262f4ba"
+      }
+    ]
+  }
+}

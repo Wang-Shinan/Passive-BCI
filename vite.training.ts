@@ -1,17 +1,18 @@
 import type { Plugin } from 'vite'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 import { summarizeSessionDir } from './vite.record-library.ts'
 import { listModelHeads, selectModelHead } from './vite.model-heads.ts'
-import { findNcc } from './scripts/run-model-service.mjs'
+import { adapterRoot } from './scripts/backend-paths.mjs'
+import { selectModelWeight } from './vite.model-weights.ts'
 import { operationGate } from './vite.operation-gate.ts'
 import { appendRound, createRound, readRound, roundDirectory, loraHistory } from './vite.training-rounds.ts'
 
 type Job = {
-  id: string; kind: 'export' | 'fit' | 'lora'; status: 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
+  id: string; kind: 'export' | 'fit' | 'lora' | 'finetune'; status: 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
   startedAt: string; endedAt?: string; config: Record<string, unknown>; error?: string
 }
 const ID = /^[a-f0-9-]{36}$/
@@ -118,6 +119,8 @@ export function trainingPlugin(): Plugin {
               const dir = path.join(jobsRoot(), id)
               const roundId = typeof body.roundId === 'string' ? body.roundId : null
               const round = roundId ? readRound(root, roundId) : null
+              const backend = body.backend ?? 'reve'
+              if (backend !== 'reve' && backend !== 'eegnet') throw new Error('无效训练架构')
               let config: Record<string, unknown>
               if (body.kind === 'export') {
                 if (body.scope !== undefined && body.scope !== 'history') throw new Error('无效数据范围')
@@ -141,12 +144,32 @@ export function trainingPlugin(): Plugin {
                 if (body.labelSource !== 'auto' && body.labelSource !== 'trial') throw new Error('无效标签来源')
                 const windowSec = body.windowSec === undefined ? 2 : trainingNumber(body.windowSec, 2, 4)
                 if (![2, 4].includes(windowSec)) throw new Error('训练窗口只支持 2 秒或 4 秒')
-                config = { sessions: [...new Set(sessions)], subjectId: round ? 1 : trainingNumber(body.subjectId, 1, 999999, true),
+                config = { backend, sessions: [...new Set(sessions)], subjectId: round ? 1 : trainingNumber(body.subjectId, 1, 999999, true),
                   windowSec,
                   labelSource: round ? 'trial' : body.labelSource, ...(round ? { roundId, subjectLabel: round.subjectId,
                     recordingManifest: path.join(roundDirectory(root, round.id), 'recordings.json') } : {}),
                   ...(history ? { scope: 'history', history } : {}) }
+              } else if (body.kind === 'finetune' || body.kind === 'fit' && backend === 'eegnet') {
+                if (!round || backend !== 'eegnet') throw new Error('EEGNet 自动训练需要采集轮次')
+                const source = readJob(String(body.datasetId))
+                if (source.kind !== 'export' || source.status !== 'complete' || source.config.backend !== 'eegnet') throw new Error('请选择已完成的 EEGNet 数据导出')
+                if (source.config.roundId !== roundId || body.splitBy !== 'trial') throw new Error('训练数据不属于当前轮次')
+                if ((body.kind === 'finetune') !== (source.config.scope === 'history')) throw new Error('全量微调使用历史快照，LP 使用本轮累计数据')
+                if (!['cpu', 'auto', 'cuda'].includes(String(body.device))) throw new Error('无效计算设备')
+                const weight = selectModelWeight(root, String(body.weightId ?? ''), 'eegnet')
+                if (!weight) throw new Error('请选择当前 EEGNet 完整权重')
+                const revision = 'eegnet-' + createHash('sha256').update(readFileSync(weight.file)).digest('hex').slice(0, 16)
+                if (body.baselineRevision !== revision) throw new Error('当前 EEGNet 权重与采集版本不一致')
+                config = { backend, roundId, dataset: path.join(jobsRoot(), source.id, 'dataset.h5'), sourceJobId: source.id,
+                  baselineCheckpoint: weight.file, baselineWeightId: weight.id, baselineRevision: revision,
+                  headOutput: path.join(root, 'recordings', '.eegnet', 'heads', `auto-${body.kind}-${id}.pt`),
+                  weightId: `eegnet:heads/auto-${body.kind}-${id}.pt`,
+                  seed: round.seed, splitBy: 'trial', splitLedger: path.join(roundDirectory(root, round.id), 'split.json'),
+                  epochs: trainingNumber(body.epochs, 1, 100, true), lr: trainingNumber(body.lr, .000001, .01), device: body.device,
+                  minimumGain: trainingNumber(body.minimumGain, 0, 1), maximumRecallDrop: trainingNumber(body.maximumRecallDrop, 0, 1),
+                  ...(body.kind === 'finetune' ? { history: source.config.history } : {}) }
               } else if (body.kind === 'fit' || body.kind === 'lora') {
+                if (backend !== 'reve') throw new Error('LoRA 只适用于 REVE；EEGNet 使用全量微调')
                 if (body.kind === 'lora' && !round) throw new Error('LoRA 需要采集轮次')
                 const source = readJob(String(body.datasetId))
                 if (source.kind !== 'export' || source.status !== 'complete') throw new Error('请选择已完成导出的 H5')
@@ -165,9 +188,7 @@ export function trainingPlugin(): Plugin {
                   let lora = head?.loraCheckpoint ?? null
                   const size = head?.size ?? (body.modelName === 'reve-large' ? 'large' : 'base')
                   if (!head && body.baselineRevision !== `reve-${size}`) {
-                    const ncc = findNcc()
-                    if (!ncc) throw new Error('找不到 NCC-OI-BCI')
-                    lora = process.env.MODEL_REVE_LORA || path.join(ncc, 'checkpoints', 'adapters', body.baselineRevision, 'best.pt')
+                    lora = process.env.MODEL_REVE_LORA || path.join(adapterRoot, body.baselineRevision, 'best.pt')
                     if (!existsSync(lora) || path.basename(path.dirname(lora)) !== body.baselineRevision) throw new Error('无法定位当前模型的 LoRA，请选择明确的分类头')
                   }
                   config = { ...config, roundId, seed: round.seed, splitBy: 'trial', size, loraCheckpoint: lora,

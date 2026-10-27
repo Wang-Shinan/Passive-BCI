@@ -10,6 +10,7 @@ export type DirectoryEntry = {
 }
 
 export const experiments: DirectoryEntry[] = [
+  { icon: 'cards', path: '/video', name: '视频观看与脑电反馈', description: '播放本机视频，监控 EEG 特征，由模型分类头切换视频。', requirement: '手动播放无需设备；自动切换需真实 EEG、分类模型和类别映射。' },
   { icon: 'memory', path: '/nback', name: 'N-back 工作记忆', description: '1–3-back 字母匹配；记录命中、漏报、误报与反应时。', requirement: '空格响应；可同步录制 EEG。' },
   { icon: 'blocks', path: '/tetris', name: '压力自适应俄罗斯方块', description: '标准方块游戏；支持压力调速、SMR 控制与教师协作。', requirement: '可键盘操作；脑控需连接 EEG 和模型。' },
   { icon: 'graph', path: '/rl-graph', name: '人脑反馈强化学习', description: '图或网格上的路径任务；支持 TAMER、Q-learning 和 AI 分配 Q。', requirement: '按键 1–5 评分；可添加文字反馈。' },
@@ -23,7 +24,7 @@ export const experiments: DirectoryEntry[] = [
 export const smrExperiments: DirectoryEntry[] = [
   { icon: 'grid', path: '/neuroslide', name: 'NeuroSlide 脑控冰面迷宫', description: '一次方向指令，滑到墙前。简单、普通、困难三级冰面解谜。', requirement: '键盘可独立游玩；支持四分类 EEG、稳定确认和独立试次。' },
   { icon: 'grid', path: '/smr-grid', name: 'SMR 二维棋盘追踪', description: '3×3 随机亮格，光标命中后保留位置，连续追踪下一目标。', requirement: 'SMR 四方向信号；也可用键盘试玩。' },
-  { icon: 'training', path: '/smr-acquisition', name: 'SMR 分组采集与训练', description: '四方向随机采集；组间保存、训练分类头、评估并选择模型，再继续下一组。', requirement: '可演示；自动训练需真实 EEG 与本地冻结 REVE 四分类模型。' },
+  { icon: 'training', path: '/smr-acquisition', name: 'SMR 分组采集与训练', description: '四方向随机采集。光标由随机初始化 EEGNet 驱动，组间保存原始 EEG 与试次标签。', requirement: '需真实 EEG。组间不做 LoRA；之后线性探测再微调。' },
   { icon: 'cursor', path: '/smr', name: 'SMR 采集与光标控制', description: '切换普通 SMR 或全屏 SMR；包含个体化适配、方向采集、训练与验证。', requirement: '普通模式可预览；全屏 SMR 采集需真实 EEG 与对应模型。' },
   { icon: 'calibrate', path: '/tetris-adapt', name: '方块 SMR 适配', description: '左右、旋转、下落动作练习与窄井任务；脚想象只采标签。', requirement: '四分类头保持冻结。' },
   { icon: 'signal', path: '/gaze-smr-tetris', name: '全屏 SMR 俄罗斯方块', description: '使用 REVE 方向头控制方块：左移、右移、旋转、软降。', requirement: '真实 EEG；本被试的 gaze_smr 头。' },

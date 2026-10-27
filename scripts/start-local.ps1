@@ -1,18 +1,16 @@
 param([switch]$Bootstrap, [string]$LoraCheckpoint)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$workspaceRoot = Split-Path $projectRoot -Parent
-$nccRoot = Join-Path $workspaceRoot 'NCC-OI-BCI'
-$pythonPath = Join-Path $nccRoot '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $pythonPath)) { throw 'NCC Python environment is missing; see NCC requirements-reve-windows.txt.' }
+$workspaceRoot = $projectRoot
+$pythonPath = if ($env:PASSIVE_BCI_PYTHON) { $env:PASSIVE_BCI_PYTHON } else { Join-Path $projectRoot '.venv\Scripts\python.exe' }
+if (-not (Test-Path -LiteralPath $pythonPath)) { throw 'Local Python environment is missing; run scripts/setup-backend.ps1.' }
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCommand) {
     $nodeFolder = Get-ChildItem (Join-Path $workspaceRoot '.tools') -Directory -Filter 'node-*-win-x64' | Sort-Object Name -Descending | Select-Object -First 1
     if (-not $nodeFolder) { throw 'Install Node.js or place a portable Node in .tools.' }
     $env:Path = $nodeFolder.FullName + ';' + $env:Path
 }
-$env:NCC_OI_BCI_ROOT = $nccRoot
-$env:NCC_PYTHON = $pythonPath
+$env:PASSIVE_BCI_PYTHON = $pythonPath
 $env:MODEL_DEVICE = 'cuda'
 $env:MODEL_NO_TCP = '1'
 $env:PYTHONUTF8 = '1'
@@ -25,7 +23,8 @@ if ($Bootstrap) {
     Write-Warning 'Bootstrap: real REVE encoder, untrained classification head. This checks the pipeline, not brain-control accuracy.'
 } else {
     if (-not $LoraCheckpoint) {
-        $LoraCheckpoint = Join-Path $nccRoot 'checkpoints\adapters\stieger2021_4class_reve_lora_r16_mi5init\best.pt'
+        $adapterRoot = if ($env:REVE_ADAPTER_ROOT) { $env:REVE_ADAPTER_ROOT } else { Join-Path $projectRoot 'checkpoints/adapters' }
+        $LoraCheckpoint = Join-Path $adapterRoot 'stieger2021_4class_reve_lora_r16_mi5init/best.pt'
     }
     if (-not (Test-Path -LiteralPath $LoraCheckpoint -PathType Leaf)) { throw 'Selected LoRA checkpoint is missing. Supply -LoraCheckpoint or use -Bootstrap for an untrained head.' }
     $env:MODEL_REVE_LORA = (Resolve-Path -LiteralPath $LoraCheckpoint).Path

@@ -1,12 +1,14 @@
 """Inspect local head metadata without loading full REVE weights."""
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
 
-root, ncc = map(Path, sys.argv[1:3])
+root = Path(sys.argv[1]).resolve()
+adapters = Path(os.environ.get('REVE_ADAPTER_ROOT', str(root / 'checkpoints' / 'adapters')))
 items = []
 for file in sorted((root / 'recordings' / '.reve-heads').glob('*.pt')):
     item = {'id': file.name, 'name': file.name, 'task': None, 'encoderId': None,
@@ -36,7 +38,7 @@ for file in sorted((root / 'recordings' / '.reve-heads').glob('*.pt')):
         if Path(encoder).name != encoder or '/' in encoder or '\\' in encoder or encoder in ('.', '..'):
             raise ValueError('无效的编码器标识')
         if encoder not in ('reve-base', 'reve-large'):
-            adapter = Path(payload['lora_checkpoint']) if payload.get('lora_checkpoint') else ncc / 'checkpoints' / 'adapters' / encoder / 'best.pt'
+            adapter = Path(payload['lora_checkpoint']) if payload.get('lora_checkpoint') else adapters / encoder / 'best.pt'
             if adapter.parent.name != encoder:
                 raise ValueError('LoRA 路径与编码器标识不一致')
             if not adapter.is_file():

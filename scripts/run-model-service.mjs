@@ -1,5 +1,5 @@
 /**
- * Cross-platform launcher for the NCC-OI-BCI model WebSocket.
+ * Cross-platform launcher for the bundled Passive-BCI model service.
  *
  *   npm run model-service
  *   npm run model-service:reve
@@ -8,63 +8,12 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveReveLoraArgs, resolveReveHeadMode } from './reve-launch-options.mjs'
 
-const passiveRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const condaEnvName = 'bci-dayloop'
-
-function firstExisting(candidates) {
-  return candidates.find((value) => typeof value === 'string' && value.length > 0 && existsSync(value))
-}
-
-function condaRoots() {
-  const prefix = process.env.CONDA_PREFIX
-  const roots = []
-  if (prefix) {
-    roots.push(prefix)
-    const parent = path.dirname(prefix)
-    if (path.basename(parent) === 'envs') roots.push(path.dirname(parent))
-    else roots.push(prefix)
-  }
-  roots.push(
-    path.join(os.homedir(), 'anaconda3'),
-    path.join(os.homedir(), 'miniconda3'),
-    path.join(os.homedir(), 'mambaforge'),
-    'D:\\Programs\\Anaconda',
-    'C:\\ProgramData\\anaconda3',
-  )
-  return [...new Set(roots.filter(Boolean))]
-}
-
-export function findNcc() {
-  return firstExisting([
-    process.env.NCC_OI_BCI_ROOT,
-    path.resolve(passiveRoot, '..', 'NCC-OI-BCI'),
-    path.join(os.homedir(), 'Desktop', 'NCC-OI-BCI'),
-    path.join(os.homedir(), 'Documents', 'NCC-OI-BCI'),
-  ])
-}
-
-export function findPython(ncc) {
-  const candidates = [
-    process.env.NCC_PYTHON,
-    path.join(ncc, '.venv', 'Scripts', 'python.exe'),
-    path.join(ncc, '.venv', 'bin', 'python'),
-  ]
-  for (const root of condaRoots()) {
-    candidates.push(
-      path.join(root, 'envs', condaEnvName, 'python.exe'),
-      path.join(root, 'envs', condaEnvName, 'bin', 'python'),
-    )
-    if (path.basename(root) === condaEnvName) {
-      candidates.push(path.join(root, 'python.exe'), path.join(root, 'bin', 'python'))
-    }
-  }
-  return firstExisting(candidates) || (process.platform === 'win32' ? 'python' : 'python3')
-}
+import { projectRoot as passiveRoot, backendRoot, findPython, backendEnv } from './backend-paths.mjs'
+export { findPython } from './backend-paths.mjs'
 
 function argValue(flag) {
   const index = process.argv.indexOf(flag)
@@ -90,18 +39,13 @@ function defaultStepSec(task) {
 }
 
 function main() {
-  const foundNcc = findNcc()
-  if (!foundNcc) {
-    console.error('[model-service] 找不到 NCC-OI-BCI。请设置 NCC_OI_BCI_ROOT。')
-    process.exit(1)
-  }
-  const ncc = path.resolve(foundNcc)
-  const python = findPython(ncc)
+  const python = findPython()
   if (process.argv.includes('--list-heads')) {
-    const child = spawn(python, [path.join(passiveRoot, 'scripts', 'list-reve-heads.py'), passiveRoot, ncc], {
-      cwd: passiveRoot, stdio: 'inherit', windowsHide: true,
+    const child = spawn(python, [path.join(passiveRoot, 'scripts', 'list-reve-heads.py'), passiveRoot], {
+      cwd: passiveRoot, env: backendEnv(), stdio: 'inherit', windowsHide: true,
     })
     child.on('exit', (code) => process.exit(code ?? 1))
+    for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal))
     child.on('error', (error) => { console.error(error.message); process.exit(1) })
     return
   }
@@ -110,11 +54,24 @@ function main() {
   const host = process.env.MODEL_SERVICE_HOST || '127.0.0.1'
   const pkg = process.env.MODEL_PACKAGE
   const backend = (argValue('--backend') || process.env.MODEL_BACKEND || '').trim().toLowerCase()
+  if (backend === 'eegnet') {
+    const args = [path.join(passiveRoot, 'scripts/serve_eegnet_tetris.py'), '--host', host, '--port', port,
+      '--channels', argValue('--channels') || '32', '--seed', argValue('--seed') || '20261022']
+    if (argValue('--checkpoint')) args.push('--checkpoint', argValue('--checkpoint'))
+    if (argValue('--output')) args.push('--output', argValue('--output'))
+    const child = spawn(python, args, { cwd: passiveRoot, env: backendEnv(), stdio: 'inherit', windowsHide: true })
+    for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal))
+    child.on('error', error => { console.error(error.message); process.exitCode = 1 })
+    child.on('exit', code => { process.exitCode = code ?? 1 })
+    return
+  }
   const omniEndpoint = argValue('--omni-endpoint') || process.env.MODEL_OMNI_ENDPOINT
   const omniChannels = argValue('--omni-channels') || process.env.MODEL_OMNI_CHANNELS
+  const omniDeviceType = argValue('--omni-device-type') || process.env.MODEL_OMNI_DEVICE_TYPE || 'esp32'
+  if (!['esp32', 'stm32'].includes(omniDeviceType)) throw new Error('Omni device type must be esp32 or stm32')
   if (omniEndpoint || omniChannels) {
     if (backend !== 'reve' || pkg) throw new Error('Omni SDK direct input requires --backend reve')
-    if (!omniEndpoint || !omniChannels) throw new Error('Set both --omni-endpoint and --omni-channels (CH1..CH8 electrode order)')
+    if (!omniEndpoint || !omniChannels) throw new Error('Set both --omni-endpoint and --omni-channels (hardware channel order)')
   }
   const task = argValue('--task') || process.env.MODEL_REVE_TASK || 'passive_rating'
   const stepSec = argValue('--step-sec') || process.env.MODEL_STEP_SEC || defaultStepSec(task)
@@ -123,9 +80,9 @@ function main() {
   const requestedStateFile = argValue('--state-file') || (!freshHead && !checkpointHead &&
     (task === 'gaze_smr' ? defaultStateFile(task) : process.env.MODEL_STATE_FILE || defaultStateFile(task))
   )
-  const stateFile = requestedStateFile ? path.resolve(ncc, requestedStateFile) : undefined
+  const stateFile = requestedStateFile ? path.resolve(passiveRoot, requestedStateFile) : undefined
   const loraArgs = backend === 'reve' && !pkg
-    ? resolveReveLoraArgs({ task, stateFile, ncc, argv: [...process.argv.slice(2), ...(checkpointHead ? ['--checkpoint-head'] : [])], env: process.env }) : []
+    ? resolveReveLoraArgs({ task, stateFile, projectRoot: passiveRoot, argv: [...process.argv.slice(2), ...(checkpointHead ? ['--checkpoint-head'] : [])], env: process.env }) : []
   if (checkpointHead && (backend !== 'reve' || pkg || !loraArgs.includes('--lora-checkpoint'))) {
     throw new Error('checkpoint-head requires an explicit REVE LoRA checkpoint')
   }
@@ -155,6 +112,7 @@ function main() {
           port,
           '--size',
           argValue('--size') || (task === 'gaze_smr' ? 'base' : process.env.MODEL_REVE_SIZE || 'base'),
+          ...(argValue('--model-dir') ? ['--model-dir', argValue('--model-dir')] : []),
           '--device',
           process.env.MODEL_DEVICE || 'auto',
           '--strategy',
@@ -164,7 +122,7 @@ function main() {
           ...(stepSec ? ['--step-sec', String(stepSec)] : []),
           ...(stateFile ? ['--state-file', stateFile] : []),
           ...loraArgs,
-          ...(omniEndpoint ? ['--omni-endpoint', omniEndpoint, '--omni-channels', omniChannels] : []),
+          ...(omniEndpoint ? ['--omni-endpoint', omniEndpoint, '--omni-channels', omniChannels, '--omni-device-type', omniDeviceType] : []),
           ...(omniEndpoint && process.argv.includes('--omni-relay') ? ['--omni-relay'] : []),
           ...(omniEndpoint && argValue('--omni-electrodes') ? ['--omni-electrodes', argValue('--omni-electrodes')] : []),
           ...(omniEndpoint && argValue('--omni-positions') ? ['--omni-positions', argValue('--omni-positions')] : []),
@@ -180,30 +138,20 @@ function main() {
           port,
           '--profile',
           profile,
+          ...(process.env.MODEL_NO_TCP === '1' ? ['--no-tcp'] : []),
         ]
 
-  console.log(`[model-service] NCC=${ncc}`)
+  // --embed remains accepted for old shortcuts; all backends now run in-tree.
+  const launchArgs = args.map(item => item === 'scripts/serve_reve_model.py'
+    ? path.join(backendRoot, 'serve_reve_model.py')
+    : /^scripts\/serve_.*\.py$/.test(item) ? path.join(backendRoot, item) : item)
+  if (!existsSync(launchArgs[0])) throw new Error(`Missing bundled backend entry: ${launchArgs[0]}`)
+  console.log(`[model-service] code=${backendRoot}`)
   console.log(`[model-service] python=${python}`)
-  if (pkg) {
-    console.log(`[model-service] runtime package=${pkg}`)
-  } else if (backend === 'reve') {
-    if (freshHead && !stateFile) console.warn('[model-service] Untrained task head: uniform probabilities. Pipeline check only; collect labeled EEG and fit a head before model-driven control.')
-    if (checkpointHead && !stateFile) console.log('[model-service] Using the LoRA checkpoint linear head as initialization; source classes are reported by the model service.')
-    console.log(
-      `[model-service] backend=reve，启动本地 REVE（窗口按所选模型配置${stepSec ? ` / ${stepSec}s 步` : ''}，task=${task}，strategy=${strategy}）…`,
-    )
-    if (stateFile) console.log(`[model-service] state-file=${stateFile}`)
-  } else {
-    console.log(`[model-service] 启动 dev mock（hello ${profile} 窗长；接受 neuracle59 / bcigo32）…`)
-    console.log('[model-service] 在线学习请用: npm run model-service:reve')
-  }
-
-  const child = spawn(python, args, {
-    cwd: ncc,
-    stdio: 'inherit',
-    env: { ...process.env, PYTHONUNBUFFERED: '1' },
-    windowsHide: false,
+  const child = spawn(python, launchArgs, {
+    cwd: passiveRoot, stdio: 'inherit', env: backendEnv(), windowsHide: true,
   })
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal))
   child.on('error', (error) => {
     console.error(`[model-service] 无法启动 Python: ${error.message}`)
     process.exit(1)

@@ -14,10 +14,10 @@ from unittest.mock import patch
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--ncc', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    sys.path[:0] = [str(args.ncc / 'src'), str(args.ncc / 'scripts')]
+    backend = Path(__file__).resolve().parents[1] / 'embedded' / 'ncc'
+    sys.path[:0] = [str(backend / 'src'), str(backend / 'scripts')]
     import h5py
     import numpy as np
     import torch
@@ -74,7 +74,7 @@ def main():
             with torch.no_grad():
                 expected_logits.append(backend._head(encoded).cpu())
             return result
-        with patch.object(sys, 'argv', ['training-job.py', '--ncc', str(args.ncc), '--job', str(job_file)]), \
+        with patch.object(sys, 'argv', ['training-job.py', '--job', str(job_file)]), \
                 patch.object(reve, 'prepare_reve_window', track_prepare), \
                 patch.object(round_lora, 'train_round_lora', track_training):
             job_module.main()

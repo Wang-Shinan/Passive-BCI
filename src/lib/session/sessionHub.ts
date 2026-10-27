@@ -11,6 +11,8 @@ const CONTEXT_FLUSH_N = 8
 
 export class SessionHub {
   private id: string | null = null
+  private metadata: SessionBindMeta = {}
+  get boundMeta(): SessionBindMeta { return { ...this.metadata } }
   private rel: string | null = null
   private eventQ: string[] = []
   private contextQ: string[] = []
@@ -39,6 +41,7 @@ export class SessionHub {
     if (this.id && this.id !== info.id) {
       void this.flush()
     }
+    if (this.id !== info.id) this.metadata = {}
     this.id = info.id
     this.rel = info.rel
     this.notify()
@@ -85,6 +88,7 @@ export class SessionHub {
   }
 
   bindMeta(meta: SessionBindMeta): void {
+    this.metadata = { ...this.metadata, ...meta }
     const id = this.id
     if (!id) return
     void fetch(`/api/record/${id}/meta`, {

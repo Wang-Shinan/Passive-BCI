@@ -34,15 +34,22 @@ try {
   await page.getByRole('button', { name: 'BCI Mode', exact: true }).click()
   assert.equal(await page.getByLabel('rest 稳定预测数', { exact: true }).inputValue(), '2')
   await page.getByLabel('rest 稳定预测数', { exact: true }).fill('4')
+  for (const [label, count] of [['left_hand', '3'], ['right_hand', '5'], ['tongue', '1']]) {
+    assert.equal(await page.getByLabel(`${label} 稳定预测数`, { exact: true }).inputValue(), '2')
+    await page.getByLabel(`${label} 稳定预测数`, { exact: true }).fill(count)
+  }
+  assert.equal(await page.locator('.ns-class-debug').count(), 4)
   assert.equal(await page.getByLabel('稳定预测数', { exact: true }).inputValue(), '2')
   await page.getByLabel('预测来源').selectOption('external')
   await page.getByRole('button', { name: '开始', exact: true }).click()
   let serial = 0
-  const send = (winner, roundId) => page.evaluate(({ winner, roundId, serial }) => {
+  const send = (winner, roundId) => page.evaluate(async ({ winner, roundId, serial }) => {
     window.dispatchEvent(new CustomEvent('neuroslide:prediction', { detail: {
       id: `rest-test-${serial}`, labels: ['left_hand', 'right_hand', 'rest', 'tongue'],
       probabilities: [0, 1, 2, 3].map(i => i === winner ? .94 : .02), receivedAt: performance.now(), roundId,
     } }))
+    // React may commit the event's state updates on the next animation frame.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
   }, { winner, roundId, serial: ++serial })
   const moves = () => page.getByTestId('moves').innerText().then(Number)
   for (let i = 0; i < 3; i++) await send(2)
@@ -53,18 +60,28 @@ try {
   await page.waitForFunction(() => document.querySelector('.ns-player').dataset.sliding === 'false')
   for (let i = 0; i < 6; i++) await send(2)
   assert.equal(await moves(), 1, 'sustained rest cannot auto-repeat')
-  await send(1, 'new-trial')
-  assert.equal(await moves(), 1)
-  await send(1, 'new-trial')
-  await page.waitForFunction(() => Number(document.querySelector('[data-testid="moves"]').textContent) === 2)
+  let expectedMoves = 1
+  for (const [winner, count] of [[1, 5], [3, 1], [0, 3]]) {
+    for (let i = 1; i < count; i++) {
+      await send(winner, `direction-${winner}`)
+      assert.equal(await moves(), expectedMoves)
+    }
+    await send(winner, `direction-${winner}`)
+    expectedMoves++
+    await page.waitForFunction(expected => Number(document.querySelector('[data-testid="moves"]').textContent) === expected, expectedMoves)
+    await page.waitForFunction(() => document.querySelector('.ns-player').dataset.sliding === 'false')
+  }
   await page.reload()
   await page.locator('.ns-settings summary').click()
   assert.equal(await page.getByLabel('rest 稳定预测数', { exact: true }).inputValue(), '4')
+  for (const [label, count] of [['left_hand', '3'], ['right_hand', '5'], ['tongue', '1']]) {
+    assert.equal(await page.getByLabel(`${label} 稳定预测数`, { exact: true }).inputValue(), count)
+  }
   assert.equal(await page.getByLabel('稳定预测数', { exact: true }).inputValue(), '2')
   assert.equal(await page.getByLabel('置信度阈值').inputValue(), '0.58')
   assert.equal(await page.getByLabel('释放预测数').inputValue(), '1')
   await mkdir('test-results/neuroslide', { recursive: true })
   await page.locator('.ns-rest-debug').screenshot({ path: 'test-results/neuroslide/rest-settings.png' })
   assert.deepEqual(errors, [])
-  console.log(JSON.stringify({ok:true, migration:true, independentRestCount:true, persistentSettings:true, deduplication:true}))
+  console.log(JSON.stringify({ok:true, migration:true, independentFourClassCounts:true, persistentSettings:true, deduplication:true}))
 } finally { await browser.close() }

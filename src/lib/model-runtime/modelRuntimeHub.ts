@@ -21,6 +21,7 @@ import {
   type ModelWindowPacket,
 } from './contracts'
 import { ModelWindowAssembler } from './windowAssembler'
+import { withRecordingTransition } from './recordingTransition'
 import { modelServiceStatus, registerModelRuntimeControl, modelConfigurationLocked } from './modelServiceApi'
 import { modelOperation } from './modelOperation'
 import {
@@ -202,16 +203,48 @@ class ModelRuntimeHub {
     else this.disconnect('disabled')
   }
 
-  setUrl(url: string): void {
+  prepareManagedConnection(): void {
+    const url = modelUrlPresets().find(item => item.id === 'proxy')!.url
+    localStorage.setItem(URL_KEY, url)
+    this.patch({ url })
+  }
+
+  async setUrl(url: string): Promise<void> {
     const next = url.trim() || defaultModelUrl()
-    if (next !== this.snapshotValue.url && (modelConfigurationLocked() || modelOperation.busy)) {
-      this.logDebug('warn', '录制或模型操作期间不能更换连接地址'); return
+    if (next === this.snapshotValue.url) return
+    if (modelOperation.busy) { this.logDebug('warn', '模型正在切换，请稍后更换连接地址'); return }
+    const apply = () => {
+      localStorage.setItem(URL_KEY, next)
+      this.patch({ url: next })
+      this.logDebug('info', 'URL 已更新', next)
     }
-    localStorage.setItem(URL_KEY, next)
-    const reconnect = next !== this.snapshotValue.url && this.snapshotValue.enabled
-    this.patch({ url: next })
-    this.logDebug('info', `URL 已更新`, next)
-    if (reconnect) this.connect()
+    if (!modelConfigurationLocked()) {
+      apply()
+      if (this.snapshotValue.enabled) this.connect()
+      return
+    }
+    try {
+      await modelOperation.run(signal => withRecordingTransition(async () => {
+        this.disconnect('closed')
+        apply()
+        if (!this.snapshotValue.enabled) return
+        await this.connectAsync()
+        await new Promise<void>((resolve, reject) => {
+          const started = performance.now()
+          const timer = setInterval(() => {
+            if (signal.aborted) { clearInterval(timer); reject(new DOMException('切换已取消', 'AbortError')) }
+            else if (this.snapshotValue.status === 'ready') { clearInterval(timer); resolve() }
+            else if (performance.now() - started > 30000 || this.snapshotValue.status === 'error') {
+              clearInterval(timer); reject(new Error(this.snapshotValue.lastError || '模型连接超时'))
+            }
+          }, 50)
+        })
+      }, signal))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.patch({ lastError: message })
+      this.logDebug('error', message)
+    }
   }
 
   clearDebugLog(): void {
@@ -420,7 +453,7 @@ class ModelRuntimeHub {
 
   private enqueueSource(batch: RawBridgeBatch): void {
     if (!this.snapshotValue.enabled) return
-    if (batch.device === 'omni' && acqRuntime?.omniLink === 'sdk') return
+    if (batch.device === 'omni' && acqRuntime?.omniLink === 'sdk' && !this.snapshotValue.serviceHello?.accepts_window_stream) return
     if (this.snapshotValue.serviceHello?.input_source === 'omni-sdk') return
     if (this.sourceQueue.length >= MAX_SOURCE_BATCHES) {
       this.sourceQueue = []
@@ -436,7 +469,9 @@ class ModelRuntimeHub {
     this.sourceQueue.push(batch)
     if (this.sourceDraining) return
     this.sourceDraining = true
-    setTimeout(() => this.drainSource(), 0)
+    // ponytail: drain at most 8 queued batches before the next browser task;
+    // per-sample timers cannot keep up with 250 Hz. Use a time budget if this cap grows.
+    queueMicrotask(() => this.drainSource())
   }
 
   private drainSource(): void {
@@ -477,7 +512,7 @@ class ModelRuntimeHub {
         })
       }
     }
-    setTimeout(() => this.drainSource(), 0)
+    queueMicrotask(() => this.drainSource())
   }
 
   private enqueue(packet: ModelWindowPacket): void {
@@ -658,7 +693,7 @@ class ModelRuntimeHub {
         lastError: '',
         ...(directSource ? {
           sourceCompatible: true,
-          sourceDetail: 'Omni SDK 直连 · Python 切窗与推理 · 8 导 / 250 Hz',
+          sourceDetail: 'Omni SDK 直连 · Python 切窗与推理 · 250 Hz',
           droppedWindows: message.source_dropped_windows ?? this.snapshotValue.droppedWindows,
         } : {}),
       })
@@ -740,5 +775,6 @@ export const modelRuntimeHub = new ModelRuntimeHub()
 
 registerModelRuntimeControl({
   suspend: () => modelRuntimeHub.disconnect('closed'),
+  prepareManaged: () => modelRuntimeHub.prepareManagedConnection(),
   disable: () => modelRuntimeHub.setEnabled(false),
 })

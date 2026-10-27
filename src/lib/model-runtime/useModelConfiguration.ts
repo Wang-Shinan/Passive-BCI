@@ -13,7 +13,7 @@ export function useModelConfiguration(task: string) {
     const timer = setInterval(update, 200)
     return () => { clearInterval(timer); unsubscribe() }
   }, [])
-  return { headId, busy, recording, locked: busy || recording }
+  return { headId, busy, recording, locked: busy }
 }
 
 export function useAppliedModel() { return useSyncExternalStore(subscribeAppliedModel, getAppliedModel, () => null) }

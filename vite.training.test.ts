@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { createServer, type ViteDevServer } from 'vite'
 import type { EventEmitter } from 'node:events'
 
@@ -29,9 +30,10 @@ afterEach(async () => {
   if (root) rmSync(root, { recursive: true, force: true })
 })
 describe('grouped training HTTP integration', () => {
-  it('keeps a byte-mismatched recording interrupted and releases its operation lock', async () => {
+  it('keeps a byte-mismatched recording interrupted', async () => {
     root = mkdtempSync(path.join(tmpdir(), 'incomplete-record-api-'))
-    server = await createServer({ configFile: false, root, plugins: [recordWriterPlugin()], server: { host: '127.0.0.1', port: 0 } })
+    // ponytail: HTTP-only check; no file watcher needed for this temporary server.
+    server = await createServer({ configFile: false, root, plugins: [recordWriterPlugin()], server: { host: '127.0.0.1', port: 0, watch: null } })
     await server.listen()
     const base = `http://127.0.0.1:${(server.httpServer!.address() as { port: number }).port}/api/record`
     const started = await fetch(`${base}/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -48,9 +50,9 @@ describe('grouped training HTTP integration', () => {
     const release = operationGate.beginModelChange()
     release()
   })
-  it('validates sealed groups, persists jobs and prevents recording until the worker exits', async () => {
+  it('validates sealed groups and serializes model operations until the worker exits', async () => {
     root = mkdtempSync(path.join(tmpdir(), 'grouped-training-api-'))
-    server = await createServer({ configFile: false, root, plugins: [trainingPlugin()], server: { host: '127.0.0.1', port: 0 } })
+    server = await createServer({ configFile: false, root, plugins: [trainingPlugin()], server: { host: '127.0.0.1', port: 0, watch: null } })
     await server.listen()
     const address = server.httpServer!.address() as { port: number }
     const call = async (route: string, body?: unknown) => {
@@ -78,7 +80,7 @@ describe('grouped training HTTP integration', () => {
     saveEvents()
     const exported = await call('jobs', request)
     expect(exported.status).toBe(202)
-    expect(() => operationGate.assertCanRecord()).toThrow()
+    expect(() => operationGate.beginModelChange()).toThrow('正在进行')
     expect((await call('jobs', request)).status).toBe(409)
     const jobPath = path.join(root, 'recordings', '.training', exported.body.job.id, 'job.json')
     expect(JSON.parse(readFileSync(jobPath, 'utf8')).config).toMatchObject({ subjectLabel: 'S-甲', roundId, sessions: [group] })
@@ -88,7 +90,7 @@ describe('grouped training HTTP integration', () => {
       processes.delete(file)
     }
     complete(jobPath)
-    expect(() => operationGate.assertCanRecord()).not.toThrow()
+    operationGate.beginModelChange()()
     const result = await call(`jobs/${exported.body.job.id}`)
     expect(result.body).toMatchObject({ active: false, job: { status: 'complete' } })
     const fit = await call('jobs', { kind: 'fit', roundId, datasetId: exported.body.job.id, splitBy: 'trial',
@@ -115,9 +117,33 @@ describe('grouped training HTTP integration', () => {
     expect(trained.status).toBe(202)
     expect(trained.body.job.config).toMatchObject({ rank: 4, alpha: 8, batchSize: 1, accumulationSteps: 8,
       history: { rounds: [{ id: roundId }] }, baselineRevision: 'reve-base' })
-    expect(() => operationGate.assertCanRecord()).toThrow()
+    expect(() => operationGate.beginModelChange()).toThrow('正在进行')
     expect(trained.body.job.config.adapterOutput).toContain('.reve-adapters')
     complete(path.join(root, 'recordings', '.training', trained.body.job.id, 'job.json'))
-    expect(() => operationGate.assertCanRecord()).not.toThrow()
+    operationGate.beginModelChange()()
+    const weights = path.join(root, 'recordings', '.eegnet')
+    mkdirSync(weights)
+    const weight = Buffer.from('EEGNet checkpoint identity for HTTP validation')
+    writeFileSync(path.join(weights, 'current.pt'), weight)
+    const eegnetExport = await call('jobs', { ...request, backend: 'eegnet' })
+    complete(path.join(root, 'recordings', '.training', eegnetExport.body.job.id, 'job.json'))
+    const eegnetFit = { kind: 'fit', backend: 'eegnet', roundId, datasetId: eegnetExport.body.job.id, splitBy: 'trial',
+      device: 'cpu', epochs: 2, lr: .001, weightId: 'eegnet:current.pt',
+      baselineRevision: 'eegnet-' + createHash('sha256').update(weight).digest('hex').slice(0, 16), minimumGain: .02, maximumRecallDrop: 0 }
+    expect((await call('jobs', { ...eegnetFit, weightId: 'eegnet:../outside.pt' })).status).toBe(400)
+    expect((await call('jobs', { ...eegnetFit, baselineRevision: 'eegnet-wrong' })).status).toBe(400)
+    expect((await call('jobs', { ...eegnetFit, datasetId: exported.body.job.id })).status).toBe(400)
+    expect((await call('jobs', { ...eegnetFit, kind: 'finetune' })).status).toBe(400)
+    const lp = await call('jobs', eegnetFit)
+    expect(lp.status).toBe(202)
+    expect(lp.body.job.config).toMatchObject({ backend: 'eegnet', baselineCheckpoint: path.join(weights, 'current.pt'), seed: 0xffffffff })
+    expect(lp.body.job.config.weightId).toMatch(/^eegnet:heads\/auto-fit-/)
+    complete(path.join(root, 'recordings', '.training', lp.body.job.id, 'job.json'))
+    const eegnetHistory = await call('jobs', { ...request, backend: 'eegnet', scope: 'history' })
+    complete(path.join(root, 'recordings', '.training', eegnetHistory.body.job.id, 'job.json'))
+    const full = await call('jobs', { ...eegnetFit, kind: 'finetune', datasetId: eegnetHistory.body.job.id })
+    expect(full.status).toBe(202)
+    expect(full.body.job.config).toMatchObject({ backend: 'eegnet', history: { rounds: [{ id: roundId }] } })
+    complete(path.join(root, 'recordings', '.training', full.body.job.id, 'job.json'))
   })
 })

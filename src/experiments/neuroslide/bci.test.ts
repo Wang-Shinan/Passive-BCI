@@ -13,6 +13,45 @@ describe('BCI confirmation and deduplication', () => {
   const restFrame = (id: number, winner = 2, roundId?: string): PredictionFrame => ({
     ...frame(id, winner, roundId), labels: ['left_hand', 'right_hand', 'rest', 'tongue'],
   })
+  it.each([[0, 'left', 2], [1, 'right', 4], [2, 'down', 3], [3, 'up', 5]] as const)(
+    'confirms %s only after its independent count for %s',
+    (winner, direction, required) => {
+      const filter = new BciCommandFilter(EXISTING_SMR_MAPPING, {
+        ...DEFAULT_FILTER, stableCount: 7, restStableCount: 3,
+        classStableCounts: { left_hand: 2, right_hand: 4, tongue: 5 },
+      })
+      for (let id = 1; id < required; id++) {
+        expect(consume(filter, restFrame(id, winner))).toBeNull()
+        expect(consume(filter, restFrame(id, winner))).toBeNull()
+        expect(filter.message).toContain(`${id}/${required}`)
+      }
+      expect(consume(filter, restFrame(required, winner))).toBe(direction)
+      expect(consume(filter, restFrame(required + 1, winner))).toBeNull()
+    },
+  )
+  it('keeps independent counts with their labels after remapping and reordering', () => {
+    const filter = new BciCommandFilter({ ...EXISTING_SMR_MAPPING, up: 'left_hand', left: 'tongue' }, {
+      ...DEFAULT_FILTER, classStableCounts: { left_hand: 1, tongue: 4 },
+    })
+    expect(consume(filter, {
+      ...restFrame(1), labels: ['tongue', 'rest', 'right_hand', 'left_hand'], probabilities: [.02, .02, .02, .94],
+    })).toBe('up')
+  })
+  it('supports independent counts for custom class labels', () => {
+    const filter = new BciCommandFilter({ left: 'a', right: 'b', down: 'c', up: 'd' }, {
+      ...DEFAULT_FILTER, classStableCounts: { d: 1 },
+    })
+    expect(consume(filter, { ...frame(1, 3), labels: ['a', 'b', 'c', 'd'] })).toBe('up')
+  })
+  it.each([0, -1, 31, 1.5, NaN])('rejects invalid independent count %s', count => {
+    expect(() => new BciCommandFilter(EXISTING_SMR_MAPPING, {
+      ...DEFAULT_FILTER, classStableCounts: { tongue: count },
+    })).toThrow()
+  })
+  it('preserves saved independent class counts during migration', () => {
+    const config = { ...DEFAULT_FILTER, restStableCount: 6, classStableCounts: { left_hand: 1, right_hand: 4, tongue: 5 } }
+    expect(migrateFilterConfig(JSON.parse(JSON.stringify(config)))).toEqual(config)
+  })
   it('uses the independent rest count without changing other class counts or deduplication', () => {
     const filter = new BciCommandFilter(EXISTING_SMR_MAPPING, { ...DEFAULT_FILTER, stableCount: 2, restStableCount: 4 })
     expect(consume(filter, restFrame(1))).toBeNull()

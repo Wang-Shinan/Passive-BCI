@@ -2,6 +2,7 @@ import type { ModelServiceBackend, ModelServiceEnsureResult, ModelHeadOption } f
 export type { ModelServiceBackend, ModelServiceEnsureResult, ModelHeadOption, GazeModelReport } from './modelServiceTypes'
 import { acqRuntime } from '../../acquisition/runtime'
 import { sessionHub } from '../session/sessionHub'
+import { withRecordingTransition } from './recordingTransition'
 import { modelOperation } from './modelOperation'
 import { currentModelSubject, preferredModelHead, saveModelHeadPreference } from './modelHeadPreference'
 export { preferredModelHead, subscribeModelHeadPreference } from './modelHeadPreference'
@@ -16,18 +17,18 @@ export function subscribeAppliedModel(fn: () => void): () => void { appliedListe
 function publishAppliedModel(value: ModelServiceEnsureResult | null): void {
   const key = JSON.stringify(value && { running: value.running, starting: value.starting, task: value.task,
     owned: value.owned, pid: value.pid, loadedHead: value.loadedHead,
-    backend: value.backend, headId: value.headId, configurationKey: value.configurationKey, modelRevision: value.modelRevision,
+    backend: value.backend, weightId: value.weightId, headId: value.headId, configurationKey: value.configurationKey, modelRevision: value.modelRevision,
     gazeReport: value.gazeReport })
   if (key === appliedKey) return
   appliedKey = key; appliedModel = value
   for (const fn of appliedListeners) fn()
 }
 
-let runtimeControl: { suspend: () => void; disable: () => void } | null = null
+let runtimeControl: { suspend: () => void; disable: () => void; prepareManaged?: () => void } | null = null
 export function registerModelRuntimeControl(control: NonNullable<typeof runtimeControl>): void { runtimeControl = control }
 export function modelConfigurationLocked(): boolean { return acqRuntime.recorder.recording || sessionHub.active }
 export function selectModelHeadPreference(task: string, id: string): void {
-  if (modelConfigurationLocked() || modelOperation.busy) throw new Error('请先结束录制和当前模型操作，再选择线性头')
+  if (modelOperation.busy) throw new Error('模型操作正在进行，请稍后选择线性头')
   saveModelHeadPreference(task, id)
 }
 
@@ -56,37 +57,44 @@ export async function modelServiceStatus(
 
 export async function ensureModelService(options?: {
   headId?: string
+  weightId?: string
+  eegnetChannels?: number
+  eegnetSeed?: number
   backend?: ModelServiceBackend
   task?: string
   stepSec?: number
   force?: boolean
   signal?: AbortSignal
 }): Promise<ModelServiceEnsureResult> {
-  if (modelConfigurationLocked()) throw new Error('录制期间不能启动、替换模型或改变步长；请先结束录制')
   const subjectId = currentModelSubject()
   const headId = options?.headId ?? preferredModelHead(options?.task, subjectId)
-  const sdkSource = options?.backend !== 'mock' && acqRuntime.device === 'omni' && acqRuntime.omniLink === 'sdk'
+  const sdkSource = (options?.backend ?? 'reve') === 'reve' && acqRuntime.device === 'omni' && acqRuntime.omniLink === 'sdk'
   if (sdkSource && !acqRuntime.omni) throw new Error('请先在采集调试页连接 SDK BLE 设备')
   let epoch = mutationEpoch
   const result = await modelOperation.run(async signal => {
     epoch = ++mutationEpoch
-    if (modelConfigurationLocked()) throw new Error('录制已开始，取消模型切换')
+    return withRecordingTransition(async () => {
     runtimeControl?.suspend()
+    runtimeControl?.prepareManaged?.()
     const res = await fetch('/api/model-service/ensure', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ backend: options?.backend ?? 'reve', task: options?.task,
-        headId: options?.backend === 'mock' ? undefined : headId,
-        ...(sdkSource ? { omniSource: { endpoint: acqRuntime.omniSdkEndpoint, channelNames: acqRuntime.omniSdkChannelNames,
+        headId: (options?.backend ?? 'reve') === 'reve' ? headId : undefined,
+        weightId: options?.weightId, eegnetChannels: options?.eegnetChannels, eegnetSeed: options?.eegnetSeed,
+        ...(sdkSource ? { omniSource: { endpoint: acqRuntime.omniSdkEndpoint, deviceType: acqRuntime.omniSdkDeviceType, channelNames: acqRuntime.omniSdkChannelNames,
           electrodeNames: acqRuntime.omniElectrodeNames, electrodePositions: acqRuntime.omniElectrodePositions } } : {}),
         stepSec: options?.stepSec, force: options?.force === true }), signal,
     })
     const body = await parseResult(res)
     if (!res.ok || !body.ok) throw new Error(body.message || '无法启动模型服务')
+    signal.throwIfAborted()
+    publishAppliedModel(body)
     return body
+    }, signal)
   }, options?.signal)
   if (epoch !== mutationEpoch) throw new DOMException('模型操作已取消', 'AbortError')
   publishAppliedModel(result)
-  if (options?.task === 'smr_control' && options.backend !== 'mock') {
+  if (options?.task === 'smr_control' && (options.backend ?? 'reve') === 'reve') {
     try { saveModelHeadPreference(options.task, headId, subjectId) }
     catch (error) { console.warn(error) }
   }

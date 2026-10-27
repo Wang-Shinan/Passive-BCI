@@ -11,12 +11,14 @@
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview",
-    "neuracle-bridge": "bash -c 'ROOT=\"${OI_MI_ROOT:-$HOME/Documents/oi-mi}\"; PY=\"$ROOT/.venv/bin/python\"; if [ ! -x \"$PY\" ]; then PY=python3; fi; OI_MI_ROOT=\"$ROOT\" \"$PY\" bridges/neuracle/ws_bridge.py'",
-    "bcigo-bridge": "python bridges/bcigo/ws_bridge.py",
+    "neuracle-bridge": "node scripts/run-bridge.mjs neuracle",
+    "bcigo-bridge": "node scripts/run-bridge.mjs bcigo",
     "model-service": "node scripts/run-model-service.mjs",
     "model-service:reve": "node scripts/run-model-service.mjs --backend reve",
     "model-service:reve:tetris": "node scripts/run-model-service.mjs --backend reve --task tetris_action",
     "model-service:reve:smr": "node scripts/run-model-service.mjs --backend reve --task smr_control",
+    "model-service:embed": "node scripts/run-model-service.mjs --embed --backend reve --task smr_control",
+    "test:ncc-embed": "node scripts/probe-ncc-embed.mjs",
     "model-service:reve:smr:fit": "node scripts/fit-smr-head.mjs",
     "model-service:reve:smr:export": "node scripts/export-smr-hdf5.mjs",
     "reve:follow": "node scripts/follow-reve-tcp.mjs",
@@ -25,7 +27,10 @@
     "tetris-rl:train": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl train \"$@\"' --",
     "tetris-rl:train:smoke": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl train --algo dqn --smoke'",
     "tetris-rl:eval": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl eval \"$@\"' --",
-    "tetris-rl:export": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl export \"$@\"' --"
+    "tetris-rl:export": "bash -c 'cd tetris-rl && PYTHONPATH=. .venv/bin/python -m tetris_rl export \"$@\"' --",
+    "backend:doctor": "node scripts/backend-doctor.mjs",
+    "test:backend": "node scripts/test-backend.mjs",
+    "model-service:eegnet": "node scripts/run-eegnet.mjs"
   },
   "dependencies": {
     "onnxruntime-web": "^1.27.0",

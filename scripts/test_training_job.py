@@ -14,6 +14,57 @@ spec.loader.exec_module(job)
 
 
 class SplitTests(unittest.TestCase):
+    def test_eegnet_lp_and_full_training_keep_test_trials_unseen_and_mask_channels(self):
+        import torch
+        from bci_dayloop.data.hdf5_dataset import HDF5Metadata, write_hdf5
+        from grouped_probe import fixed_split
+        from serve_eegnet_tetris import load_model
+        import h5py
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            checkpoint = root / 'baseline.pt'
+            load_model(channels=32, output=checkpoint)
+            payload = torch.load(checkpoint, weights_only=True)
+            payload['ignored_channels'] = list(range(16, 32))
+            torch.save(payload, checkpoint)
+            baseline = load_model(checkpoint)
+            labels = np.tile(np.arange(4), 5)
+            groups = [f'group1:{i}' for i in range(20)]
+            indices, _ = fixed_split(labels, groups, root / 'split.json', 7)
+            data = np.random.default_rng(7).normal(size=(20, 32, 500)).astype(np.float32)
+            data[indices[2]] = np.nan  # Any accidental test encoding makes fit_window fail.
+            write_hdf5(root / 'dataset.h5', data, labels, np.ones(20, dtype=np.int64), ['group1'] * 20, np.arange(20),
+                       HDF5Metadata(250, [f'CH{i+1}' for i in range(32)], ['left_hand', 'right_hand', 'tongue', 'rest'], 'uV', 'smr_control'))
+            with h5py.File(root / 'dataset.h5', 'a') as handle:
+                handle.create_dataset('source_trial_ids', data=np.arange(20))
+            recording = root / 'group1'; recording.mkdir()
+            (recording / 'eeg.json').write_text(json.dumps(dict(format='float32-le-interleaved', unit='uV')))
+            (recording / 'eeg.bin').write_bytes(data.tobytes())
+            (recording / 'session.json').write_text('{}')
+            (recording / 'events.jsonl').write_text('{}\n')
+            for stage in ('fit', 'finetune'):
+                out = root / stage; out.mkdir()
+                config = dict(backend='eegnet', dataset=str(root / 'dataset.h5'), splitBy='trial', seed=7, device='cpu',
+                    epochs=2, lr=.001, headOutput=str(out / 'published.pt'), weightId=f'eegnet:{stage}.pt',
+                    baselineWeightId='eegnet:baseline.pt', baselineCheckpoint=str(checkpoint), baselineRevision=baseline.config['revision'],
+                    roundId='round', splitLedger=str(root / 'split.json'), minimumGain=.02, maximumRecallDrop=0.)
+                if stage == 'finetune':
+                    config['history'] = dict(rounds=[dict(id='round', seed=7, sessions=[str(recording)],
+                        splitLedger=str(root / 'split.json'), recordingManifest=str(root / 'sealed.json'))])
+                job_file = out / 'job.json'
+                job_file.write_text(json.dumps(dict(id=stage, kind=stage, config=config)), encoding='utf-8')
+                with patch.object(sys, 'argv', ['training-job.py', '--job', str(job_file)]):
+                    job.main()
+                report = json.loads((out / 'report.json').read_text(encoding='utf-8'))
+                self.assertNotIn('test', report['metrics'])
+                self.assertEqual(report['testReserved'], 4)
+                self.assertEqual(report['ignoredChannels'], list(range(16, 32)))
+                self.assertEqual(report['baselineRevision'], baseline.config['revision'])
+                trained = load_model(out / 'published.pt')
+                changed = any(not torch.equal(a, b) for a, b in zip(trained.encoder.parameters(), baseline.encoder.parameters()))
+                self.assertEqual(changed, stage == 'finetune')
+                self.assertEqual(trained.config['revision'], report['modelRevision'])
+
     def test_history_union_keeps_every_round_holdout_out_of_training(self):
         from grouped_probe import fixed_split, history_split
         with tempfile.TemporaryDirectory() as folder:
@@ -130,7 +181,7 @@ class SplitTests(unittest.TestCase):
                           baselineOutput=str(root / 'baseline.pt'), minimumGain=.02, maximumRecallDrop=0.)
             job_file = root / 'job.json'
             job_file.write_text(json.dumps(dict(id='adaptive', kind='fit', config=config)), encoding='utf-8')
-            with patch.object(sys, 'argv', ['training-job.py', '--ncc', str(NCC), '--job', str(job_file)]), \
+            with patch.object(sys, 'argv', ['training-job.py', '--job', str(job_file)]), \
                     patch.object(reve, 'ReveModelBackend', Backend), patch.object(fit_smr_control_head, 'encode_windows', encode):
                 job.main()
             report = json.loads((root / 'report.json').read_text(encoding='utf-8'))
@@ -200,7 +251,7 @@ class SplitTests(unittest.TestCase):
                           loraCheckpoint=None, epochs=3, lr=.02, headOutput=str(root / 'published.pt'))
             job_file = root / 'job.json'
             job_file.write_text(json.dumps(dict(id='test', kind='fit', config=config)), encoding='utf-8')
-            with patch.object(sys, 'argv', ['training-job.py', '--ncc', str(NCC), '--job', str(job_file)]), \
+            with patch.object(sys, 'argv', ['training-job.py', '--job', str(job_file)]), \
                     patch.object(reve, 'ReveModelBackend', Backend), patch.object(fit_smr_control_head, 'encode_windows', encode):
                 job.main()
             report = json.loads((root / 'report.json').read_text(encoding='utf-8'))
@@ -211,6 +262,6 @@ class SplitTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    NCC = Path(sys.argv.pop(1))
-    sys.path[:0] = [str(NCC / 'src'), str(NCC / 'scripts')]
+    backend = Path(__file__).resolve().parents[1] / 'embedded' / 'ncc'
+    sys.path[:0] = [str(backend / 'src'), str(backend / 'scripts')]
     unittest.main()

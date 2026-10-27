@@ -20,8 +20,14 @@ export function fromModelPrediction(prediction: ModelPrediction): PredictionFram
   return { id: prediction.observation_id, labels: prediction.class_names,
     probabilities: prediction.probabilities, receivedAt: prediction.received_at_ms }
 }
-export type FilterConfig = { threshold: number; stableCount: number; restStableCount: number; releaseThreshold: number; releaseCount: number; maxGapMs: number }
+export type FilterConfig = { threshold: number; stableCount: number; restStableCount: number; classStableCounts?: Record<string, number>; releaseThreshold: number; releaseCount: number; maxGapMs: number }
 export const DEFAULT_FILTER: FilterConfig = { threshold: .75, stableCount: 3, restStableCount: 3, releaseThreshold: .45, releaseCount: 3, maxGapMs: 1500 }
+/** Overrides follow the actual class label when direction mappings change. */
+export function stableCountForClass(config: FilterConfig, label: string): number {
+  if (label === 'rest') return config.restStableCount
+  return config.classStableCounts && Object.hasOwn(config.classStableCounts, label)
+    ? config.classStableCounts[label]! : config.stableCount
+}
 /** Preserve existing settings and behavior when upgrading a saved pre-rest configuration. */
 export function migrateFilterConfig(config: Omit<FilterConfig, 'restStableCount'> & { restStableCount?: number }): FilterConfig {
   const migrated = { ...config, restStableCount: config.restStableCount === undefined ? config.stableCount : config.restStableCount }
@@ -29,6 +35,12 @@ export function migrateFilterConfig(config: Omit<FilterConfig, 'restStableCount'
   return migrated
 }
 export function validateConfig(config: FilterConfig): void {
+  if (config.classStableCounts !== undefined &&
+      (config.classStableCounts === null || typeof config.classStableCounts !== 'object' ||
+       Array.isArray(config.classStableCounts) ||
+       Object.values(config.classStableCounts).some(count => !Number.isInteger(count) || count < 1 || count > 30))) {
+    throw new Error('无效独立稳定预测数：须为 1–30 的整数。')
+  }
   if (!Number.isFinite(config.threshold) || config.threshold <= .25 || config.threshold > 1 ||
       !Number.isFinite(config.releaseThreshold) || config.releaseThreshold < .25 || config.releaseThreshold >= config.threshold ||
       !Number.isInteger(config.stableCount) || config.stableCount < 1 || config.stableCount > 30 ||
@@ -139,9 +151,9 @@ export class BciCommandFilter {
     }
     this.count = this.candidate === direction ? this.count + 1 : 1
     this.candidate = direction
-    const isRest = this.mapping[direction] === 'rest'
-    const required = isRest ? this.config.restStableCount : this.config.stableCount
-    this.message = `${isRest ? 'rest ' : ''}稳定确认 · ${this.count}/${required}`
+    const label = this.mapping[direction]
+    const required = stableCountForClass(this.config, label)
+    this.message = `${label} 稳定确认 · ${this.count}/${required}`
     if (this.count < required) return null
     this.locked = true
     if (this.round) this.closedRounds.add(this.round)

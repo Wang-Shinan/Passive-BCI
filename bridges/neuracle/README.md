@@ -1,6 +1,6 @@
 # Neuracle（博睿康）WebSocket 桥接
 
-浏览器无法直连 Collect 的 TCP 转发端口。本桥接复用官方 `DataServerThread`（oi-mi 或同级 NCC-OI-BCI vendor 副本），转到本机 WebSocket。
+浏览器无法直连 Collect 的 TCP 转发端口。本桥接复用本仓库内置的官方 `DataServerThread`（`embedded/ncc/src/bci_dayloop/vendor/neuracle`），转到本机 WebSocket。
 
 ## 怎么开转发（Collect V2.11 手册）
 

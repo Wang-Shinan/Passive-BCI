@@ -11,6 +11,7 @@ import { WebSerialTransport, type SerialStatus } from './transport/webSerial'
 import type { BcigoWsClient } from './bcigo/client'
 import type { NeuracleWsClient } from './neuracle/client'
 import type { OmniWsClient } from './omni/client'
+import type { OmniDeviceType } from './omni/device'
 import {
   INGEST_DRAIN_BUDGET_MS,
   BRIDGE_DRAIN_BUDGET_MS,
@@ -65,6 +66,7 @@ export const acqRuntime = {
   omni: null as OmniWsClient | null,
   omniLink: 'api' as OmniLink,
   omniSdkEndpoint: '',
+  omniSdkDeviceType: 'esp32' as OmniDeviceType,
   omniSdkChannelNames: [] as string[],
   omniElectrodeNames: undefined as string[] | undefined,
   omniElectrodePositions: undefined as number[][] | undefined,

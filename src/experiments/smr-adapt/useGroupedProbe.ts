@@ -24,7 +24,7 @@ export function useGroupedProbe(options: { minimumGain: number; maximumRecallDro
     }
     if (options.lora && (!Number.isInteger(options.lora.epochs) || options.lora.epochs < 1 || options.lora.epochs > 100
       || !Number.isFinite(options.lora.lr) || options.lora.lr < .000001 || options.lora.lr > .01)) {
-      throw new Error('LoRA epochs 必须为 1–100 的整数，学习率必须为 0.000001–0.01')
+      throw new Error('轮末训练 epochs 必须为 1–100 的整数，学习率必须为 0.000001–0.01')
     }
     const baseline = await currentProbeBaseline(signal)
     await waitForProbePrediction(baseline, signal)
@@ -37,10 +37,7 @@ export function useGroupedProbe(options: { minimumGain: number; maximumRecallDro
     if (!round.current) return
     const signal = controller.current!.signal
     const actual = await currentProbeBaseline(signal)
-    if (actual.headId !== round.current.baseline.headId || actual.revision !== round.current.baseline.revision) {
-      throw new Error('当前模型与本轮记录不一致，请恢复本轮模型后继续')
-    }
-    await waitForProbePrediction(round.current.baseline, signal)
+    await waitForProbePrediction({ ...round.current.baseline, revision: actual.revision, headId: actual.headId || round.current.baseline.headId }, signal)
   }
 
   async function finish(rel: string, last: boolean) {

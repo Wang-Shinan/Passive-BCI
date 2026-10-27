@@ -1,4 +1,5 @@
 /** Browser client for the local OmniBCI LSL-to-WebSocket bridge. */
+import { omniChannelCount, type OmniDeviceType } from './device'
 
 import {
   OMNI_API_PORT,
@@ -28,6 +29,7 @@ export type OmniStatus = 'idle' | 'connecting' | 'live' | 'error' | 'closed'
 
 export interface OmniClientOptions {
   endpoint?: string
+  deviceType?: OmniDeviceType
   url?: string
   stream?: OmniStreamKind
   onStatus?: (status: OmniStatus, detail?: string) => void
@@ -96,7 +98,7 @@ export class OmniWsClient {
     this.ws = ws
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'subscribe', stream: this.opts.stream, ...(this.opts.endpoint ? { endpoint: this.opts.endpoint } : {}) }))
+      ws.send(JSON.stringify({ type: 'subscribe', stream: this.opts.stream, ...(this.opts.endpoint ? { endpoint: this.opts.endpoint, device_type: this.opts.deviceType ?? 'esp32' } : {}) }))
     }
 
     ws.onmessage = (ev) => {
@@ -158,6 +160,10 @@ export class OmniWsClient {
       return
     }
     if (parsed.kind === 'hello') {
+      if (this.opts.endpoint && parsed.hello.channels.length !== omniChannelCount(this.opts.deviceType ?? 'esp32')) {
+        this.fail('SDK 通道数与所选设备不一致，请重启桥接并重新连接')
+        return
+      }
       this.helloReceived = true
       this.clearConnectTimer()
       this.opts.onHello?.(parsed.hello)

@@ -79,8 +79,8 @@
 .ns-settings button { margin: 12px 0 3px; font-size: 12px; width: 100%; }
 .ns-settings p { color: #8ba7bb; line-height: 1.7; margin-top: 11px; overflow-wrap: anywhere; }
 .ns-mapping { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.ns-rest-debug { min-width: 0; margin: 18px 0 0; padding: 4px 12px 12px; border: 1px solid #365c72; border-radius: 8px; }
-.ns-rest-debug legend { padding: 0 6px; color: #72e5e4; }
+.ns-class-debug { min-width: 0; margin: 18px 0 0; padding: 4px 12px 12px; border: 1px solid #365c72; border-radius: 8px; }
+.ns-class-debug legend { padding: 0 6px; color: #72e5e4; }
 .ns-page-footer { display: flex; justify-content: space-between; gap: 15px; margin-top: 16px; color: #55738c; font-size: 10px; letter-spacing: .12em; }
 .ns-victory { position: absolute; width: min(420px, 90%); padding: 26px; text-align: center; background: #0c2135f2; border: 1px solid #d4bb7c; border-radius: 20px; box-shadow: 0 0 100px #e7cb6b22, 0 25px 70px #0008; animation: ns-arrival .8s ease-out; }
 .ns-victory-star { color: #ffdfa0; font-size: 65px; text-shadow: 0 0 25px #ffd98a66; animation: ns-star 2s ease-in-out infinite; }
