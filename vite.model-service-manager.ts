@@ -25,6 +25,19 @@ import { listModelHeads, selectModelHead, modelHeadArgs } from './vite.model-hea
 
 export type ModelServiceBackend = 'reve' | 'mock' | 'eegnet'
 
+interface EnsureRequest {
+  backend: ModelServiceBackend
+  task: string
+  stepSec: number
+  windowSec: number | null
+  headId: string | null
+  weightId: string
+  eegnetChannels: number
+  eegnetSeed: number
+  omniSourceKey: string
+  force: boolean
+}
+
 interface ManagedService {
   weightId?: string | null
   weightKey?: string | null
@@ -39,9 +52,12 @@ interface ManagedService {
   backend: ModelServiceBackend | null
   task: string | null
   stepSec: number | null
+  windowSec: number | null
   lastError: string
   logBuf: string
   starting: Promise<EnsureResult> | null
+  startingChild?: ChildProcess | null
+  request?: EnsureRequest | null
 }
 
 export interface EnsureResult {
@@ -62,6 +78,7 @@ export interface EnsureResult {
   starting: boolean
   task?: string | null
   stepSec?: number | null
+  windowSec?: number | null
   message?: string
   logTail?: string
 }
@@ -254,6 +271,14 @@ function parseStepSec(value: unknown, task: string): number {
   return defaultLiveStepSec(task)
 }
 
+function parseWindowSec(value: unknown, backend: ModelServiceBackend): number | null {
+  if (value == null || value === '') return null
+  const raw = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(raw) || raw <= 0 || raw > 30) throw new Error('切窗长度无效（需为 0–30 秒）')
+  if (backend === 'reve' && raw !== 2 && raw !== 4) throw new Error('REVE 切窗长度只支持 2 或 4 秒')
+  return raw
+}
+
 function hopMatches(actual: number | null | undefined, wanted: number): boolean {
   return typeof actual === 'number' && Number.isFinite(actual) && Math.abs(actual - wanted) < 1e-6
 }
@@ -267,6 +292,7 @@ export function modelServiceManagerPlugin(): Plugin {
       backend: null,
       task: null,
       stepSec: null,
+      windowSec: null,
       lastError: '',
       logBuf: '',
       starting: null,
@@ -281,6 +307,7 @@ export function modelServiceManagerPlugin(): Plugin {
       backend: extra.backend ?? state.backend,
       task: extra.task ?? state.task,
       stepSec: extra.stepSec ?? state.stepSec,
+      windowSec: extra.windowSec ?? state.windowSec,
       headId: state.headId ?? null,
       weightId: state.weightId ?? null,
       configurationKey: state.configurationKey ?? null,
@@ -329,10 +356,13 @@ export function modelServiceManagerPlugin(): Plugin {
     state.backend = null
     state.task = null
     state.stepSec = null
+    state.windowSec = null
     state.headId = null
     state.configurationKey = null
     state.modelRevision = null
     state.gazeReport = null
+    state.startingChild = null
+    state.request = null
   }
 
   async function ensure(
@@ -345,14 +375,34 @@ export function modelServiceManagerPlugin(): Plugin {
     weightId = '',
     eegnetChannels = 32,
     eegnetSeed = 20261022,
+    windowSec: number | null = null,
   ): Promise<EnsureResult> {
-    if (state.starting) {
-      return snapshot({ ok: false, message: '模型正在加载，请等待完成后再切换线性头' })
+    const request: EnsureRequest = {
+      backend, task, stepSec, windowSec, headId, weightId,
+      eegnetChannels, eegnetSeed,
+      omniSourceKey: JSON.stringify(omniSource ?? null),
+      force,
     }
-
+    if (state.starting) {
+      const inFlight = state.starting
+      if (JSON.stringify(state.request) === JSON.stringify(request)) return inFlight
+      // A newer request supersedes the in-flight start instead of waiting for it.
+      state.generation = (state.generation ?? 0) + 1
+      const staleChild = state.startingChild
+      if (staleChild?.pid && staleChild.exitCode === null && !staleChild.killed) {
+        killPidTree(staleChild.pid)
+        // Wait for the killed child's port to free so the replacement below does
+        // not mistake the dying process for a foreign listener.
+        const deadline = Date.now() + 5000
+        while (Date.now() < deadline && (await isPortOpen(PORT))) await sleep(150)
+      }
+      try { await inFlight } catch { /* superseded */ }
+    }
+    state.request = request
     const generation = (state.generation ?? 0) + 1
     state.generation = generation
     let release: () => void = () => { /* no mutation lease yet */ }
+    let spawnedChild: ChildProcess | null = null
     const assertCurrent = () => { if (state.generation !== generation) throw new Error('模型启动已取消') }
     const run = (async (): Promise<EnsureResult> => {
       const selected = backend !== 'reve' ? null : task === 'gaze_smr'
@@ -372,7 +422,12 @@ export function modelServiceManagerPlugin(): Plugin {
       const wantedTask = backend === 'reve' ? task : backend === 'eegnet' ? 'smr_control' : null
       if (omniSource && backend !== 'reve') throw new Error('SDK 模型直连需要 REVE')
       const omniSourceKey = JSON.stringify(omniSource)
-      const hopOk = backend !== 'reve' || hopMatches(state.stepSec, stepSec)
+      const effWindowSec = backend === 'mock' ? null : windowSec ?? (backend === 'reve' ? 2 : null)
+      if (effWindowSec != null && stepSec > effWindowSec) {
+        throw new Error(`步长 ${stepSec}s 不能大于切窗 ${effWindowSec}s`)
+      }
+      const hopOk = backend === 'mock' || hopMatches(state.stepSec, stepSec)
+      const winOk = backend === 'mock' || state.windowSec === effWindowSec
       if (
         listening &&
         alive &&
@@ -384,6 +439,7 @@ export function modelServiceManagerPlugin(): Plugin {
         (state.headId ?? null) === (selected?.id ?? null) &&
         (state.configurationKey ?? null) === configurationKey &&
         hopOk &&
+        winOk &&
         !force
       ) {
         return snapshot({
@@ -439,14 +495,15 @@ export function modelServiceManagerPlugin(): Plugin {
       state.backend = backend
       state.task = wantedTask
       state.omniSourceKey = omniSourceKey
-      state.stepSec = backend === 'reve' ? stepSec : backend === 'eegnet' ? 0.1 : null
+      state.stepSec = backend === 'reve' || backend === 'eegnet' ? stepSec : null
+      state.windowSec = effWindowSec
       state.headId = selected?.id ?? null
       state.configurationKey = configurationKey
       state.gazeReport = selected?.gazeReport ?? null
       state.modelRevision = selected?.modelRevision ?? selected?.gazeReport?.modelRevision ?? null
       console.log(
         `\x1b[36m[model-service]\x1b[0m starting ${backend}${wantedTask ? `/${wantedTask}` : ''}${
-          backend === 'reve' ? ` hop=${stepSec}s` : ''
+          backend === 'reve' ? ` win=${effWindowSec}s hop=${stepSec}s` : backend === 'eegnet' ? ` hop=${stepSec}s` : ''
         }: node scripts/run-model-service.mjs`,
       )
 
@@ -457,11 +514,15 @@ export function modelServiceManagerPlugin(): Plugin {
       if (backend === 'reve') {
         spawnArgs.push('--task', task)
         spawnArgs.push('--step-sec', String(stepSec))
+        if (effWindowSec != null) spawnArgs.push('--window-sec', String(effWindowSec))
         if (task === 'smr_control' || task === 'gaze_smr') spawnArgs.push('--strategy', 'none')
         if (selected) spawnArgs.push(...modelHeadArgs(selected))
       }
       spawnArgs.push(...weightArgs)
-      if (backend === 'eegnet') spawnArgs.push('--channels', String(eegnetChannels), '--seed', String(eegnetSeed))
+      if (backend === 'eegnet') {
+        spawnArgs.push('--channels', String(eegnetChannels), '--seed', String(eegnetSeed), '--step-sec', String(stepSec))
+        if (effWindowSec != null) spawnArgs.push('--window-sec', String(effWindowSec))
+      }
       const child = spawn(process.execPath, spawnArgs, {
         cwd: projectRoot,
         env: { ...process.env, MODEL_SERVICE_PORT: String(PORT), PYTHONUNBUFFERED: '1' },
@@ -470,6 +531,8 @@ export function modelServiceManagerPlugin(): Plugin {
       })
       state.child = child
       state.owned = true
+      spawnedChild = child
+      state.startingChild = child
 
       const onChunk = (chunk: Buffer) => {
         const text = chunk.toString('utf8')
@@ -525,7 +588,7 @@ export function modelServiceManagerPlugin(): Plugin {
             backend,
             message:
               backend === 'reve'
-                ? `已启动本地 REVE（${task}，pid ${child.pid}，${stepSec}s 步；窗口按所选模型配置）`
+                ? `已启动本地 REVE（${task}，pid ${child.pid}，${effWindowSec}s 窗 / ${stepSec}s 步）`
                 : `已启动 ${backend}（pid ${child.pid}）`,
           })
         }
@@ -552,12 +615,21 @@ export function modelServiceManagerPlugin(): Plugin {
       return await run
     } finally {
       release()
-      if (state.starting === run) state.starting = null
+      if (state.starting === run) {
+        state.starting = null
+        if (state.startingChild === spawnedChild) state.startingChild = null
+      }
     }
   }
 
-  function stop(): EnsureResult {
+  async function stop(): Promise<EnsureResult> {
     state.generation = (state.generation ?? 0) + 1
+    const stale = state.starting
+    const staleChild = state.startingChild
+    if (staleChild?.pid && staleChild.exitCode === null && !staleChild.killed) killPidTree(staleChild.pid)
+    if (stale) {
+      try { await stale } catch { /* cancelled by stop */ }
+    }
     if (state.child && state.owned) {
       stopOwned()
       return snapshot({
@@ -637,8 +709,9 @@ export function modelServiceManagerPlugin(): Plugin {
         }
         if (action === 'ensure' && req.method === 'POST') {
           const body = await readJson(req)
+          const backend = parseBackend(body.backend)
           const result = await ensure(
-            parseBackend(body.backend),
+            backend,
             body.force === true,
             parseReveTask(body.task),
             parseStepSec(body.stepSec ?? body.step_sec, parseReveTask(body.task)),
@@ -647,12 +720,13 @@ export function modelServiceManagerPlugin(): Plugin {
             typeof body.weightId === 'string' ? body.weightId : '',
             body.eegnetChannels == null ? 32 : Number(body.eegnetChannels),
             body.eegnetSeed == null ? 20261022 : Number(body.eegnetSeed),
+            parseWindowSec(body.windowSec ?? body.window_sec, backend),
           )
           sendJson(res, result.ok ? 200 : 409, result)
           return
         }
         if (action === 'stop' && req.method === 'POST') {
-          sendJson(res, 200, stop())
+          sendJson(res, 200, await stop())
           return
         }
         sendJson(res, 405, { ok: false, message: 'method not allowed' })

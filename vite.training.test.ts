@@ -78,7 +78,7 @@ describe('grouped training HTTP integration', () => {
     saveEvents()
     const exported = await call('jobs', request)
     expect(exported.status).toBe(202)
-    expect(() => operationGate.assertCanRecord()).toThrow()
+    expect(() => operationGate.beginModelChange()).toThrow()
     expect((await call('jobs', request)).status).toBe(409)
     const jobPath = path.join(root, 'recordings', '.training', exported.body.job.id, 'job.json')
     expect(JSON.parse(readFileSync(jobPath, 'utf8')).config).toMatchObject({ subjectLabel: 'S-甲', roundId, sessions: [group] })
@@ -88,7 +88,7 @@ describe('grouped training HTTP integration', () => {
       processes.delete(file)
     }
     complete(jobPath)
-    expect(() => operationGate.assertCanRecord()).not.toThrow()
+    operationGate.beginModelChange()()
     const result = await call(`jobs/${exported.body.job.id}`)
     expect(result.body).toMatchObject({ active: false, job: { status: 'complete' } })
     const fit = await call('jobs', { kind: 'fit', roundId, datasetId: exported.body.job.id, splitBy: 'trial',
@@ -115,9 +115,50 @@ describe('grouped training HTTP integration', () => {
     expect(trained.status).toBe(202)
     expect(trained.body.job.config).toMatchObject({ rank: 4, alpha: 8, batchSize: 1, accumulationSteps: 8,
       history: { rounds: [{ id: roundId }] }, baselineRevision: 'reve-base' })
-    expect(() => operationGate.assertCanRecord()).toThrow()
+    expect(() => operationGate.beginModelChange()).toThrow()
     expect(trained.body.job.config.adapterOutput).toContain('.reve-adapters')
     complete(path.join(root, 'recordings', '.training', trained.body.job.id, 'job.json'))
-    expect(() => operationGate.assertCanRecord()).not.toThrow()
+    operationGate.beginModelChange()()
+  })
+  it('validates the eegnet baseline is inside recordings/.eegnet and spawns the trainer args', async () => {
+    root = mkdtempSync(path.join(tmpdir(), 'eegnet-training-api-'))
+    server = await createServer({ configFile: false, root, plugins: [trainingPlugin()], server: { host: '127.0.0.1', port: 0 } })
+    await server.listen()
+    const address = server.httpServer!.address() as { port: number }
+    const call = async (route: string, body?: unknown) => {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/training/${route}`, {
+        method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      return { status: response.status, body: await response.json() }
+    }
+    const created = await call('rounds', { subjectId: 'S-甲', seed: 7 })
+    const roundId = created.body.round.id
+    const group = path.join(root, 'recordings', 'group1')
+    mkdirSync(group)
+    writeFileSync(path.join(group, 'session.json'), JSON.stringify({ status: 'complete', subjectId: 'S-甲' }))
+    writeFileSync(path.join(group, 'eeg.bin'), Buffer.alloc(100))
+    writeFileSync(path.join(group, 'eeg.json'), JSON.stringify({ format: 'float32-le-interleaved', unit: 'uV', channels: 2, sampleRate: 250 }))
+    writeFileSync(path.join(group, 'events.jsonl'), JSON.stringify({ type: 'group_end', data: { complete: true, run: 1 } }))
+    const inside = path.join(root, 'recordings', '.eegnet', 'base.pt')
+    mkdirSync(path.dirname(inside), { recursive: true })
+    writeFileSync(inside, 'x')
+    const outside = path.join(root, 'recordings', 'base.pt')
+    writeFileSync(outside, 'x')
+    const req = { kind: 'eegnet', roundId, sessions: ['group1'], seed: 7, minimumGain: .02, maximumRecallDrop: 0 }
+    expect((await call('jobs', { ...req, baselineCheckpoint: outside })).status).toBe(400)
+    expect((await call('jobs', { ...req, baselineCheckpoint: path.join(root, 'recordings', '.eegnet', 'missing.pt') })).status).toBe(400)
+    expect((await call('jobs', { ...req, sessions: ['group1'] , baselineCheckpoint: inside, roundId: 'nope' })).status).toBe(400)
+    const posted = await call('jobs', { ...req, baselineCheckpoint: inside })
+    expect(posted.status).toBe(202)
+    const job = posted.body.job
+    expect(job.kind).toBe('eegnet')
+    expect(job.config).toMatchObject({ roundId, baselineCheckpoint: inside, seed: 7 })
+    expect(job.config.output).toContain(path.join('.eegnet', 'auto', roundId).replaceAll('\\', '\\'))
+    // inference is not gated for this kind
+    operationGate.beginModelChange()()
+    expect(processes.has('--sessions')).toBe(true)
+    processes.get('--sessions')!.emit('close', 0)
+    processes.delete('--sessions')
   })
 })

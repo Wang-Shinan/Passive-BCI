@@ -48,6 +48,13 @@ def main() -> None:
         ),
     )
     parser.add_argument("--lr", type=float, default=0.05)
+    parser.add_argument(
+        "--window-sec",
+        type=float,
+        choices=(2.0, 4.0),
+        default=2.0,
+        help="Live decode window length in seconds. S04 state-files pin their own recorded window.",
+    )
     parser.add_argument("--state-file", type=Path, default=None)
     parser.add_argument(
         "--checkpoint-root",
@@ -121,6 +128,7 @@ def main() -> None:
         strategy=strategy,
         task=args.task,
         step_sec=args.step_sec,
+        window_sec=args.window_sec,
         lr=args.lr,
         state_file=args.state_file,
         lora_checkpoint=lora_checkpoint,

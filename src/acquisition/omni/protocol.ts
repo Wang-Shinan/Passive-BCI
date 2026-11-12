@@ -65,6 +65,9 @@ export type OmniDataBatch = {
   sessionId: string
   packetCount: number
   packetLoss: number
+  /** Optional device-clock row timestamps (GUI HTTP link; µs, wraps; unmapped). */
+  sourceTimestampUs?: Uint32Array
+  sourceTimestampValid?: Uint8Array
 }
 
 export type ParsedOmniText =

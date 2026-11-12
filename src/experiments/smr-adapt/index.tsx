@@ -41,6 +41,7 @@ import {
   scoresByTask,
   startSession,
   groupedPlan,
+  type GroupedAcquisitionMode,
   resumeGroup,
   type PlanId,
   type SessionState,
@@ -115,6 +116,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
   const [planId, setPlanId] = useState<PlanId>(groupedAcquisition ? 'grouped' : 'quick')
   const [groupCount, setGroupCount] = useState(3)
   const [groupTrials, setGroupTrials] = useState(20)
+  const [groupedMode, setGroupedMode] = useState<GroupedAcquisitionMode>('1D')
   const [groupSaved, setGroupSaved] = useState(false)
   const [autoProbe, setAutoProbe] = useState(true)
   const [minimumGain, setMinimumGain] = useState(0.02)
@@ -268,7 +270,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       trainingWindowSecRef.current = live ? hello?.window_sec ?? SMR_WINDOW_SEC : 0
       const trainingCompatible = hello?.supports_group_training !== false
         && Boolean(hello?.window_sec && [2, 4].includes(hello.window_sec))
-      const plan = planId === 'grouped' ? groupedPlan(groupCount, groupTrials) : PLANS[planId]
+      const plan = planId === 'grouped' ? groupedPlan(groupCount, groupTrials, groupedMode) : PLANS[planId]
       horizNorm.current = new BalancedNorm()
       vertNorm.current = new BalancedNorm()
       warmupH.current = { n: 0, mean: 0, m2: 0 }
@@ -566,6 +568,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         : ''
 
   if (groupedAcquisition) return <AcquisitionView
+    acquisitionMode={session.phase === 'idle' || session.phase === 'done' ? groupedMode : session.plan.blocks[0]?.task}
     session={session} trial={trial} cursor={cursor} running={running} starting={starting}
     processing={saving || probe.busy} blocked={startError || probe.blocked || (resting && !groupSaved && !saving && !probe.busy)}
     canContinue={groupSaved && !saving && !starting && !probe.busy && !probe.blocked}
@@ -582,11 +585,15 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         <h3>采集计划</h3>
         <fieldset className="smr-operator-fields" disabled={workflowLocked}>
           <label>每轮组数<input type="number" min={1} max={50} value={groupCount} onChange={e => setGroupCount(Number(e.target.value))} /></label>
-          <label>每组试次数<input type="number" min={4} max={200} step={4} value={groupTrials} onChange={e => setGroupTrials(Number(e.target.value))} /></label>
+          <label>采集模式<select value={groupedMode} onChange={e => setGroupedMode(e.target.value as GroupedAcquisitionMode)}>
+            <option value="1D">水平+垂直（原模式）</option><option value="UD">仅上下（舌头/放松）</option>
+          </select></label>
+          <label>每组试次数<input type="number" min={groupedMode === 'UD' ? 2 : 4} max={200} step={groupedMode === 'UD' ? 2 : 4} value={groupTrials} onChange={e => setGroupTrials(Number(e.target.value))} /></label>
           <label>光标驱动<select value={cursorDrive} onChange={e => setCursorDrive(e.target.value as CursorDrive)}>
             <option value="reve">{groupedAcquisition ? 'EEGNet 四分类' : 'REVE 四分类'}</option><option value="features">C3/C4 mu</option>
           </select></label>
           <label className="smr-operator-check"><input type="checkbox" checked={autoProbe} disabled={!autoTrainingCompatible} onChange={e => setAutoProbe(e.target.checked)} />组间自动训练并评估接管</label>
+          {autoProbe && autoTrainingCompatible && runtime.serviceHello?.model_type === 'eegnet' && <p>每组保存后自动 LP→FT 离线训练（推理不中断）；验证集达到设定阈值才接管，否则保留原模型。</p>}
           {!autoTrainingCompatible && <p>{runtime.serviceHello?.model_type === 'eegnet' ? '当前是随机初始化 EEGNet：左手、右手、舌头、休息。本页分组采集并保存原始 EEG 与试次标签；组间不做 LoRA。之后对这份数据做线性探测，再微调。' : '当前导入模型的预处理尚未接入组间训练，已关闭自动训练。推理和原始数据保存照常进行。'}</p>}
           {autoProbe && cursorDrive === 'reve' && <>
             <label className="smr-operator-check"><input type="checkbox" checked={autoLora} onChange={e => setAutoLora(e.target.checked)} />轮末 LoRA（同被试历史数据）</label>
@@ -598,7 +605,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
             <label>单类召回最多下降（百分点）<input type="number" min={0} max={100} value={maximumRecallDrop * 100} onChange={e => setMaximumRecallDrop(Number(e.target.value) / 100)} /></label>
           </>}
         </fieldset>
-        <p className="smr-operator-status">准备 2 秒 · 提示 2 秒 · 执行最多 6 秒 · 结束 1 秒。每组前半水平、后半垂直；只控制一个轴，各方向等量随机，组间保存后继续。</p>
+        <p className="smr-operator-status">准备 2 秒 · 提示 2 秒 · 执行最多 6 秒 · 结束 1 秒。{groupedMode === 'UD' ? '每组仅上下，舌头想象→上、放松→下；两类等量随机，组间保存后继续。' : '每组前半水平、后半垂直；只控制一个轴，各方向等量随机，组间保存后继续。'}</p>
         {autoProbe && autoLora && cursorDrive === 'reve' && <p className="smr-operator-status">轮末从当前模型初始化，联合更新 LoRA 与分类头；rank 4 / alpha 8，batch 1，累积 8 步。历史验证与测试试次不进入训练；验证达标且模型载入检查通过后，下一轮使用选定模型。失败则恢复原模型。</p>}
         {cursorDrive === 'features' && <p className="smr-operator-status">C3/C4 模式仅采集，不自动训练或接管。{!montage && live ? '当前导联缺少 C3/C4。' : ''}</p>}
         {cursorDrive === 'reve' && <fieldset disabled={workflowLocked} style={{ border: 0, padding: 0 }}>
@@ -727,8 +734,11 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
             {planId === 'grouped' && <fieldset disabled={workflowLocked}>
               <legend>试运行配置（正式实验参数待确认）</legend>
               <label>每轮组数 <input type="number" min={1} max={50} value={groupCount} onChange={e => setGroupCount(Number(e.target.value))} /></label>
-              <label>每组试次数 <input type="number" min={4} max={200} step={4} value={groupTrials} onChange={e => setGroupTrials(Number(e.target.value))} /></label>
-              <p className="muted text-sm">左手→左，右手→右，舌头→上，休息→下。准备 2 秒、提示 2 秒、执行最多 6 秒、结束 1 秒。</p>
+              <label>采集模式 <select value={groupedMode} onChange={e => setGroupedMode(e.target.value as GroupedAcquisitionMode)}>
+                <option value="1D">水平+垂直（原模式）</option><option value="UD">仅上下（舌头/放松）</option>
+              </select></label>
+              <label>每组试次数 <input type="number" min={groupedMode === 'UD' ? 2 : 4} max={200} step={groupedMode === 'UD' ? 2 : 4} value={groupTrials} onChange={e => setGroupTrials(Number(e.target.value))} /></label>
+              <p className="muted text-sm">{groupedMode === 'UD' ? '舌头想象→上，放松→下。' : '左手→左，右手→右，舌头→上，休息→下。'}准备 2 秒、提示 2 秒、执行最多 6 秒、结束 1 秒。</p>
               <label><input type="checkbox" checked={autoProbe} disabled={!autoTrainingCompatible} onChange={e => setAutoProbe(e.target.checked)} />组间自动训练并评估接管（REVE 四分类）</label>
               {!autoTrainingCompatible && <p>当前导入模型的预处理尚未接入组间训练，已关闭自动训练。推理和原始数据保存照常进行。</p>}
               {autoProbe && cursorDrive === 'reve' && <>

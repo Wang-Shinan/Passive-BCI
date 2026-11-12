@@ -1,17 +1,32 @@
-﻿param([switch]$NoBrowser, [switch]$NoModel, [string]$BaseUrl = 'http://127.0.0.1:5173')
+﻿param([switch]$NoBrowser, [switch]$NoModel, [string]$BaseUrl = '')
 $ErrorActionPreference = 'Stop'
-$siteUrl = $BaseUrl.TrimEnd('/') + '/'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $workspaceRoot = Split-Path $projectRoot -Parent
 $logRoot = Join-Path $workspaceRoot '.tools'
-function Test-SiteReady {
+
+# Return the first 5173-5179 loopback listener owned by this project's vite.js.
+function Get-WorkspaceSite {
+    $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+        Where-Object { $_.LocalPort -ge 5173 -and $_.LocalPort -le 5179 })
+    foreach ($listener in $listeners) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
+        if (-not $proc -or -not $proc.CommandLine) { continue }
+        if ($proc.CommandLine.IndexOf($projectRoot, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+        if ($proc.CommandLine -notmatch 'vite[\\/]bin[\\/]vite\.js') { continue }
+        return "http://127.0.0.1:$($listener.LocalPort)/"
+    }
+    return $null
+}
+function Test-SiteReady([string]$url) {
     try {
-        $response = Invoke-WebRequest -Uri $siteUrl -UseBasicParsing -TimeoutSec 2
+        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2
         return $response.StatusCode -eq 200
     } catch { return $false }
 }
 try {
-    if (-not (Test-SiteReady)) {
+    $siteUrl = if ($BaseUrl) { $BaseUrl.TrimEnd('/') + '/' } else { Get-WorkspaceSite }
+    if (-not $siteUrl -or -not (Test-SiteReady $siteUrl)) {
+        $siteUrl = 'http://127.0.0.1:5173/'  # start-local.ps1 binds strictPort 5173.
         Write-Host 'Starting Passive BCI website...'
         $startScript = Join-Path $PSScriptRoot 'start-local.ps1'
         $null = New-Item -ItemType Directory -Path $logRoot -Force
@@ -19,7 +34,7 @@ try {
         $siteProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $projectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logRoot 'website.stdout.log') -RedirectStandardError (Join-Path $logRoot 'website.stderr.log') -PassThru
         $ready = $false
         for ($attempt = 0; $attempt -lt 60; $attempt++) {
-            if (Test-SiteReady) { $ready = $true; break }
+            if (Test-SiteReady $siteUrl) { $ready = $true; break }
             if ($siteProcess.HasExited) { break }
             Start-Sleep -Seconds 1
         }
@@ -27,18 +42,13 @@ try {
             Get-Content (Join-Path $logRoot 'website.stderr.log') -Tail 15 -ErrorAction SilentlyContinue
             throw "Website failed to start. See logs in: $logRoot"
         }
+        $actual = Get-WorkspaceSite
+        if ($actual) { $siteUrl = $actual }
     }
 
-    # The UI must remain reachable even when a recording blocks model startup.
     if (-not $NoBrowser) { Start-Process $siteUrl }
     Write-Host 'Website ready. Close local services with Close Passive BCI or scripts/stop-local.ps1.'
     if ($NoModel) { return }
-    $recordState = Invoke-RestMethod -Uri ($siteUrl + 'api/record/active') -TimeoutSec 10
-    if ($recordState.id) {
-        Write-Host "Recording active: $($recordState.rel). Opened the website without replacing the model."
-        Write-Host 'Use Stop in the acquisition page to save normally; stop-local.ps1 also preserves received data when closing.'
-        return
-    }
     $statusUrl = $siteUrl + 'api/model-service/status'
     $modelStatus = Invoke-RestMethod -Uri $statusUrl -TimeoutSec 10
     if ($modelStatus.starting) {

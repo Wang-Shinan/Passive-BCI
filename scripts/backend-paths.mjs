@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 
 export const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const backendRoot = path.join(projectRoot, 'embedded', 'ncc')
@@ -13,7 +13,20 @@ export function findPython() {
   const configured = process.env.PASSIVE_BCI_PYTHON || process.env.NCC_PYTHON
   if (configured) return configured
   const local = path.join(projectRoot, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
-  return existsSync(local) ? local : process.platform === 'win32' ? 'python' : 'python3'
+  if (existsSync(local)) return local
+  if (process.platform === 'win32') {
+    // The bare `python` on PATH is often the Microsoft Store alias stub (exit 9009).
+    // Resolve a real interpreter through the py launcher instead.
+    for (const versionFlag of ['-3.11', null]) {
+      try {
+        const args = [...(versionFlag ? [versionFlag] : []), '-c', 'import sys; print(sys.executable)']
+        const exe = execFileSync('py', args, { encoding: 'utf8', timeout: 8000, windowsHide: true }).trim()
+        if (exe && existsSync(exe)) return exe
+      } catch { /* keep looking */ }
+    }
+    return 'python'
+  }
+  return 'python3'
 }
 export function backendEnv() {
   return { ...process.env, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1',

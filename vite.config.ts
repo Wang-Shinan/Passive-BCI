@@ -315,6 +315,10 @@ export default defineConfig({
     clientDiagnosticsPlugin(),
   ],
   server: {
+    watch: {
+      // Linked/local environments and data dirs are not app sources.
+      ignored: ['**/.venv/**', '**/checkpoints/**', '**/recordings/**', '**/__pycache__/**'],
+    },
     proxy: {
       '/ws/omni-sdk': {
         target: 'ws://127.0.0.1:8772', ws: true,
@@ -331,6 +335,12 @@ export default defineConfig({
         target: 'ws://127.0.0.1:8766',
         ws: true,
         rewrite: (path) => path.replace(/^\/ws\/neuracle/, '/v1/stream'),
+      },
+      // OmniBCI GUI HTTP service (api-control build); the client only uses
+      // GET /v1/status and /v1/data — the proxy itself forwards any method.
+      '/api/omni-gui': {
+        target: 'http://127.0.0.1:8766',
+        rewrite: (path) => path.replace(/^\/api\/omni-gui/, ''),
       },
       // BrainCo BCIGo bridge (bridges/bcigo/ws_bridge.py) — Wi‑Fi TCP → WS
       '/ws/bcigo': {

@@ -13,9 +13,9 @@ function visibleHeads(heads: ModelHeadOption[], filter: string, task: string): M
     .sort((a, b) => (Date.parse(b.trainedAt || b.updatedAt || '') || 0) - (Date.parse(a.trainedAt || a.updatedAt || '') || 0) || a.name.localeCompare(b.name))
 }
 
-export function HeadSelector({ heads, task, value, onChange, disabled, label = '线性头', defaultLabel = '默认配置' }: {
+export function HeadSelector({ heads, task, value, onChange, disabled, label = '线性头', defaultLabel = '默认配置', allowCrossTask = false }: {
   heads: ModelHeadOption[]; task: string; value: string; onChange: (value: string) => void
-  disabled?: boolean; label?: string; defaultLabel?: string
+  disabled?: boolean; label?: string; defaultLabel?: string; allowCrossTask?: boolean
 }) {
   const [filter, setFilter] = useState('current')
   const options = visibleHeads(heads, filter, task)
@@ -33,7 +33,7 @@ export function HeadSelector({ heads, task, value, onChange, disabled, label = '
       <select aria-label={label} className="input w-full min-w-0 max-w-full" value={value} disabled={disabled} onChange={e => onChange(e.target.value)}>
         <option value="">{defaultLabel}</option>
         {value && !options.some(h => h.id === value) && <option value={value} disabled>当前选择（{selected ? '筛选外' : '文件不存在'}）：{selected ? `${headTime(selected)} · ${selected.name}` : value}</option>}
-        {options.map(h => <option key={h.id} value={h.id} disabled={!h.available || h.task !== task}>
+        {options.map(h => <option key={h.id} value={h.id} disabled={!h.available || (h.task !== task && !allowCrossTask)}>
           {headTime(h)} · {h.gazeReport ? `${h.gazeReport.subjectId} · ${h.gazeReport.activeClasses.join('/')} · ` : ''}{reveTaskOption(h.task)?.short || h.task || '未知任务'} · {h.name}{!h.available ? ` · 不可用：${h.reason}` : h.task !== task ? ' · 与当前任务不匹配' : ''}
         </option>)}
       </select>

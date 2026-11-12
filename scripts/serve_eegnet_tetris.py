@@ -1,9 +1,10 @@
-"""Randomly initialized EEGNet for grouped SMR acquisition.
+"""EEGNet live serving for Passive BCI.
 
-Classes are left_hand, right_hand, tongue, and rest. The convolutional stack is
-the encoder. The final linear layer is the classifier kept separate so a later
-run can train that layer first, then fine-tune the stack. This process does not
-apply LoRA or online updates.
+Class names come from the loaded checkpoint's ``class_names`` field; a randomly
+initialized fallback uses left_hand, right_hand, tongue, and rest. The
+convolutional stack is the encoder. The final linear layer is the classifier
+kept separate so a later run can train that layer first, then fine-tune the
+stack. This process does not apply LoRA or online updates.
 """
 from __future__ import annotations
 
@@ -72,9 +73,9 @@ def load_model(checkpoint: Path | None = None, *, seed: int = SEED, channels: in
         channels = int(payload['n_channels'])
         samples = int(payload['n_samples'])
         rate = float(payload['sample_rate'])
-        classes = tuple(payload['class_names'])
-        if classes != CLASS_NAMES:
-            raise ValueError('EEGNet checkpoint must use left_hand, right_hand, tongue, rest in that order')
+        classes = tuple(str(name) for name in payload['class_names'])
+        if not classes:
+            raise ValueError('EEGNet checkpoint must declare non-empty class_names')
         if not 1 <= channels <= 128 or not 32 <= samples <= 20000 or not 1 <= rate <= 10000:
             raise ValueError('Invalid EEGNet input dimensions')
         if payload.get('normalization', 'per-channel-zscore') != 'per-channel-zscore':
@@ -84,6 +85,7 @@ def load_model(checkpoint: Path | None = None, *, seed: int = SEED, channels: in
         revision = 'eegnet-' + hashlib.sha256(raw).hexdigest()[:16]
         initialization = str(payload.get('init', 'checkpoint'))
         saved_path = checkpoint
+        task = str(payload.get('task', 'smr_control'))
     else:
         if not 1 <= channels <= 128:
             raise ValueError('channels must be in 1..128')
@@ -99,10 +101,12 @@ def load_model(checkpoint: Path | None = None, *, seed: int = SEED, channels: in
             torch.save(payload, stream)
         revision = 'eegnet-' + hashlib.sha256(saved_path.read_bytes()).hexdigest()[:16]
         initialization = 'random'
+        task = 'smr_control'
     if any(not torch.isfinite(tensor).all() for tensor in model.state_dict().values()):
         raise ValueError('Checkpoint contains non-finite weights')
     model.config = dict(channels=channels, samples=samples, sample_rate=rate, class_names=classes,
-                        revision=revision, initialization=initialization, checkpoint=str(saved_path))
+                        task=task, revision=revision, initialization=initialization, checkpoint=str(saved_path),
+                        window_sec=samples / rate, step_sec=STEP_SEC)
     model.eval()
     print('[eegnet] ' + json.dumps(model.config), flush=True)
     if initialization == 'random':
@@ -111,6 +115,11 @@ def load_model(checkpoint: Path | None = None, *, seed: int = SEED, channels: in
 
 
 def fit_window(model: EEGNet, header: dict, payload: bytes) -> torch.Tensor:
+    """Return (K, 1, C, S) normalized model inputs from a configured-duration window.
+
+    Windows at or above the model's native length are split into evenly spaced
+    native-length crops (K >= 1); shorter windows are linearly resampled.
+    """
     channels, samples = int(header['channels']), int(header['samples'])
     cfg = model.config
     if channels != cfg['channels']:
@@ -118,19 +127,25 @@ def fit_window(model: EEGNet, header: dict, payload: bytes) -> torch.Tensor:
     if samples <= 0 or len(payload) != channels * samples * 4:
         raise ValueError('Invalid EEG window byte length')
     rate = float(header['sample_rate'])
-    if rate <= 0 or abs(samples/rate - cfg['samples']/cfg['sample_rate']) > 1/rate:
-        raise ValueError('EEG window duration differs from checkpoint')
+    expected = float(cfg.get('window_sec') or cfg['samples'] / cfg['sample_rate'])
+    if rate <= 0 or abs(samples / rate - expected) > max(0.08, 0.08 * expected):
+        raise ValueError(f'EEG window duration differs from configured {expected:g}s')
     if header.get('unit', 'uV') != 'uV' or header.get('layout', 'CT') != 'CT':
         raise ValueError('Expected uV channel-major EEG')
     data = np.frombuffer(payload, dtype='<f4').reshape(channels, samples).copy()
     if not np.isfinite(data).all():
         raise ValueError('EEG contains non-finite samples')
     tensor = torch.from_numpy(data).unsqueeze(0)
-    if samples != cfg['samples']:
-        tensor = torch.nn.functional.interpolate(tensor, size=cfg['samples'], mode='linear', align_corners=False)
-    mean = tensor.mean(dim=-1, keepdim=True)
-    std = tensor.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
-    return ((tensor - mean) / std).unsqueeze(1)
+    n_model = int(cfg['samples'])
+    if samples >= n_model:
+        n_crops = max(1, int(np.ceil(samples / n_model)))
+        offsets = np.linspace(0, samples - n_model, n_crops).astype(int)
+        crops = torch.stack([tensor[..., int(off):int(off) + n_model] for off in offsets])
+    else:
+        crops = torch.nn.functional.interpolate(tensor, size=n_model, mode='linear', align_corners=False).unsqueeze(0)
+    mean = crops.mean(dim=-1, keepdim=True)
+    std = crops.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
+    return (crops - mean) / std
 
 
 def predict(model: EEGNet, header: dict, payload: bytes) -> dict:
@@ -138,27 +153,32 @@ def predict(model: EEGNet, header: dict, payload: bytes) -> dict:
     window = fit_window(model, header, payload)
     prepared = time.perf_counter()
     with torch.no_grad():
-        logits = model(window).squeeze(0)
+        logits = model(window).mean(dim=0)
         probs = torch.softmax(logits, dim=0)
     class_id = int(probs.argmax())
+    names = list(model.config['class_names'])
+    task = str(model.config.get('task', 'smr_control'))
     return dict(type='prediction', schema_version=1, request_id=header['request_id'],
                 observation_id=f'eegnet-{uuid.uuid4().hex}', window_id=header.get('window_id', 0),
-                segment_id=header['segment_id'], class_id=class_id, class_name=CLASS_NAMES[class_id],
-                class_names=list(CLASS_NAMES), probabilities=probs.tolist(), logits=logits.tolist(),
+                segment_id=header['segment_id'], class_id=class_id, class_name=names[class_id],
+                class_names=names, probabilities=probs.tolist(), logits=logits.tolist(),
                 confidence=float(probs[class_id]), model_revision=model.config['revision'],
                 online_update_step=0, online_update_applied=False,
                 prepare_latency_ms=(prepared-start)*1000, inference_latency_ms=(time.perf_counter()-prepared)*1000,
-                task='smr_control', output_semantics='smr_control_4')
+                task=task, output_semantics=f'{task}_{len(names)}')
 
 
 def hello_payload(model: EEGNet) -> dict:
     cfg = model.config
     return dict(type='hello', schema_version=1, service='eegnet-tetris',
-                model=dict(name='eegnet', type='eegnet', task='smr_control'), class_names=list(CLASS_NAMES),
+                model=dict(name='eegnet', type='eegnet', task=str(cfg.get('task', 'smr_control'))),
+                class_names=list(cfg['class_names']),
                 online=dict(model_revision=cfg['revision'], strategy='none'),
-                input=dict(window_sec=cfg['samples']/cfg['sample_rate'], step_sec=STEP_SEC, slide_sec=STEP_SEC,
+                input=dict(window_sec=cfg['window_sec'], model_window_sec=cfg['samples']/cfg['sample_rate'],
+                           step_sec=cfg['step_sec'], slide_sec=cfg['step_sec'],
                            channels=cfg['channels'], sample_rate=cfg['sample_rate'], unit='uV', layout='CT'),
-                initialization=cfg['initialization'], supports_group_training=False)
+                initialization=cfg['initialization'], supports_group_training=True,
+                checkpoint=cfg.get('checkpoint'))
 
 
 async def handle(websocket, model: EEGNet) -> None:
@@ -183,7 +203,7 @@ async def handle(websocket, model: EEGNet) -> None:
             header, pending = pending, None
             request_id = header.get('request_id')
             reply = predict(model, header, bytes(message))
-        except (ValueError, KeyError, TypeError) as error:
+        except (ValueError, KeyError, TypeError, RuntimeError) as error:
             pending = None
             reply = dict(type='error', schema_version=1, code='invalid_window', message=str(error), request_id=request_id)
         await websocket.send(json.dumps(reply))
@@ -193,6 +213,10 @@ async def main(args) -> None:
     from websockets.asyncio.server import serve
     torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
     model = load_model(args.checkpoint, seed=args.seed, channels=args.channels, output=args.output)
+    model.config['step_sec'] = args.step_sec
+    model.config['window_sec'] = args.window_sec if args.window_sec else model.config['samples'] / model.config['sample_rate']
+    if not 0 < args.step_sec <= model.config['window_sec']:
+        raise SystemExit(f'--step-sec must satisfy 0 < step <= window ({model.config["window_sec"]:g}s)')
     async with serve(lambda ws: handle(ws, model), args.host, args.port, max_size=16*1024*1024, compression=None):
         print(f"[model-service] EEGNet revision={model.config['revision']} ws://{args.host}:{args.port}/v1/model", flush=True)
         print('[model-service] waiting for Passive BCI windows', flush=True)
@@ -206,5 +230,9 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', type=Path)
     parser.add_argument('--seed', type=int, default=SEED)
     parser.add_argument('--channels', type=int, default=N_CHANNELS)
+    parser.add_argument('--step-sec', type=float, default=STEP_SEC)
+    parser.add_argument('--window-sec', type=float, default=None,
+                        help='Live window seconds advertised to clients. Default: checkpoint window. '
+                             'Windows >= the model length are scored as an average of native-length crops.')
     parser.add_argument('--output', type=Path)
     asyncio.run(main(parser.parse_args()))

@@ -32,6 +32,7 @@ export const smrExperiments: DirectoryEntry[] = [
 
 export const tools: DirectoryEntry[] = [
   { icon: 'signal', path: '/jaw-clench', name: '咬牙与放松采集', description: '全屏提示咬牙／放松，等量随机录制 EEG 与二分类标签。', requirement: '可预览；录制需真实 EEG，无需模型。' },
+  { icon: 'signal', path: '/focus', name: '专注与放松采集', description: '全屏提示专注凝视／放松放空，等量随机录制 EEG 与二分类标签。', requirement: '可预览；录制需真实 EEG，无需模型。' },
   { icon: 'signal', path: '/acquisition', name: '采集调试', description: '设备连接、开流、波形、频谱、阻抗与通道配置。', requirement: 'OmniBCI / 博睿康 / BCIGo' },
   { icon: 'database', path: '/recordings', name: '会话库', description: '查看实际录制，编辑备注、下载与删除会话。', requirement: '读取本地 recordings 目录' },
   { icon: 'training', path: '/training', name: '数据导出与 Linear Probing', description: '从录制导出 H5，训练冻结 REVE 的线性头并查看评估。', requirement: '需配套后端与训练依赖' },

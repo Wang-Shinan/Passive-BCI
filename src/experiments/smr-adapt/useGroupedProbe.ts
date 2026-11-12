@@ -58,7 +58,8 @@ export function useGroupedProbe(options: { minimumGain: number; maximumRecallDro
         phase.result = await runGroupProbe(current, thresholds, signal, setMessage)
         phase.probeDone = true
       }
-      if (last && options.lora && !phase.loraDone) {
+      // LoRA 选项仅对 REVE 有效 — EEGNet 每组已做完整 FT
+      if (last && options.lora && current.baseline.modelName !== 'eegnet' && !phase.loraDone) {
         phase.result = await runRoundLora(current, thresholds, options.lora, signal, setMessage)
         phase.loraDone = true
       }

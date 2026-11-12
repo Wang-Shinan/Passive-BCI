@@ -2,7 +2,9 @@ import { ensureModelService, modelServiceStatus, stopModelService } from '../../
 import { modelRuntimeHub } from '../../lib/model-runtime/modelRuntimeHub'
 import { liveStepSecForReveTask } from '../../lib/model-runtime/reveTasks'
 
-export type ProbeBaseline = { headId: string; revision: string; modelName: string; stepSec: number; windowSec: number }
+export type ProbeBaseline = { headId: string; revision: string; modelName: string; stepSec: number; windowSec: number
+  /** Absolute checkpoint path reported by the EEGNet service hello. */
+  checkpoint?: string }
 export type ProbeRound = { id: string; subjectId: string; seed: number; sessions: string[]; baseline: ProbeBaseline }
 export type LoraOptions = { epochs: number; lr: number; rank: number; alpha: number; batchSize: number; accumulationSteps: number }
 export type ProbeReport = {
@@ -40,6 +42,11 @@ export async function currentProbeBaseline(signal: AbortSignal): Promise<ProbeBa
   }
   if (modelRuntimeHub.snapshot.status !== 'ready' || !hello?.model_revision) {
     throw new Error('模型尚未就绪，请先连接后再采集')
+  }
+  if (hello.model_type === 'eegnet') {
+    if (!hello.checkpoint) throw new Error('EEGNet 服务未报告 checkpoint 路径，无法作为组间训练基线')
+    return { headId: '', revision: hello.model_revision, modelName: 'eegnet',
+      stepSec: status.stepSec ?? 0.1, windowSec: hello.window_sec ?? 2, checkpoint: hello.checkpoint }
   }
   return { headId: status.headId || status.loadedHead || '', revision: hello.model_revision,
     modelName: hello.model_name || 'reve', stepSec: status.stepSec ?? liveStepSecForReveTask('smr_control'),
@@ -109,7 +116,87 @@ async function runJob(config: Record<string, unknown>, signal: AbortSignal): Pro
 
 export async function runGroupProbe(round: ProbeRound, options: { minimumGain: number; maximumRecallDrop: number },
   signal: AbortSignal, progress: (message: string) => void): Promise<string> {
+  if (round.baseline.modelName === 'eegnet') return runEegnetTraining(round, options, signal, progress)
   return runAdaptiveTraining(round, options, signal, progress)
+}
+
+/** recordings/.eegnet-relative weight id understood by selectModelWeight. */
+function eegnetWeightId(checkpoint: string): string {
+  const marker = '/.eegnet/'
+  const normalized = checkpoint.replace(/\\/g, '/')
+  const at = normalized.indexOf(marker)
+  return `eegnet:${at >= 0 ? normalized.slice(at + marker.length) : normalized}`
+}
+
+type EegnetDecision = {
+  promote: boolean; stage?: 'lp' | 'ft'; checkpoint: string; revision: string; reason: string
+}
+type EegnetReport = {
+  decision: EegnetDecision
+  stages: { lp: { validation: { balanced_accuracy: number }; test?: { balanced_accuracy: number } }
+            ft: { validation: { balanced_accuracy: number }; test?: { balanced_accuracy: number } } }
+}
+
+async function loadEegnetCheckpoint(weightId: string, revision: string, stepSec: number, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
+  const result = await ensureModelService({ backend: 'eegnet', weightId, stepSec, signal })
+  if (!result.running) throw new Error('模型未启动')
+  modelRuntimeHub.disconnect()
+  modelRuntimeHub.setEnabled(true)
+  modelRuntimeHub.connect()
+  const deadline = Date.now() + 45000
+  while (Date.now() < deadline) {
+    signal.throwIfAborted()
+    const { status, serviceHello: hello } = modelRuntimeHub.snapshot
+    if (status === 'ready' && hello?.model_revision === revision) return
+    await delay(200, signal)
+  }
+  throw new Error('模型载入后未确认预期版本；已保存的数据及训练结果不受影响，可重试载入')
+}
+
+/** Offline LP→FT for the EEGNet backend: inference keeps running; promote via ensure. */
+async function runEegnetTraining(round: ProbeRound, options: { minimumGain: number; maximumRecallDrop: number },
+  signal: AbortSignal, progress: (message: string) => void): Promise<string> {
+  const stage = 'EEGNet LP→FT'
+  const original = { ...round.baseline }
+  const actual = await currentProbeBaseline(signal)
+  if (actual.modelName !== 'eegnet' || !actual.checkpoint || actual.revision !== original.revision) {
+    throw new Error('模型在本组期间被更换，停止自动接管')
+  }
+  progress(`${stage}：后台训练本轮累计数据（推理不间断，验证达阈值才接管）…`)
+  let chosen = original
+  let message = ''
+  try {
+    const { report } = await runJob({ kind: 'eegnet', roundId: round.id, sessions: round.sessions,
+      baselineCheckpoint: original.checkpoint, seed: round.seed, ...options }, signal) as unknown as { report: EegnetReport }
+    const lp = report.stages.lp.validation.balanced_accuracy
+    const ft = report.stages.ft.validation.balanced_accuracy
+    const test = report.stages[report.decision.stage ?? 'ft']?.test?.balanced_accuracy
+    const pct = (v?: number) => v === undefined ? '—' : `${(v * 100).toFixed(1)}%`
+    message = `LP 验证 ${pct(lp)} · FT 验证 ${pct(ft)} · 测试（仅报告）${pct(test)}；${report.decision.reason}`
+    if (report.decision.promote) {
+      progress(`${message}；正在载入选定权重…`)
+      try {
+        await loadEegnetCheckpoint(eegnetWeightId(report.decision.checkpoint), report.decision.revision,
+          original.stepSec, signal)
+        chosen = { ...original, revision: report.decision.revision, checkpoint: report.decision.checkpoint }
+      } catch (error) {
+        signal.throwIfAborted()
+        progress('候选载入检查失败，正在恢复原模型…')
+        await loadEegnetCheckpoint(eegnetWeightId(original.checkpoint!), original.revision, original.stepSec, signal)
+        message = `候选未通过载入检查，已恢复原模型：${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+  } catch (error) {
+    signal.throwIfAborted()
+    message = `本次训练失败，保留原模型：${error instanceof Error ? error.message : String(error)}`
+    await recordRound(round, 'error', { message }, signal)
+  }
+  signal.throwIfAborted()
+  await recordRound(round, 'model_decision', { stage: 'eegnet_lp_ft', previous: original, selected: chosen,
+    message }, signal)
+  round.baseline = chosen
+  return `${stage}：${message}。模型已就绪。`
 }
 
 export async function runRoundLora(round: ProbeRound, options: { minimumGain: number; maximumRecallDrop: number },

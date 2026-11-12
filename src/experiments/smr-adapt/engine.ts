@@ -192,12 +192,23 @@ export function resumeGroup(session: SessionState, now: number): SessionState {
   return session.phase === 'rest' ? { ...session, phase: 'iti', phaseStartedAt: now } : session
 }
 
-export function groupedPlan(groups: number, trialsPerGroup: number): PlanSpec {
+export type GroupedAcquisitionMode = '1D' | 'UD'
+
+export function groupedPlan(groups: number, trialsPerGroup: number, mode: GroupedAcquisitionMode = '1D'): PlanSpec {
   if (!Number.isInteger(groups) || groups < 1 || groups > 50) throw new Error('组数必须为 1–50')
-  if (!Number.isInteger(trialsPerGroup) || trialsPerGroup < 4 || trialsPerGroup > 200 || trialsPerGroup % 4 !== 0) {
-    throw new Error('每组试次数必须为 4–200，且为 4 的倍数')
+  if (mode !== '1D' && mode !== 'UD') throw new Error('Unsupported grouped acquisition mode')
+  const multiple = mode === 'UD' ? 2 : 4
+  if (!Number.isInteger(trialsPerGroup) || trialsPerGroup < multiple || trialsPerGroup > 200 || trialsPerGroup % multiple !== 0) {
+    throw new Error(`每组试次数必须为 ${multiple}–200，且为 ${multiple} 的倍数`)
   }
-  return { ...PLANS.grouped, blocks: [{ task: '1D', runs: groups, trialsPerRun: trialsPerGroup }] }
+  return {
+    ...PLANS.grouped,
+    ...(mode === 'UD' ? {
+      label: '仅上下采集',
+      hint: '每组仅采集上（舌头想象）与下（放松），两类等量随机，组间保存后继续。',
+    } : {}),
+    blocks: [{ task: mode, runs: groups, trialsPerRun: trialsPerGroup }],
+  }
 }
 
 export function instructionFor(task: SmrTask | '1D'): string {

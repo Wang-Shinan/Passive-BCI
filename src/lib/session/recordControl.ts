@@ -59,6 +59,10 @@ export async function startExperimentRecording(opts: {
     return { ok: false, message: '当前没有可用的 EEG 设备' }
   }
   const names = liveEegHub.meta.channelNames
+  const badMark = (list: string[]) => {
+    const indices = list.map((name, i) => (liveEegHub.isBad(name) ? i : -1)).filter((i) => i >= 0)
+    return { badChannels: indices.map((i) => list[i]), badChannelIndices: indices }
+  }
   const meta =
     device === 'omni' && omniRecordsAsFrames()
       ? {
@@ -68,6 +72,7 @@ export async function startExperimentRecording(opts: {
           sampleRate: FS,
           channels: CHANNELS,
           channelNames: names.length ? names : [...CHANNEL_NAMES],
+          ...badMark(names.length ? names : [...CHANNEL_NAMES]),
         }
       : {
           device,
@@ -79,6 +84,10 @@ export async function startExperimentRecording(opts: {
           sampleRate: liveEegHub.meta.sampleRate,
           channels: names.length,
           channelNames: names,
+          ...badMark(names),
+          ...(device === 'omni'
+            ? { omniLink: acqRuntime.omniLink, ...(acqRuntime.omniLink === 'gui' ? { guiEndpoint: 'http://127.0.0.1:8766' } : {}) }
+            : {}),
         }
   const sink = await acqRuntime.recorder.start({
     filenamePrefix: `${device}_${opts.experiment}_${safeSubject(opts.subjectId)}`,

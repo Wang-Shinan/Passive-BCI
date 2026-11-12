@@ -11,6 +11,7 @@ export type ModelServiceEnsureResult = {
   backend: ModelServiceBackend | null
   task?: string | null
   stepSec?: number | null
+  windowSec?: number | null
   port: number
   proxyPort?: number
   running: boolean

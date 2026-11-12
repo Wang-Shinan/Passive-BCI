@@ -1,0 +1,8 @@
+.focus-cue-wrap { position: relative; width: 72px; height: 72px; display: grid; place-items: center; }
+.focus-aura { position: absolute; inset: -26px; border-radius: 50%; background: radial-gradient(circle, #f3cc6240 0%, transparent 68%); transition: transform .22s linear, opacity .22s linear; pointer-events: none; }
+.focus-cue-ring { position: relative; width: 72px; height: 72px; border: 2px solid #445168; border-radius: 50%; }
+.focus-cue-ring.is-focus { border: 4px solid #f3cc62; background: #f3cc621a; }
+.focus-cue-ring.is-relax { border: 3px solid #63d6ff; background: #63d6ff0a; }
+.focus-cue-ring.is-focus::after { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #f3cc62; }
+.focus-start-actions { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.focus-participant .smr-participant-primary:disabled { cursor: not-allowed; }

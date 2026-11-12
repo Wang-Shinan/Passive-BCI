@@ -1,5 +1,4 @@
 import {
-  acqRuntime,
   subscribeRawBridgeBatches,
   type RawBridgeBatch,
 } from '../../acquisition/runtime'
@@ -21,8 +20,7 @@ import {
   type ModelWindowPacket,
 } from './contracts'
 import { ModelWindowAssembler } from './windowAssembler'
-import { withRecordingTransition } from './recordingTransition'
-import { modelServiceStatus, registerModelRuntimeControl, modelConfigurationLocked } from './modelServiceApi'
+import { modelServiceStatus, registerModelRuntimeControl } from './modelServiceApi'
 import { modelOperation } from './modelOperation'
 import {
   collectExpiredInFlight,
@@ -195,7 +193,6 @@ class ModelRuntimeHub {
 
   setEnabled(enabled: boolean): void {
     if (!enabled) modelOperation.cancel()
-    if (enabled && modelOperation.busy) return
     localStorage.setItem(ENABLED_KEY, String(enabled))
     this.patch({ enabled })
     this.logDebug('info', enabled ? '模型旁路已启用' : '模型旁路已关闭')
@@ -212,39 +209,10 @@ class ModelRuntimeHub {
   async setUrl(url: string): Promise<void> {
     const next = url.trim() || defaultModelUrl()
     if (next === this.snapshotValue.url) return
-    if (modelOperation.busy) { this.logDebug('warn', '模型正在切换，请稍后更换连接地址'); return }
-    const apply = () => {
-      localStorage.setItem(URL_KEY, next)
-      this.patch({ url: next })
-      this.logDebug('info', 'URL 已更新', next)
-    }
-    if (!modelConfigurationLocked()) {
-      apply()
-      if (this.snapshotValue.enabled) this.connect()
-      return
-    }
-    try {
-      await modelOperation.run(signal => withRecordingTransition(async () => {
-        this.disconnect('closed')
-        apply()
-        if (!this.snapshotValue.enabled) return
-        await this.connectAsync()
-        await new Promise<void>((resolve, reject) => {
-          const started = performance.now()
-          const timer = setInterval(() => {
-            if (signal.aborted) { clearInterval(timer); reject(new DOMException('切换已取消', 'AbortError')) }
-            else if (this.snapshotValue.status === 'ready') { clearInterval(timer); resolve() }
-            else if (performance.now() - started > 30000 || this.snapshotValue.status === 'error') {
-              clearInterval(timer); reject(new Error(this.snapshotValue.lastError || '模型连接超时'))
-            }
-          }, 50)
-        })
-      }, signal))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      this.patch({ lastError: message })
-      this.logDebug('error', message)
-    }
+    localStorage.setItem(URL_KEY, next)
+    this.patch({ url: next })
+    this.logDebug('info', 'URL 已更新', next)
+    if (this.snapshotValue.enabled) this.connect()
   }
 
   clearDebugLog(): void {
@@ -283,7 +251,10 @@ class ModelRuntimeHub {
   }
 
   connect(): void {
-    if (modelOperation.busy) return
+    if (modelOperation.busy) {
+      this.scheduleReconnect()
+      return
+    }
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
     void this.connectAsync()
@@ -409,10 +380,8 @@ class ModelRuntimeHub {
     this.sourceDraining = false
     this.clearInFlight()
     this.sentWindowKeys.clear()
-    this.assembler = new ModelWindowAssembler({
-      windowSec: DEFAULT_WINDOW_SEC,
-      stepSec: DEFAULT_STEP_SEC,
-    })
+    // Keep the assembler (and its buffered waveform) across reconnects; the next
+    // hello resizes it in place instead of dropping already-received samples.
     this.patch({
       status,
       latestPrediction: null,
@@ -421,8 +390,6 @@ class ModelRuntimeHub {
       inFlightWindows: 0,
       sourceCompatible: false,
       sourceDetail: waitingSourceDetail(),
-      windowSec: DEFAULT_WINDOW_SEC,
-      stepSec: DEFAULT_STEP_SEC,
       socketReadyState: null,
     })
   }
@@ -453,7 +420,8 @@ class ModelRuntimeHub {
 
   private enqueueSource(batch: RawBridgeBatch): void {
     if (!this.snapshotValue.enabled) return
-    if (batch.device === 'omni' && acqRuntime?.omniLink === 'sdk') return
+    // omni-sdk batches are only bypassed when the model itself does SDK-direct
+    // windowing (hello.input_source); other backends need them through here.
     if (this.snapshotValue.serviceHello?.input_source === 'omni-sdk') return
     if (this.sourceQueue.length >= MAX_SOURCE_BATCHES) {
       this.sourceQueue = []
@@ -720,7 +688,8 @@ class ModelRuntimeHub {
       this.patch({ windowSec, stepSec })
       return
     }
-    this.assembler = new ModelWindowAssembler({ windowSec, stepSec: slideSec })
+    // Resize in place so buffered waveform samples carry over into the new window.
+    this.assembler.resize(windowSec, slideSec)
     this.lastScheduledWindow = null
     this.pending = []
     this.sentWindowKeys.clear()

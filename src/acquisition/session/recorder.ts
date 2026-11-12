@@ -1,4 +1,3 @@
-import { modelOperation } from '../../lib/model-runtime/modelOperation'
 import { sampleClock, type SampleClockDump } from '../../lib/eeg/sampleClock'
 import { sessionHub } from '../../lib/session/sessionHub'
 
@@ -254,7 +253,6 @@ export class BinRecorder {
 
   async start(opts: RecordStartOptions = { filenamePrefix: 'omni_ads1299' }, modelChangeSignal?: AbortSignal): Promise<RecordSinkKind> {
     modelChangeSignal?.throwIfAborted()
-    if (modelOperation.busy && !modelChangeSignal) throw new Error('模型正在切换，暂不能开始录制')
     this.startOptions = structuredClone(opts)
     if (this.startedAt !== null) await this.discard()
     this.pending = new Uint8Array(this.flushBytes)

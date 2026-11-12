@@ -12,9 +12,11 @@ import {
   OmniWsClient,
   OMNI_API_PORT,
   OMNI_STREAM_RAW,
+  type OmniClientOptions,
   type OmniHello,
   type OmniStreamKind,
 } from './omni/client'
+import { OmniGuiHttpClient, type GuiStatus } from './omni/guiClient'
 import { sequenceGaps } from './omni/protocol'
 import { omniElectrodePositions } from './omni/positions'
 import { isOmniDeviceType, omniChannelCount, omniEndpointStorageKey, type OmniDeviceType } from './omni/device'
@@ -73,7 +75,7 @@ import {
   setCatchupClock,
   setFirmwareQueueDepth,
 } from './liveCatchup'
-import { liveEegHub, persistHiddenFromMask, visibleMaskForNames } from '../lib/eeg/liveHub'
+import { liveEegHub, loadBadChannelNames, persistHiddenFromMask, resolveChannelMaskInput, visibleMaskForNames } from '../lib/eeg/liveHub'
 import { sampleClock } from '../lib/eeg/sampleClock'
 import {
   copyLatestChannel,
@@ -176,7 +178,7 @@ function streamingRecordDetail(d: DeviceKind, sink: RecordSinkKind, omniLink: Om
       : d === 'neuracle'
         ? '博睿康 EEG'
         : omniLink !== 'usb'
-          ? `OmniBCI ${omniLink === 'sdk' ? 'SDK BLE' : 'LSL'} μV`
+          ? `OmniBCI ${omniLink === 'sdk' ? 'SDK BLE' : omniLink === 'gui' ? 'GUI HTTP' : 'LSL'} μV`
           : '原始 48 字节帧'
   if (sink === 'disk') {
     return `采集中：${src} 边采边写入 recordings/<会话>/（原始 EEG + 游戏事件）。`
@@ -250,7 +252,7 @@ function loadOmniLink(): OmniLink {
   if (acqRuntime.transport.connected) return 'usb'
   try {
     const v = localStorage.getItem(OMNI_LINK_STORAGE_KEY)
-    if (v === 'usb' || v === 'api' || v === 'sdk') return v
+    if (v === 'usb' || v === 'api' || v === 'sdk' || v === 'gui') return v
   } catch {
     /* ignore */
   }
@@ -270,6 +272,7 @@ function deviceDetail(d: DeviceKind, supported: boolean, omniLink: OmniLink = 'a
     return '连接强脑 BCIGo Wi‑Fi（点连接会自动启动本机桥接；基于 bcigo-sdk）。'
   }
   if (omniLink === 'sdk') return '选择 ESP32 8 通道或 STM32/E73 32 通道，再搜索 BLE 设备并连接，再点开始采集查看波形和录制。电极位置可稍后填写。'
+  if (omniLink === 'gui') return '连接本机 OmniBCI GUI 的 HTTP 广播（http://127.0.0.1:8766/v1/status 诊断 · /v1/data 只读数据）。先在 GUI 里开始采集；需要启用了 api-control 的 GUI 构建才有数据。'
   if (omniLink === 'api') {
     return '先在 OmniBCI 中开始测量并启用 LSL，再点连接。本页会自动启动 LSL 桥接并订阅 EEG 流。'
   }
@@ -342,6 +345,7 @@ export function AcquisitionDebugPage() {
   const [omniLink, setOmniLink] = useState<OmniLink>(() => loadOmniLink())
   const [omniStream, setOmniStream] = useState<OmniStreamKind>(() => loadOmniStream())
   const [omniProbe, setOmniProbe] = useState('')
+  const [guiStatus, setGuiStatus] = useState<GuiStatus | null>(acqRuntime.omniGuiStatus)
   const [sdkDeviceType, setSdkDeviceType] = useState<OmniDeviceType>(loadSdkDeviceType)
   const [sdkDevices, setSdkDevices] = useState<OmniSdkDevice[]>([])
   const [sdkSearching, setSdkSearching] = useState(false)
@@ -413,6 +417,7 @@ export function AcquisitionDebugPage() {
     const n = CHANNELS
     return Array.from({ length: n }, () => true)
   })
+  const [badText, setBadText] = useState(() => loadBadChannelNames().join(' '))
   const [sampleRate, setSampleRate] = useState(() => liveEegHub.meta.sampleRate || FS)
   const [jfHost, setJfHost] = useState('')
   const [jfPort, setJfPort] = useState<number | ''>('')
@@ -452,7 +457,7 @@ export function AcquisitionDebugPage() {
   const transportRef = useRef(acqRuntime.transport)
   const neuracleRef = useRef<NeuracleWsClient | null>(acqRuntime.neuracle)
   const bcigoRef = useRef<BcigoWsClient | null>(acqRuntime.bcigo)
-  const omniRef = useRef<OmniWsClient | null>(acqRuntime.omni)
+  const omniRef = useRef<OmniWsClient | OmniGuiHttpClient | null>(acqRuntime.omni)
   const parserRef = useRef<AdsFrameParser | null>(acqRuntime.parser)
   const filterRef = useRef(acqRuntime.filter)
   const recorderRef = useRef(acqRuntime.recorder)
@@ -695,6 +700,7 @@ export function AcquisitionDebugPage() {
         if (d) setDetail(d)
       },
       onBridgeBatch: (batch) => ingestBridgeBatchRef.current(batch),
+      onGuiStatus: (s) => setGuiStatus(s),
     })
     return () => {
       setAcquisitionUi(null)
@@ -1115,6 +1121,7 @@ export function AcquisitionDebugPage() {
 
   const connectOmniApi = () => {
     const sdk = omniLink === 'sdk'
+    const gui = omniLink === 'gui'
     if (sdk && !sdkEndpoint) { setDetail('请先搜索并选择 BLE 设备。'); return }
     void (async () => {
       stopDemo()
@@ -1126,17 +1133,19 @@ export function AcquisitionDebugPage() {
       bcigoRef.current = null
       acqRuntime.bcigo = null
       acqRuntime.device = 'omni'
-      acqRuntime.omniLink = sdk ? 'sdk' : 'api'
+      acqRuntime.omniLink = sdk ? 'sdk' : gui ? 'gui' : 'api'
       acqRuntime.omniSdkDeviceType = sdkDeviceType
       resetBuffers(cfg.labels.length)
       acqRuntime.status = 'connecting'
       liveEegHub.configure({ device: 'omni', sampleRate: FS, channelNames: [...cfg.labels] })
-      liveEegHub.markConnecting(sdk ? '正在连接 SDK BLE…' : '正在启动 OmniBCI LSL 桥接…')
+      liveEegHub.markConnecting(sdk ? '正在连接 SDK BLE…' : gui ? '正在连接 OmniBCI GUI HTTP 服务…' : '正在启动 OmniBCI LSL 桥接…')
       setStatus('connecting')
-      setDetail(sdk ? '正在连接 SDK BLE…' : '正在启动 OmniBCI LSL 桥接…')
+      setDetail(sdk ? '正在连接 SDK BLE…' : gui ? '正在连接 OmniBCI GUI HTTP 服务…' : '正在启动 OmniBCI LSL 桥接…')
       try {
-        const ensured = await ensureBridge(sdk ? 'omni-sdk' : 'omni')
-        if (ensured.message) setOmniProbe(ensured.message)
+        if (!gui) {
+          const ensured = await ensureBridge(sdk ? 'omni-sdk' : 'omni')
+          if (ensured.message) setOmniProbe(ensured.message)
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         setStatus('error')
@@ -1145,11 +1154,7 @@ export function AcquisitionDebugPage() {
         return
       }
 
-      const client = new OmniWsClient({
-        url: omniWsUrl(sdk),
-        endpoint: sdk ? sdkEndpoint : undefined,
-        deviceType: sdk ? sdkDeviceType : undefined,
-        stream: omniStream,
+      const clientCallbacks: OmniClientOptions = {
         onStatus: (s, d) => {
           if (s === 'connecting') {
             acqRuntime.status = 'connecting'
@@ -1179,9 +1184,11 @@ export function AcquisitionDebugPage() {
           if (d) setDetail(d)
         },
         onHello: (hello: OmniHello) => {
+          // Only the SDK link may override labels with the discovered device
+          // montage; GUI HTTP data labels are authoritative.
           const labels = acqRuntime.omniSdkChannelNames
           const names =
-            hello.channels.length === labels.length ? labels : hello.channels
+            sdk && hello.channels.length === labels.length ? labels : hello.channels
           resizeBuffers(names.length, hello.sample_rate)
           setStreamLabels(names)
           setStreamTypes([])
@@ -1194,9 +1201,9 @@ export function AcquisitionDebugPage() {
           setFeatureHistory([])
           acqRuntime.status = 'open'
           acqRuntime.device = 'omni'
-          acqRuntime.omniLink = sdk ? 'sdk' : 'api'
+          acqRuntime.omniLink = sdk ? 'sdk' : gui ? 'gui' : 'api'
           setStatus('open')
-          const msg = `已连接 OmniBCI ${sdk ? 'SDK BLE' : 'LSL'} · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。`
+          const msg = `已连接 OmniBCI ${sdk ? 'SDK BLE' : gui ? 'GUI HTTP' : 'LSL'} · ${names.length} 通道 @ ${hello.sample_rate} Hz（${hello.stream}）。`
           liveEegHub.configure({
             device: 'omni',
             sampleRate: hello.sample_rate,
@@ -1212,16 +1219,18 @@ export function AcquisitionDebugPage() {
             samples: batch.samples,
             channels: batch.channels,
             sampleRate: batch.sampleRate,
-            channelNames: batch.channels === acqRuntime.omniSdkChannelNames.length
+            channelNames: sdk && batch.channels === acqRuntime.omniSdkChannelNames.length
               ? [...acqRuntime.omniSdkChannelNames] : batch.channelNames,
-            electrodeNames: batch.channels === acqRuntime.omniSdkChannelNames.length ? acqRuntime.omniElectrodeNames : undefined,
-            electrodePositions: batch.channels === acqRuntime.omniSdkChannelNames.length ? acqRuntime.omniElectrodePositions : undefined,
+            electrodeNames: sdk && batch.channels === acqRuntime.omniSdkChannelNames.length ? acqRuntime.omniElectrodeNames : undefined,
+            electrodePositions: sdk && batch.channels === acqRuntime.omniSdkChannelNames.length ? acqRuntime.omniElectrodePositions : undefined,
             unit: batch.unit,
             packetLoss: batch.packetLoss,
             packetCount: batch.packetCount,
             arrivalNowMs: performance.now(),
             sequence: batch.sequence,
             validFlags: batch.valid,
+            sourceTimestampUs: batch.sourceTimestampUs,
+            sourceTimestampValid: batch.sourceTimestampValid,
           }),
         onGap: (gap) => {
           statsRef.current.packetLoss += gap.dropped_samples
@@ -1231,7 +1240,24 @@ export function AcquisitionDebugPage() {
           )
         },
         onError: (message) => setDetail(message),
-      })
+      }
+      const client = gui
+        ? new OmniGuiHttpClient({
+            ...clientCallbacks,
+            onGuiStatus: (s) => {
+              acqRuntime.omniGuiStatus = s
+              // Route through the mounted UI sink so a stale React setter from
+              // an unmounted page can't freeze the display.
+              acqRuntime.ui?.onGuiStatus?.(s)
+            },
+          })
+        : new OmniWsClient({
+            url: omniWsUrl(sdk),
+            endpoint: sdk ? sdkEndpoint : undefined,
+            deviceType: sdk ? sdkDeviceType : undefined,
+            stream: omniStream,
+            ...clientCallbacks,
+          })
       omniRef.current = client
       acqRuntime.omni = client
       client.connect()
@@ -1435,9 +1461,14 @@ export function AcquisitionDebugPage() {
         sampleRate,
         channels: names.length,
         channelNames: names,
-        ...(device === 'omni' ? { ...(omniLink === 'sdk' ? { omniDeviceType: sdkDeviceType } : {}), electrodeNames: cfg.electrodeNames?.map(n => n.trim()),
+        ...(device === 'omni' ? { omniLink,
+          ...(omniLink === 'sdk' ? { omniDeviceType: sdkDeviceType } : {}),
+          ...(omniLink === 'gui' ? { guiEndpoint: 'http://127.0.0.1:8766' } : {}),
+          // GUI link: channel layout comes from the GUI itself — don't write
+          // local electrode positions when they may not match that layout.
+          ...(omniLink === 'gui' ? {} : { electrodeNames: cfg.electrodeNames?.map(n => n.trim()),
           electrodePositions: omniElectrodePositions(cfg), positionUnit: 'm', positionFrame: 'reve-position-bank',
-          positionMode: cfg.positionMode ?? 'standard', positionCoordinates: cfg.positionCoordinates } : {}),
+          positionMode: cfg.positionMode ?? 'standard', positionCoordinates: cfg.positionCoordinates }) } : {}),
       }
     }
     return {
@@ -1930,14 +1961,16 @@ export function AcquisitionDebugPage() {
 
   // Keep Omni labels in sync for waveform when editing omni config
   useEffect(() => {
-    if (device === 'omni' && status !== 'demo') {
+    // USB/SDK links use the local cfg montage; api/gui labels come from the
+    // bridge/GUI hello and must not be overwritten by the 8ch cfg default.
+    if (device === 'omni' && status !== 'demo' && (omniLink === 'usb' || omniLink === 'sdk')) {
       setStreamLabels(cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`))
       acqRuntime.omniSdkChannelNames = cfg.labels.map((l, i) => l.trim() || `CH${i + 1}`)
       acqRuntime.omniElectrodeNames = cfg.electrodeNames?.map(n => n.trim())
       acqRuntime.omniElectrodePositions = omniElectrodePositions(cfg)
       if (liveEegHub.meta.device === 'omni' && liveEegHub.meta.channelNames.length === cfg.labels.length) liveEegHub.configure({ channelNames: acqRuntime.omniSdkChannelNames })
     }
-  }, [cfg.labels, cfg.electrodeNames, cfg.positionMode, cfg.positionCoordinates, device, status])
+  }, [cfg.labels, cfg.electrodeNames, cfg.positionMode, cfg.positionCoordinates, device, status, omniLink])
 
   const statusLabel =
     status === 'streaming'
@@ -2041,7 +2074,7 @@ export function AcquisitionDebugPage() {
       <section className="acq-group">
         <div className="acq-group-title">
           {omniApi
-            ? (omniSdk ? 'OmniBCI SDK BLE' : 'OmniBCI LSL 控制')
+            ? (omniSdk ? 'OmniBCI SDK BLE' : omniLink === 'gui' ? 'OmniBCI GUI HTTP' : 'OmniBCI LSL 控制')
             : device === 'omni'
               ? '串口控制'
               : device === 'neuracle'
@@ -2075,11 +2108,17 @@ export function AcquisitionDebugPage() {
               >
                 <option value="sdk">SDK BLE 直连</option>
                 <option value="api">LSL 桥接</option>
+                <option value="gui">GUI HTTP 广播</option>
                 <option value="usb">USB 串口</option>
               </select>
             </label>
           ) : null}
-          {omniApi && !omniSdk ? (
+          {device === 'omni' && omniLink === 'gui' ? (
+            <span className="acq-hint" role="status">
+              只读 HTTP：http://127.0.0.1:8766/v1/status · /v1/data；需启用 api-control 的 GUI 构建并已开始在 GUI 采集。
+            </span>
+          ) : null}
+          {omniApi && !omniSdk && omniLink === 'api' ? (
             <>
               <label className="acq-field">
                 流
@@ -2437,6 +2476,27 @@ export function AcquisitionDebugPage() {
               </button>
             </>
           ) : null}
+          <label className="acq-field" title="坏道不参与特征计算，并写入录制 meta 的 badChannels">
+            坏道标记
+            <input
+              className="input"
+              style={{ width: 150 }}
+              value={badText}
+              placeholder="CH4 CH10"
+              onChange={(e) => {
+                setBadText(e.target.value)
+                liveEegHub.setBadChannelNames(e.target.value.split(/[\s,;、，；]+/).map((t) => t.trim()).filter(Boolean))
+              }}
+            />
+          </label>
+          <span className="muted text-xs">
+            {(() => {
+              const sel = resolveChannelMaskInput(badText, channelLabels)
+              if (!badText.trim()) return '无坏道标记'
+              if (!sel.matched.length) return '未匹配当前通道'
+              return `已标记 ${sel.matched.map((i) => channelLabels[i]).join('、')}：不参与特征计算，原始数据照录并在 meta 标记`
+            })()}
+          </span>
         </div>
       </section>
 
@@ -2731,6 +2791,15 @@ export function AcquisitionDebugPage() {
             {omniApi ? ` · gaps ${stats.seqGaps}` : ''}
           </span>
         )}
+        {device === 'omni' && omniLink === 'gui' && guiStatus ? (
+          <span title="GUI /v1/status（只读诊断，与本地丢包统计基准不同）">
+            GUI {guiStatus.status ?? '—'}
+            {guiStatus.frames !== undefined ? ` · frames ${guiStatus.frames}` : ''}
+            {guiStatus.sequence_lost !== undefined ? ` · seq_lost ${guiStatus.sequence_lost}` : ''}
+            {guiStatus.frame_crc_bad !== undefined ? ` · crc ${guiStatus.frame_crc_bad}` : ''}
+            {guiStatus.stale ? ` · 快照过期${guiStatus.snapshot_age_ms !== undefined ? ` ${Math.round(guiStatus.snapshot_age_ms)}ms` : ''}` : ''}
+          </span>
+        ) : null}
       </div>
 
       {impedanceOpen ? (

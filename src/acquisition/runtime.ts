@@ -11,6 +11,7 @@ import { WebSerialTransport, type SerialStatus } from './transport/webSerial'
 import type { BcigoWsClient } from './bcigo/client'
 import type { NeuracleWsClient } from './neuracle/client'
 import type { OmniWsClient } from './omni/client'
+import type { OmniGuiHttpClient, GuiStatus } from './omni/guiClient'
 import type { OmniDeviceType } from './omni/device'
 import {
   INGEST_DRAIN_BUDGET_MS,
@@ -22,7 +23,7 @@ import {
 } from './liveCatchup'
 
 export type DeviceKind = 'omni' | 'neuracle' | 'bcigo'
-export type OmniLink = 'usb' | 'api' | 'sdk'
+export type OmniLink = 'usb' | 'api' | 'sdk' | 'gui'
 export type ConnUi = 'idle' | 'connecting' | 'open' | 'streaming' | 'error' | 'unsupported' | 'demo'
 
 export type BridgeBatch = {
@@ -43,6 +44,9 @@ export type BridgeBatch = {
   sequence?: Uint32Array
   validFlags?: Uint8Array
   droppedSamples?: number
+  /** Optional device-clock row timestamps (wrap-prone µs; not mapped to wall time yet). */
+  sourceTimestampUs?: Uint32Array
+  sourceTimestampValid?: Uint8Array
 }
 
 export type RawBridgeBatch = BridgeBatch & {
@@ -54,6 +58,8 @@ export type AcquisitionUiSink = {
   onSerialData: (chunk: Uint8Array) => void
   onSerialStatus: (s: SerialStatus, detail?: string) => void
   onBridgeBatch: (batch: BridgeBatch) => void
+  /** 'gui' link /v1/status diagnostics forwarded to the mounted page (optional). */
+  onGuiStatus?: (status: GuiStatus) => void
 }
 
 export const acqRuntime = {
@@ -63,7 +69,9 @@ export const acqRuntime = {
   recorder: new BinRecorder(),
   neuracle: null as NeuracleWsClient | null,
   bcigo: null as BcigoWsClient | null,
-  omni: null as OmniWsClient | null,
+  omni: null as OmniWsClient | OmniGuiHttpClient | null,
+  /** Latest GET /v1/status diagnostics from a 'gui' link; diagnostics only, no stream resets. */
+  omniGuiStatus: null as GuiStatus | null,
   omniLink: 'api' as OmniLink,
   omniSdkEndpoint: '',
   omniSdkDeviceType: 'esp32' as OmniDeviceType,

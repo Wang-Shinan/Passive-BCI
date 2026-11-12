@@ -38,7 +38,11 @@ for file in sorted((root / 'recordings' / '.reve-heads').glob('*.pt')):
         if Path(encoder).name != encoder or '/' in encoder or '\\' in encoder or encoder in ('.', '..'):
             raise ValueError('无效的编码器标识')
         if encoder not in ('reve-base', 'reve-large'):
-            adapter = Path(payload['lora_checkpoint']) if payload.get('lora_checkpoint') else adapters / encoder / 'best.pt'
+            recorded = Path(payload['lora_checkpoint']) if payload.get('lora_checkpoint') else None
+            # A checkpoint path recorded on another machine is stale; fall back
+            # to the local adapters/<encoder>/best.pt convention.
+            adapter = recorded if recorded and recorded.parent.name == encoder and recorded.is_file() \
+                else adapters / encoder / 'best.pt'
             if adapter.parent.name != encoder:
                 raise ValueError('LoRA 路径与编码器标识不一致')
             if not adapter.is_file():

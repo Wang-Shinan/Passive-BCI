@@ -8,6 +8,7 @@ export const LIVE_FRESH_MS = 8000
 export const LIVE_STALE_MS = 15000
 const HUB_SECONDS = 6
 const HIDDEN_CH_KEY = 'passive-bci.hidden-channel-names'
+const BAD_CH_KEY = 'passive-bci.bad-channel-names'
 /** Off by default (EOG / unused on BCIGo 32-ch). */
 export const DEFAULT_HIDDEN_CHANNELS = ['IO']
 
@@ -50,6 +51,52 @@ export function persistHiddenFromMask(names: string[], visible: boolean[]): void
   saveHiddenChannelNames([...hidden])
 }
 
+export function loadBadChannelNames(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(BAD_CH_KEY) ?? 'null') as unknown
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
+      return parsed.map(normalizeChannelName)
+    }
+  } catch {
+    /* ignore */
+  }
+  return []
+}
+
+export function saveBadChannelNames(names: string[]): void {
+  localStorage.setItem(BAD_CH_KEY, JSON.stringify([...new Set(names.map(normalizeChannelName))]))
+}
+
+/**
+ * Resolve a free-form channel list (names or numbers, e.g. "CH1 9 16") into a
+ * boolean mask aligned to `channelNames`. Numbers match a `CH<n>` name first,
+ * then fall back to 1-based indices. Returns null mask when unrestricted.
+ */
+export function resolveChannelMaskInput(input: string, channelNames: string[]): { mask: boolean[] | null; matched: number[]; missing: string[] } {
+  const tokens = input.split(/[\s,;、，；]+/).map(token => token.trim()).filter(Boolean)
+  if (!tokens.length) return { mask: null, matched: [], missing: [] }
+  const lower = channelNames.map(name => name.toLowerCase())
+  const matched = new Set<number>()
+  const missing: string[] = []
+  for (const token of tokens) {
+    const direct = lower.indexOf(token.toLowerCase())
+    if (direct >= 0) { matched.add(direct); continue }
+    const num = /^ch(\d+)$/i.exec(token)?.[1] ?? (/^\d+$/.test(token) ? token : null)
+    if (num !== null) {
+      const byName = lower.indexOf(`ch${num}`)
+      if (byName >= 0) { matched.add(byName); continue }
+      const index = Number(num) - 1
+      if (index >= 0 && index < channelNames.length) { matched.add(index); continue }
+    }
+    missing.push(token)
+  }
+  if (!matched.size) return { mask: null, matched: [], missing }
+  const ordered = [...matched].sort((a, b) => a - b)
+  const mask = new Array<boolean>(channelNames.length).fill(false)
+  for (const index of ordered) mask[index] = true
+  return { mask, matched: ordered, missing }
+}
+
 export type LiveEegMeta = {
   device: LiveEegDevice
   link: LiveEegLink
@@ -79,6 +126,7 @@ class LiveEegHub {
   lastAt = 0
   detail = ''
   channelMask: boolean[] = []
+  badChannels = new Set<string>(loadBadChannelNames())
   private liveLatch = false
   private listeners = new Set<() => void>()
 
@@ -107,12 +155,26 @@ class LiveEegHub {
     this.channelMask = [...mask]
   }
 
-  /** Mask aligned to current ring length; omitted channels count as included. */
+  setBadChannelNames(names: string[]): void {
+    this.badChannels = new Set(names.map(normalizeChannelName))
+    saveBadChannelNames([...this.badChannels])
+    this.emit()
+  }
+
+  isBad(name: string | undefined): boolean {
+    return !!name && this.badChannels.has(normalizeChannelName(name))
+  }
+
+  /** Mask aligned to current ring length: visible channels minus marked bad channels. */
   featureChannelMask(): boolean[] | undefined {
     const n = this.buffers.length
-    if (!n || !this.channelMask.length) return undefined
-    if (this.channelMask.length === n) return this.channelMask
-    return Array.from({ length: n }, (_, i) => this.channelMask[i] !== false)
+    if (!n) return undefined
+    const hasBad = this.channelNames.some((name) => this.isBad(name))
+    if (!this.channelMask.length && !hasBad) return undefined
+    const base = this.channelMask.length === n
+      ? this.channelMask
+      : Array.from({ length: n }, (_, i) => this.channelMask[i] !== false)
+    return Array.from({ length: n }, (_, i) => base[i] !== false && !this.isBad(this.channelNames[i]))
   }
 
   ensureRing(nChannels: number): void {

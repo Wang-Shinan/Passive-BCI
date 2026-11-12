@@ -1,7 +1,7 @@
 import type { Plugin } from 'vite'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 import { summarizeSessionDir } from './vite.record-library.ts'
@@ -11,7 +11,7 @@ import { operationGate } from './vite.operation-gate.ts'
 import { appendRound, createRound, readRound, roundDirectory, loraHistory } from './vite.training-rounds.ts'
 
 type Job = {
-  id: string; kind: 'export' | 'fit' | 'lora'; status: 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
+  id: string; kind: 'export' | 'fit' | 'lora' | 'eegnet'; status: 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
   startedAt: string; endedAt?: string; config: Record<string, unknown>; error?: string
 }
 const ID = /^[a-f0-9-]{36}$/
@@ -179,16 +179,45 @@ export function trainingPlugin(): Plugin {
                     batchSize: trainingNumber(body.batchSize ?? 1, 1, 8, true),
                     accumulationSteps: trainingNumber(body.accumulationSteps ?? 8, 1, 64, true) }
                 }
+              } else if (body.kind === 'eegnet') {
+                // Offline LP→FT for the EEGNet service. Inference keeps running
+                // during training — no model gate; the swap happens via ensure.
+                if (!round) throw new Error('EEGNet 训练需要采集轮次')
+                if (!Array.isArray(body.sessions) || !body.sessions.length || body.sessions.length > 50) throw new Error('请选择 1–50 个录制会话')
+                const sessions = body.sessions.map(stem => {
+                  if (typeof stem !== 'string') throw new Error('无效会话')
+                  const info = summarizeSessionDir(path.join(root, 'recordings'), stem)
+                  if (!info || info.status !== 'complete' || info.eegBytes <= 0 || !info.events) throw new Error('需要已完成且包含 EEG 和标签事件的会话')
+                  return path.join(root, 'recordings', stem)
+                })
+                if (typeof body.baselineCheckpoint !== 'string') throw new Error('需要基线 checkpoint')
+                const eegnetRoot = path.join(root, 'recordings', '.eegnet')
+                const baseline = path.resolve(String(body.baselineCheckpoint))
+                if (!baseline.toLowerCase().endsWith('.pt') || !baseline.startsWith(eegnetRoot + path.sep) || !existsSync(baseline)) {
+                  throw new Error('基线 checkpoint 必须位于 recordings/.eegnet 内')
+                }
+                const output = path.join(eegnetRoot, 'auto', round.id, id)
+                if (existsSync(output)) throw new Error('输出目录已存在')
+                config = { roundId: round.id, sessions, baselineCheckpoint: baseline, output,
+                  seed: trainingNumber(body.seed ?? round.seed, 0, 0xffffffff, true),
+                  minimumGain: trainingNumber(body.minimumGain ?? 0, 0, 1),
+                  maximumRecallDrop: trainingNumber(body.maximumRecallDrop ?? 0, 0, 1) }
               } else throw new Error('无效任务类型')
               mkdirSync(dir, { recursive: true })
               const job: Job = { id, kind: body.kind, config, status: 'running', startedAt: new Date().toISOString() }
               const save = () => writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job, null, 2))
               save()
-              const release = round ? operationGate.beginModelChange() : () => {}
+              const release = round && body.kind !== 'eegnet' ? operationGate.beginModelChange() : () => {}
               let child: ChildProcess
               try {
                 if (round) appendRound(root, round.id, 'job_started', { jobId: id, kind: job.kind, config })
-                child = spawn(process.execPath, [path.join(root, 'scripts/run-training.mjs'), path.join(dir, 'job.json')], {
+                const argv = job.kind === 'eegnet'
+                  ? [path.join(root, 'scripts/run-eegnet-training.mjs'), '--sessions', ...(config.sessions as string[]),
+                      '--checkpoint', String(config.baselineCheckpoint), '--output', String(config.output),
+                      '--seed', String(config.seed), '--minimum-gain', String(config.minimumGain),
+                      '--maximum-recall-drop', String(config.maximumRecallDrop)]
+                  : [path.join(root, 'scripts/run-training.mjs'), path.join(dir, 'job.json')]
+                child = spawn(process.execPath, argv, {
                 cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
                 })
               } catch (error) { release(); throw error }
@@ -198,6 +227,12 @@ export function trainingPlugin(): Plugin {
               child.on('error', error => { job.error = error.message })
               child.on('close', code => {
                 release()
+                if (job.kind === 'eegnet' && typeof job.config.output === 'string') {
+                  const reportSrc = path.join(job.config.output, 'report.json')
+                  if (existsSync(reportSrc)) {
+                    try { copyFileSync(reportSrc, path.join(dir, 'report.json')) } catch { /* keep log for diagnosis */ }
+                  }
+                }
                 if (job.status !== 'cancelled') {
                   job.status = code === 0 && existsSync(path.join(dir, 'report.json')) ? 'complete' : 'failed'
                   if (job.status === 'failed') job.error ||= `任务退出（${code}），请查看日志`

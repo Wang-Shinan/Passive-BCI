@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mock = vi.hoisted(() => ({
   revision: 'old', status: 'ready', headId: 'old.pt', hasPrediction: true, windowSec: 2,
-  supportsGroupTraining: true,
+  supportsGroupTraining: true, modelType: 'reve', checkpoint: undefined as string | undefined,
   ensure: vi.fn(), stop: vi.fn(), progress: vi.fn(), statusApi: vi.fn(),
 }))
 vi.mock('../../lib/model-runtime/modelServiceApi', () => ({
@@ -10,7 +10,9 @@ vi.mock('../../lib/model-runtime/modelServiceApi', () => ({
 }))
 vi.mock('../../lib/model-runtime/modelRuntimeHub', () => ({ modelRuntimeHub: {
   get snapshot() { return { status: mock.status, serviceHello: { strategy: 'none', model_revision: mock.revision,
-    model_name: 'reve-base', window_sec: mock.windowSec, supports_group_training: mock.supportsGroupTraining,
+    model_name: mock.modelType === 'eegnet' ? 'eegnet' : 'reve-base', model_type: mock.modelType,
+    window_sec: mock.windowSec, supports_group_training: mock.supportsGroupTraining,
+    checkpoint: mock.checkpoint,
     class_names: ['left_hand', 'right_hand', 'tongue', 'rest'] } } },
   latestObservation: () => mock.hasPrediction ? ({ model_revision: mock.revision, class_names: ['left_hand', 'right_hand', 'tongue', 'rest'],
     prepare_latency_ms: 1, inference_latency_ms: 10 }) : null,
@@ -47,6 +49,7 @@ beforeEach(() => {
   mock.hasPrediction = true
   mock.windowSec = 2
   mock.supportsGroupTraining = true
+  mock.modelType = 'reve'; mock.checkpoint = undefined
   mock.statusApi.mockImplementation(async () => ({ running: true, owned: true, backend: 'reve', task: 'smr_control', headId: mock.headId, stepSec: .5 }))
   mock.stop.mockResolvedValue({ ok: true })
   mock.ensure.mockImplementation(async ({ headId }: { headId: string }) => {
@@ -159,5 +162,83 @@ describe('group boundary probing', () => {
     const message = await runGroupProbe(state, options, new AbortController().signal, mock.progress)
     expect(message).toContain('样本不足')
     expect(mock.ensure).toHaveBeenCalledWith(expect.objectContaining({ headId: 'old.pt' }))
+  })
+})
+
+describe('eegnet offline LP→FT', () => {
+  const BASE_CP = 'C:/root/recordings/.eegnet/base.pt'
+  const NEW_CP = 'C:/root/recordings/.eegnet/auto/round/jobE/fine_tuned.pt'
+  function eegnetRound(): ProbeRound {
+    return { id: 'round', subjectId: 'S01', seed: 3, sessions: ['group1'],
+      baseline: { headId: '', revision: 'old', modelName: 'eegnet', stepSec: .1, windowSec: 2, checkpoint: BASE_CP } }
+  }
+  function eegnetReport(promote: boolean) {
+    return { decision: { promote, stage: 'ft', checkpoint: promote ? NEW_CP : BASE_CP,
+      revision: promote ? 'new' : 'old', reason: promote ? 'FT 验证提升' : '未达阈值，保留原模型' },
+      stages: { lp: { validation: { balanced_accuracy: .5 }, test: { balanced_accuracy: .4 } },
+                ft: { validation: { balanced_accuracy: .6 }, test: { balanced_accuracy: .55 } } } }
+  }
+  function eegnetServer(result: unknown, failed = false) {
+    const requests: Array<{ url: string; body: Record<string, unknown> | undefined }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      requests.push({ url, body })
+      let data: unknown = { ok: true }
+      if (url.endsWith('/jobs') && body?.kind === 'eegnet') data = { ok: true, job: { id: 'jobE' } }
+      if (url.endsWith('/jobs/jobE')) data = { ok: true, job: { status: failed ? 'failed' : 'complete', error: '数据不足' }, report: result }
+      return new Response(JSON.stringify(data), { status: 200 })
+    }))
+    return requests
+  }
+  function eegnetLive() {
+    mock.modelType = 'eegnet'
+    mock.checkpoint = BASE_CP
+    mock.revision = 'old'
+    mock.ensure.mockImplementation(async ({ weightId }: { weightId: string }) => {
+      mock.revision = String(weightId).includes('fine_tuned') ? 'new' : 'old'
+      return { running: true }
+    })
+    mock.statusApi.mockImplementation(async () => ({ running: true, owned: true, backend: 'eegnet', stepSec: .1 }))
+  }
+  it('takes an eegnet baseline from hello.checkpoint, never guesses', async () => {
+    eegnetLive()
+    const baseline = await currentProbeBaseline(new AbortController().signal)
+    expect(baseline.modelName).toBe('eegnet')
+    expect(baseline.checkpoint).toBe(BASE_CP)
+    mock.checkpoint = undefined
+    await expect(currentProbeBaseline(new AbortController().signal)).rejects.toThrow('checkpoint')
+  })
+  it('promotes via ensure with the recordings-relative weightId and updates the baseline', async () => {
+    eegnetLive()
+    const requests = eegnetServer(eegnetReport(true))
+    const state = eegnetRound()
+    const message = await runGroupProbe(state, options, new AbortController().signal, mock.progress)
+    expect(mock.ensure).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'eegnet', weightId: 'eegnet:auto/round/jobE/fine_tuned.pt', stepSec: .1 }))
+    expect(mock.stop).not.toHaveBeenCalled()
+    expect(state.baseline.revision).toBe('new')
+    expect(state.baseline.checkpoint).toBe(NEW_CP)
+    expect(message).toContain('LP 验证')
+    expect(message).toContain('测试（仅报告）')
+    expect(requests.find(r => r.url.endsWith('/jobs') && r.body?.kind === 'eegnet')?.body).toMatchObject({
+      roundId: 'round', sessions: ['group1'], baselineCheckpoint: BASE_CP, seed: 3 })
+  })
+  it('keeps the model untouched when the decision does not promote', async () => {
+    eegnetLive()
+    eegnetServer(eegnetReport(false))
+    const state = eegnetRound()
+    const message = await runGroupProbe(state, options, new AbortController().signal, mock.progress)
+    expect(mock.ensure).not.toHaveBeenCalled()
+    expect(state.baseline.revision).toBe('old')
+    expect(message).toContain('保留原模型')
+  })
+  it('keeps the model and reports 保留原模型 when the job fails', async () => {
+    eegnetLive()
+    eegnetServer(eegnetReport(false), true)
+    const state = eegnetRound()
+    const message = await runGroupProbe(state, options, new AbortController().signal, mock.progress)
+    expect(mock.ensure).not.toHaveBeenCalled()
+    expect(message).toContain('保留原模型')
+    expect(state.baseline.revision).toBe('old')
   })
 })

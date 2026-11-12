@@ -28,7 +28,7 @@ let runtimeControl: { suspend: () => void; disable: () => void; prepareManaged?:
 export function registerModelRuntimeControl(control: NonNullable<typeof runtimeControl>): void { runtimeControl = control }
 export function modelConfigurationLocked(): boolean { return acqRuntime.recorder.recording || sessionHub.active }
 export function selectModelHeadPreference(task: string, id: string): void {
-  if (modelOperation.busy) throw new Error('模型操作正在进行，请稍后选择线性头')
+  // Selection is desired state; applying goes through ensure, which supersedes in-flight ops.
   saveModelHeadPreference(task, id)
 }
 
@@ -51,7 +51,7 @@ export async function modelServiceStatus(
   const epoch = mutationEpoch, request = ++statusRequest
   const res = await fetch('/api/model-service/status', { signal })
   const result = await parseResult(res)
-  if (epoch === mutationEpoch && request === statusRequest && !modelOperation.busy) publishAppliedModel(result)
+  if (epoch === mutationEpoch && request === statusRequest) publishAppliedModel(result)
   return result
 }
 
@@ -63,6 +63,7 @@ export async function ensureModelService(options?: {
   backend?: ModelServiceBackend
   task?: string
   stepSec?: number
+  windowSec?: number
   force?: boolean
   signal?: AbortSignal
 }): Promise<ModelServiceEnsureResult> {
@@ -71,6 +72,8 @@ export async function ensureModelService(options?: {
   const sdkSource = (options?.backend ?? 'reve') === 'reve' && acqRuntime.device === 'omni' && acqRuntime.omniLink === 'sdk'
   if (sdkSource && !acqRuntime.omni) throw new Error('请先在采集调试页连接 SDK BLE 设备')
   let epoch = mutationEpoch
+  // Latest control wins: supersede any in-flight operation instead of rejecting this one.
+  if (modelOperation.busy) modelOperation.cancel()
   const result = await modelOperation.run(async signal => {
     epoch = ++mutationEpoch
     return withRecordingTransition(async () => {
@@ -83,7 +86,7 @@ export async function ensureModelService(options?: {
         weightId: options?.weightId, eegnetChannels: options?.eegnetChannels, eegnetSeed: options?.eegnetSeed,
         ...(sdkSource ? { omniSource: { endpoint: acqRuntime.omniSdkEndpoint, deviceType: acqRuntime.omniSdkDeviceType, channelNames: acqRuntime.omniSdkChannelNames,
           electrodeNames: acqRuntime.omniElectrodeNames, electrodePositions: acqRuntime.omniElectrodePositions } } : {}),
-        stepSec: options?.stepSec, force: options?.force === true }), signal,
+        stepSec: options?.stepSec, windowSec: options?.windowSec, force: options?.force === true }), signal,
     })
     const body = await parseResult(res)
     if (!res.ok || !body.ok) throw new Error(body.message || '无法启动模型服务')

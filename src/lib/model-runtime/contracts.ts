@@ -24,6 +24,12 @@ export type ModelWindowHeader = {
   sample_count: number
   start_time_sec: number
   end_time_sec: number
+  /** Source-wide counter, not a per-window count or a guarantee of continuity. */
+  source_quality?: {
+    sample_timing: 'received_samples'
+    gap_policy: 'retain_received_samples'
+    reported_missing_samples_total: number
+  }
 }
 
 export type ModelWindowPacket = {
@@ -47,6 +53,8 @@ export type ModelServiceHello = {
   step_sec?: number
   slide_sec?: number
   supports_group_training?: boolean
+  /** Absolute path of the loaded checkpoint file (e.g. EEGNet service). */
+  checkpoint?: string
   input_source?: 'omni-sdk'
   follow?: {
     transport?: string
@@ -186,6 +194,7 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
     step_sec: stepSec && stepSec > 0 ? stepSec : undefined,
     slide_sec: finiteNumber(input?.slide_sec) && Number(input.slide_sec) > 0 ? Number(input.slide_sec) : undefined,
     supports_group_training: typeof value.supports_group_training === 'boolean' ? value.supports_group_training : undefined,
+    checkpoint: typeof value.checkpoint === 'string' ? value.checkpoint : undefined,
     input_source: input?.source === 'omni-sdk' ? 'omni-sdk' : undefined,
     follow: parseFollow(value.follow),
   }

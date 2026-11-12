@@ -25,7 +25,9 @@ class WeightsTests(unittest.TestCase):
             payload = torch.load(a, weights_only=True)
             payload['class_names'] = ['wrong']
             torch.save(payload, b)
-            with self.assertRaisesRegex(ValueError, 'class|order'):
+            # contract now accepts arbitrary non-empty class_names; a checkpoint
+            # whose names no longer match its own weights must still fail to load
+            with self.assertRaises((ValueError, RuntimeError)):
                 load_model(b)
 
 if __name__ == '__main__': unittest.main()

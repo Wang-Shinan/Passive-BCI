@@ -39,6 +39,8 @@ export function useFeatureMonitor(opts: {
   preferLive?: boolean
   /** Extra feature ids that must stay enabled (e.g. control drivers). */
   ensureFeatures?: string[]
+  /** Restrict live feature computation to a channel subset; overrides the hub mask. */
+  channelMask?: boolean[] | null
 }) {
   const {
     active = true,
@@ -46,6 +48,7 @@ export function useFeatureMonitor(opts: {
     autonomous = false,
     preferLive = false,
     ensureFeatures,
+    channelMask = null,
   } = opts
   const [enabledIds, setEnabledIds] = useState<string[]>(() => loadEnabledFeatures())
   const [latest, setLatest] = useState<LiveFeatureSnapshot | null>(null)
@@ -65,6 +68,8 @@ export function useFeatureMonitor(opts: {
   enabledIdsRef.current = enabledIds
   const ensureRef = useRef(ensureFeatures)
   ensureRef.current = ensureFeatures
+  const channelMaskRef = useRef(channelMask)
+  channelMaskRef.current = channelMask
 
   const onEnabledChange = useCallback((ids: string[]) => {
     setEnabledIds(ids)
@@ -131,7 +136,7 @@ export function useFeatureMonitor(opts: {
           sampleRate: ring.sampleRate,
           windowSec: WINDOW_SEC,
           enabledFeatures: enabled,
-          channelMask: liveEegHub.featureChannelMask(),
+          channelMask: channelMaskRef.current ?? liveEegHub.featureChannelMask(),
           channelNames: liveEegHub.meta.channelNames,
         })
         if (!snap) return

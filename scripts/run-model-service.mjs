@@ -56,9 +56,11 @@ function main() {
   const backend = (argValue('--backend') || process.env.MODEL_BACKEND || '').trim().toLowerCase()
   if (backend === 'eegnet') {
     const args = [path.join(passiveRoot, 'scripts/serve_eegnet_tetris.py'), '--host', host, '--port', port,
-      '--channels', argValue('--channels') || '32', '--seed', argValue('--seed') || '20261022']
+      '--channels', argValue('--channels') || '32', '--seed', argValue('--seed') || '20261022',
+      '--step-sec', argValue('--step-sec') || '0.1']
     if (argValue('--checkpoint')) args.push('--checkpoint', argValue('--checkpoint'))
     if (argValue('--output')) args.push('--output', argValue('--output'))
+    if (argValue('--window-sec')) args.push('--window-sec', argValue('--window-sec'))
     const child = spawn(python, args, { cwd: passiveRoot, env: backendEnv(), stdio: 'inherit', windowsHide: true })
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal))
     child.on('error', error => { console.error(error.message); process.exitCode = 1 })
@@ -75,6 +77,7 @@ function main() {
   }
   const task = argValue('--task') || process.env.MODEL_REVE_TASK || 'passive_rating'
   const stepSec = argValue('--step-sec') || process.env.MODEL_STEP_SEC || defaultStepSec(task)
+  const windowSec = argValue('--window-sec') || process.env.MODEL_WINDOW_SEC
   const { freshHead, checkpointHead } = resolveReveHeadMode({ task, argv: process.argv.slice(2), env: process.env })
   if (freshHead && task === 'gaze_smr') throw new Error('gaze_smr requires a fitted subject head; fresh-head is for SMR plumbing only')
   const requestedStateFile = argValue('--state-file') || (!freshHead && !checkpointHead &&
@@ -120,6 +123,7 @@ function main() {
           '--task',
           task,
           ...(stepSec ? ['--step-sec', String(stepSec)] : []),
+          ...(windowSec ? ['--window-sec', String(windowSec)] : []),
           ...(stateFile ? ['--state-file', stateFile] : []),
           ...loraArgs,
           ...(omniEndpoint ? ['--omni-endpoint', omniEndpoint, '--omni-channels', omniChannels, '--omni-device-type', omniDeviceType] : []),

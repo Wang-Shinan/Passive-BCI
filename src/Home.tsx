@@ -12,6 +12,11 @@ const TOOLS = [
     tag: '提示式采集 · 咬牙 / 放松', accent: '#f3cc62',
   },
   {
+    path: '/focus', title: '专注与放松采集',
+    blurb: '跟随全屏提示进入专注凝视和放松放空，等量随机采集 EEG 与二分类标签。',
+    tag: '提示式采集 · 放松 / 专注', accent: '#63d6ff',
+  },
+  {
     path: '/smr-acquisition', title: 'SMR 分组采集与训练',
     blurb: '四方向随机采集。光标由随机初始化 EEGNet 驱动；组间保存原始 EEG 与试次标签，不做 LoRA。',
     tag: '分组采集 · 左手 / 右手 / 舌头 / 休息', accent: '#34d399',

@@ -4,6 +4,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
+import hashlib
 import time
 from typing import Any, Sequence
 
@@ -285,10 +286,19 @@ def l2_normalize_features(features: torch.Tensor) -> torch.Tensor:
     return F.normalize(features, p=2, dim=-1)
 
 
-def init_linear_head(head: nn.Linear) -> None:
-    """Zero weights so an untrained head is uniform, not a saturated one-hot."""
-    nn.init.zeros_(head.weight)
-    nn.init.zeros_(head.bias)
+def init_linear_head(head: nn.Linear, seed: int) -> None:
+    """Deterministically random small weights for an untrained head.
+
+    Predictions vary across windows and classes so the inference link can be
+    verified end to end, while logits stay small enough that confidence does
+    not pretend to come from a trained model. Fixed seed keeps restarts
+    reproducible; a state file or LoRA head overwrites this afterward.
+    """
+    generator = torch.Generator(device=head.weight.device)
+    generator.manual_seed(seed)
+    with torch.no_grad():
+        head.weight.uniform_(-0.15, 0.15, generator=generator)
+        head.bias.zero_()
 
 
 @dataclass(slots=True)
@@ -382,7 +392,9 @@ class ReveModelBackend:
             parameter.requires_grad_(False)
         embed_dim = int(getattr(self._model.config, "embed_dim"))
         self._head = nn.Linear(embed_dim, len(self.class_names), device=self._torch_device)
-        init_linear_head(self._head)
+        seed = int.from_bytes(hashlib.sha256('|'.join(self.class_names).encode()).digest()[:4], 'little')
+        init_linear_head(self._head, seed)
+        self.head_initialization = {'source': 'random', 'seed': seed, 'range': 0.15}
         self._apply_lora_checkpoint()
         self._head.eval()
         self.model_revision = self.encoder_id
@@ -445,7 +457,7 @@ class ReveModelBackend:
             step_sec=float(self.step_sec),
         )
         if self._head_source == 'untrained' and self._update_step == 0:
-            payload['warning'] = '分类头尚未训练：当前仅验证 REVE 推理链路，不能用于有效脑控。请先采集标签并训练。'
+            payload['warning'] = '分类头为随机初始化：预测仅验证 REVE 推理链路，不代表已训练脑控模型。'
         if self.head_initialization:
             payload['head_initialization'] = self.head_initialization
             if self.head_initialization.get('legacy_transfer') and self._update_step == 0:

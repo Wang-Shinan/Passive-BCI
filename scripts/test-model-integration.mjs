@@ -31,19 +31,16 @@ test('concurrent starts are rejected and external abort cancels ownership', asyn
   await assert.rejects(op.run(async () => 'other'), /正在进行/)
   controller.abort(); pending.resolve('too late'); await assert.rejects(a, { name: 'AbortError' })
 })
-test('recording in any tab prevents model mutation until all recordings finish', () => {
+test('concurrent model mutations are serialized; stale release cannot unlock another mutation', () => {
   const gate = new OperationGate()
-  gate.attachRecording('one'); gate.attachRecording('two')
-  assert.throws(() => gate.beginModelChange(), /录制期间/)
-  gate.detachRecording('one'); assert.throws(() => gate.beginModelChange(), /录制期间/)
-  gate.detachRecording('two'); gate.beginModelChange()()
-})
-test('model mutation prevents recording, and stale cleanup cannot unlock another mutation', () => {
-  const gate = new OperationGate(), releaseA = gate.beginModelChange()
-  assert.throws(() => gate.attachRecording('during'), /模型正在/)
-  releaseA(); const releaseB = gate.beginModelChange(); releaseA()
-  assert.throws(() => gate.assertCanRecord(), /模型正在/)
-  releaseB(); gate.attachRecording('after')
+  const releaseA = gate.beginModelChange()
+  assert.throws(() => gate.beginModelChange(), /另一项模型操作/)
+  releaseA()
+  const releaseB = gate.beginModelChange()
+  releaseA()
+  assert.throws(() => gate.beginModelChange(), /另一项模型操作/)
+  releaseB()
+  gate.beginModelChange()()
 })
 function gazeFixture(t) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'gaze-catalog-'))

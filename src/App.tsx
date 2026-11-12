@@ -17,6 +17,7 @@ import { OnlineLearnPage } from './experiments/online-learn'
 import { SmrPage } from './experiments/smr'
 import { SmrAcquisitionPage } from './experiments/smr-acquisition'
 import { JawClenchPage } from './experiments/jaw-clench'
+import { FocusAcquisitionPage } from './experiments/focus'
 import { SmrUdPage } from './experiments/smr-ud'
 import { SmrGridPage } from './experiments/smr-grid'
 import { NeuroSlidePage } from './experiments/neuroslide'
@@ -37,6 +38,7 @@ export default function App({ home, autoStartModels = true, pageHeader }: { home
         <Route path="/smr" element={<SmrPage autoStartModel={autoStartModels} />} />
         <Route path="/smr-acquisition" element={<SmrAcquisitionPage autoStartModel={autoStartModels} />} />
         <Route path="/jaw-clench" element={<JawClenchPage />} />
+        <Route path="/focus" element={<FocusAcquisitionPage />} />
         <Route path="/smr-adapt" element={<Navigate to="/smr?mode=smr" replace />} />
         <Route path="/smr-ud" element={<SmrUdPage autoStartModel={autoStartModels} />} />
         <Route path="/smr-grid" element={<SmrGridPage />} />

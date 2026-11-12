@@ -92,10 +92,10 @@ it('keeps the live model when its revision differs from the selected head', asyn
   h.acq.streaming = true; h.fresh = true
   await connectWithPrediction('s04.pt')
 })
-it('does not take over a bridge while another tab is recording', async () => {
+it('connects to the shared stream even while another tab is recording', async () => {
   h.fetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, id: 'recording' }) })
-  await expect(connectNeuroSlide(new AbortController().signal, vi.fn())).rejects.toThrow('其他页面正在录制')
-  expect(h.bridge).not.toHaveBeenCalled()
+  await connectWithPrediction()
+  expect(h.bridge).toHaveBeenCalledOnce()
 })
 it('connects a model even when its class names are not the four SMR labels', async () => {
   h.snapshot.serviceHello.class_names = ['a', 'b', 'c']

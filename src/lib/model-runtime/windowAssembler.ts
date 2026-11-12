@@ -30,14 +30,16 @@ function sameNames(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /**
- * Builds exact raw EEG windows without reading the display ring.
+ * Builds raw EEG windows from received samples without reading the display ring.
+ * Reported loss does not discard received samples; timestamps use received-sample
+ * time, and source_quality retains the source's cumulative loss counter.
  *
  * Input bridge batches are sample-major interleaved. Emitted payloads are
  * contiguous channel-major float32 ([channel, time]) for RawEEGWindow(layout=CT).
  */
 export class ModelWindowAssembler {
-  readonly windowSec: number
-  readonly stepSec: number
+  windowSec: number
+  stepSec: number
 
   private buffers: Float32Array[] = []
   private capacity = 0
@@ -81,6 +83,36 @@ export class ModelWindowAssembler {
     this.lastPacketCount = 0
   }
 
+  /**
+   * Change window/step in place, keeping the newest buffered samples so a live
+   * stream resumes emitting without waiting for a full new window. Shrinking
+   * keeps the latest min(filled, newCapacity) samples; growing keeps everything
+   * and fills forward. Returns false when the contract is invalid.
+   */
+  resize(windowSec: number, stepSec: number): boolean {
+    if (!(windowSec > 0) || !(stepSec > 0) || stepSec > windowSec) return false
+    if (windowSec === this.windowSec && stepSec === this.stepSec) return true
+    this.windowSec = windowSec
+    this.stepSec = stepSec
+    if (!this.buffers.length || !this.sampleRate) return true
+    const capacity = Math.max(1, Math.round(windowSec * this.sampleRate))
+    if (capacity === this.capacity) return true
+    const keep = Math.min(this.filled, capacity)
+    const oldCapacity = this.capacity
+    const start = (this.writeHead - keep + oldCapacity) % oldCapacity
+    this.buffers = this.buffers.map((source) => {
+      const next = new Float32Array(capacity)
+      for (let i = 0; i < keep; i++) {
+        next[i] = source[(start + i) % oldCapacity]!
+      }
+      return next
+    })
+    this.capacity = capacity
+    this.writeHead = keep % capacity
+    this.filled = keep
+    return true
+  }
+
   push(batch: ModelSourceBatch): ModelWindowPacket[] {
     this.validateBatch(batch)
     const identityChanged =
@@ -92,7 +124,6 @@ export class ModelWindowAssembler {
       !sameNames(this.channelNames, batch.channelNames)
     const discontinuity =
       identityChanged ||
-      batch.packetLoss > this.lastPacketLoss ||
       (this.lastPacketCount > 0 && batch.packetCount < this.lastPacketCount)
 
     if (!this.segmentId || discontinuity) this.beginSegment(batch)
@@ -230,6 +261,11 @@ export class ModelWindowAssembler {
         sample_count: this.capacity,
         start_time_sec: startTimeSec,
         end_time_sec: endTimeSec,
+        source_quality: {
+          sample_timing: 'received_samples',
+          gap_policy: 'retain_received_samples',
+          reported_missing_samples_total: this.lastPacketLoss,
+        },
       },
       payload: payloadValues.buffer,
     }

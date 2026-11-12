@@ -47,6 +47,39 @@ describe('session plan', () => {
     expect(buildTrials(PLANS.grouped, 42).every(t => t.task !== '2D')).toBe(true)
   })
 
+  it("UD mode builds only up/down groups, evenly split per run, seeded reproducibly", () => {
+    const plan = groupedPlan(3, 20, 'UD')
+    expect(plan.label).toBe('仅上下采集')
+    const trials = buildTrials(plan, 42)
+    expect(trials).toEqual(buildTrials(groupedPlan(3, 20, 'UD'), 42))
+    expect(trials).toHaveLength(60)
+    expect(trials.every(t => t.task === 'UD' && ['up', 'down'].includes(t.target))).toBe(true)
+    for (const run of [1, 2, 3]) {
+      const group = trials.filter(t => t.run === run)
+      expect(group).toHaveLength(20)
+      expect(group.filter(t => t.target === 'up')).toHaveLength(10)
+      expect(group.filter(t => t.target === 'down')).toHaveLength(10)
+    }
+    const small = buildTrials(groupedPlan(2, 6, 'UD'), 7)
+    expect(small).toHaveLength(12)
+    for (const run of [1, 2]) {
+      const group = small.filter(t => t.run === run)
+      expect(group.filter(t => t.target === 'up')).toHaveLength(3)
+      expect(group.filter(t => t.target === 'down')).toHaveLength(3)
+    }
+  })
+
+  it('UD mode validates trials-per-group as an even number in 2–200', () => {
+    expect(() => groupedPlan(2, 2, 'UD')).not.toThrow()
+    expect(() => groupedPlan(2, 200, 'UD')).not.toThrow()
+    for (const bad of [1, 3, 201, NaN, 1.5]) {
+      expect(() => groupedPlan(2, bad, 'UD')).toThrow()
+    }
+    expect(() => groupedPlan(0, 6, 'UD')).toThrow()
+    expect(() => groupedPlan(51, 6, 'UD')).toThrow()
+    expect(() => groupedPlan(2, 6, 'default' as '1D')).toThrow()
+  })
+
   it('cannot advance across a group boundary without explicit resume', () => {
     let session = createSession(groupedPlan(2, 4), 42)
     session = { ...session, cursor: 3, phase: 'post' }

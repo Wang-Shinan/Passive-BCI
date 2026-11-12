@@ -72,11 +72,6 @@ export async function connectSmrModel(signal: AbortSignal, progress: (message: s
   if (hello.input_source !== 'omni-sdk' && !(acqRuntime.streaming && liveEegHub.isFresh())) {
     // BCIGo is the device used in this workspace. Other already-active sources are reused above.
     // Its bridge is exclusive, so never take over another tab's active recording.
-    const response = await fetch('/api/record/active', { signal })
-    const recording = await response.json() as { ok?: boolean; id?: string | null }
-    checkCancelled(signal)
-    if (!response.ok || !recording.ok) throw new Error('无法确认采集状态，请稍后重试')
-    if (recording.id) throw new Error('其他页面正在录制 EEG；请在原采集页面结束并保存录制，再连接当前页面')
     if (acqRuntime.streaming && acqRuntime.device !== 'bcigo') {
       throw new Error('当前 EEG 来源没有新样本，请在采集调试页恢复数据流后重试')
     }

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ensureModelService, modelRuntimeHub, modelServiceStatus, modelUrlPresets, useModelRuntime, useTemporalFilter } from '../../lib/model-runtime'
-import { modelConfigurationLocked } from '../../lib/model-runtime/modelServiceApi'
 import { S04_HEAD } from '../../lib/model-runtime/subjectModels'
 import { labelIndexForTarget } from '../smr-adapt/labels'
 import { applyDualAxisPolicy, cardinalDirectionAxes, createGrid, GRID_SIGNAL_MAX_AGE_MS, keyboardVelocity, SMR_GRID_STEP_SEC, smrCardinalLogitAxes, smrLogitAxes, softGridAction, stepGrid, targetCenter, validSmrPrediction, type CorridorMode, type DualAxisPolicy, type Point } from './engine'
@@ -60,12 +59,6 @@ export function SmrGridPage() {
         await ensureGridBcigoStream(controller.signal)
         if (controller.signal.aborted) return
       }
-      const recordingResponse = await fetch('/api/record/active', { signal: controller.signal })
-      if (!recordingResponse.ok) throw new Error('无法确认采集状态，请稍后重试连接。')
-      const recording = await recordingResponse.json() as { ok?: boolean; id?: string | null }
-      if (controller.signal.aborted) return
-      if (!recording.ok) throw new Error('无法确认采集状态，请稍后重试连接。')
-      if (recording.id || modelConfigurationLocked()) throw new Error('当前正在采集；请先结束录制，再切换模型连接。')
       if (mode === 'dual') {
         const dualUrl = 'ws://127.0.0.1:8769/v1/model'
         const urlChanged = modelRuntimeHub.snapshot.url !== dualUrl
