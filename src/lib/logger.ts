@@ -1,3 +1,4 @@
+import { guiTriggerLabel, guiTriggerQueue, mapLogEventTrigger, setGuiTriggerLedger, type GuiTriggerResult } from '../acquisition/omni/guiTrigger'
 import { sampleClock } from './eeg/sampleClock'
 import { CONTEXT_SCHEMA, EVENT_SCHEMA, type SessionContextRecord } from './session/contracts'
 import { sessionHub } from './session/sessionHub'
@@ -7,7 +8,46 @@ export interface LogEvent {
   experiment: string
   type: string
   data?: Record<string, unknown>
+  eventId?: string
 }
+
+function newEventId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `ev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+setGuiTriggerLedger((record) => {
+  if (!sessionHub.info.id || sessionHub.info.id !== record.localRecordingId) return
+  sessionHub.logEvent({
+    schema: EVENT_SCHEMA,
+    t_ms: (record.sourceTms ?? 0) +
+      ((record.completedAtMs ?? record.dispatchedAtMs ?? record.requestedAtMs) - (record.sourcePerfMs ?? record.requestedAtMs)),
+    perf_ms: record.completedAtMs ?? record.dispatchedAtMs ?? record.requestedAtMs,
+    experiment: 'gui-trigger',
+    subjectId: 'ledger',
+    type: record.kind,
+    data: {
+      sourceEventId: record.sourceEventId,
+      sourceExperiment: record.sourceExperiment,
+      code: record.code,
+      label: record.label,
+      context: { ...record.context },
+      outcome: record.outcome,
+      sequence: record.sequence,
+      sample_index: record.sample_index,
+      host_time: record.host_time,
+      error: record.error,
+      sourceTms: record.sourceTms,
+      sourcePerfMs: record.sourcePerfMs,
+      requestedAtMs: record.requestedAtMs,
+      dispatchedAtMs: record.dispatchedAtMs,
+      completedAtMs: record.completedAtMs,
+    },
+    eeg: null,
+    eventId: newEventId(),
+  })
+})
 
 export interface SessionMeta {
   subjectId: string
@@ -44,15 +84,17 @@ export class SessionLogger {
     }
   }
 
-  log(type: string, data?: Record<string, unknown>): void {
+  log(type: string, data?: Record<string, unknown>): Promise<GuiTriggerResult | null> | null {
     const eeg = sampleClock.snapshot()
     const t = performance.now() - this.t0
     const perf_ms = performance.now()
+    const eventId = newEventId()
     this.events.push({
       t,
       experiment: this.meta.experiment,
       type,
       data: eeg ? { ...data, eeg } : data,
+      eventId,
     })
     if (this.events.length > EVENT_RING) {
       this.events.splice(0, this.events.length - EVENT_RING)
@@ -66,6 +108,43 @@ export class SessionLogger {
       type,
       data,
       eeg,
+      eventId,
+    })
+    const mapped = mapLogEventTrigger(this.meta.experiment, type, data)
+    if (!mapped) return null
+    return guiTriggerQueue.enqueue(mapped.code, guiTriggerLabel(this.meta.experiment, eventId, mapped), {
+      sourceEventId: eventId,
+      sourceExperiment: this.meta.experiment,
+      sourceTms: t,
+      sourcePerfMs: perf_ms,
+    })
+  }
+
+  logTo(recordingId: string, type: string, data?: Record<string, unknown>): void {
+    const eeg = sampleClock.snapshot()
+    const t = performance.now() - this.t0
+    const perf_ms = performance.now()
+    const eventId = newEventId()
+    this.events.push({
+      t,
+      experiment: this.meta.experiment,
+      type,
+      data: eeg ? { ...data, eeg } : data,
+      eventId,
+    })
+    if (this.events.length > EVENT_RING) {
+      this.events.splice(0, this.events.length - EVENT_RING)
+    }
+    sessionHub.logEventFor(recordingId, {
+      schema: EVENT_SCHEMA,
+      t_ms: t,
+      perf_ms,
+      experiment: this.meta.experiment,
+      subjectId: this.meta.subjectId,
+      type,
+      data,
+      eeg,
+      eventId,
     })
   }
 

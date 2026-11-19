@@ -1,5 +1,6 @@
 import { sampleClock, type SampleClockDump } from '../../lib/eeg/sampleClock'
 import { sessionHub } from '../../lib/session/sessionHub'
+import { drainGuiTriggers } from '../omni/guiTrigger'
 
 class RecordConflict extends Error {}
 
@@ -31,12 +32,15 @@ export interface RecordStopResult {
   path?: string
   rel?: string
   error?: string
+  interrupted?: boolean
 }
 
 export interface RecordFinishExtra {
   clock?: SampleClockDump
   expectedBytes?: number
   incomplete?: boolean
+  interrupted?: boolean
+  interruptionReason?: string
 }
 
 export interface RecordSink {
@@ -174,6 +178,7 @@ class DiskSink implements RecordSink {
 
   async finish(extra?: RecordFinishExtra): Promise<{ name: string; path?: string; rel?: string }> {
     if (sessionHub.info.id === this.id) {
+      await drainGuiTriggers()
       await sessionHub.flush()
       sessionHub.detach()
     }
@@ -215,6 +220,7 @@ export class BinRecorder {
   private startOptions: RecordStartOptions = { filenamePrefix: 'omni_ads1299' }
   get restartOptions(): RecordStartOptions { return structuredClone(this.startOptions) }
   private sink: RecordSink | null = null
+  private stopping: Promise<RecordStopResult | null> | null = null
   private flushChain: Promise<void> = Promise.resolve()
   private flushQueuedBytes = 0
   private readonly flushBytes: number
@@ -254,6 +260,7 @@ export class BinRecorder {
   async start(opts: RecordStartOptions = { filenamePrefix: 'omni_ads1299' }, modelChangeSignal?: AbortSignal): Promise<RecordSinkKind> {
     modelChangeSignal?.throwIfAborted()
     this.startOptions = structuredClone(opts)
+    if (this.stopping) await this.stopping.then(() => undefined, () => undefined)
     if (this.startedAt !== null) await this.discard()
     this.pending = new Uint8Array(this.flushBytes)
     this.pendingLen = 0
@@ -288,31 +295,49 @@ export class BinRecorder {
     this.bytes += frameRaw.byteLength
   }
 
-  async stop(): Promise<RecordStopResult | null> {
+  async stop(options?: { interrupted?: boolean; interruptionReason?: string }): Promise<RecordStopResult | null> {
+    if (this.stopping) return this.stopping
     if (this.startedAt === null) return null
+    const task = this.doStop(options)
+    this.stopping = task
+    try {
+      return await task
+    } finally {
+      if (this.stopping === task) this.stopping = null
+    }
+  }
+
+  private async doStop(options?: { interrupted?: boolean; interruptionReason?: string }): Promise<RecordStopResult | null> {
     this.enqueueTail()
     // Freeze the sample boundary before awaiting disk IO; incoming rest samples
     // must not extend the recording or shift its event-to-sample origin.
     this.startedAt = null
     const clock = sampleClock.dump()
-    let incomplete = false
-    try {
-      await this.flushChain
-    } catch (err) {
-      incomplete = true
-      console.error('[record] flush failed', err)
-    }
+    const flush = this.flushChain
     const bytes = this.bytes
     const name = this.filename
     const sink = this.sink
     const kind = sink?.kind ?? 'memory'
+    let incomplete = false
+    try {
+      await flush
+    } catch (err) {
+      incomplete = true
+      console.error('[record] flush failed', err)
+    }
     this.resetLocal()
     if (bytes === 0) {
       await sink?.abort()
       return null
     }
     try {
-      const done = await sink?.finish({ ...(clock.sampleIndex > 0 ? { clock } : {}), expectedBytes: bytes, incomplete })
+      const done = await sink?.finish({
+        ...(clock.sampleIndex > 0 ? { clock } : {}),
+        expectedBytes: bytes,
+        incomplete,
+        interrupted: options?.interrupted === true,
+        interruptionReason: options?.interruptionReason,
+      })
       if (incomplete) throw new Error('录制写入失败；保留中断数据，不作为完整会话')
       return {
         bytes,
@@ -320,6 +345,7 @@ export class BinRecorder {
         sink: kind,
         path: done?.path,
         rel: done?.rel,
+        interrupted: options?.interrupted === true || undefined,
       }
     } catch (err) {
       console.error('[record] finish failed', err)
@@ -328,6 +354,7 @@ export class BinRecorder {
   }
 
   async discard(): Promise<void> {
+    if (this.stopping) await this.stopping.then(() => undefined, () => undefined)
     const sink = this.sink
     this.resetLocal()
     if (sink) await sink.abort()

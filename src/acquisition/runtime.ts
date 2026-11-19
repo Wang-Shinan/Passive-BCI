@@ -2,6 +2,7 @@
 
 import { liveEegHub } from '../lib/eeg/liveHub'
 import { sampleClock } from '../lib/eeg/sampleClock'
+import type { OmniGuiSession } from './omni/guiSession'
 import { LiveIirFilter } from './filter/iir'
 import { CHANNELS, FRAME_BYTES, FS, channelLsbUv, defaultChannelConfig } from './protocol/constants'
 import { ConfigAckScanner, type ConfigAck } from './protocol/configAck'
@@ -60,6 +61,7 @@ export type AcquisitionUiSink = {
   onBridgeBatch: (batch: BridgeBatch) => void
   /** 'gui' link /v1/status diagnostics forwarded to the mounted page (optional). */
   onGuiStatus?: (status: GuiStatus) => void
+  onBridgeReset?: (phase: 'reset' | 'resume') => void
 }
 
 export const acqRuntime = {
@@ -69,7 +71,7 @@ export const acqRuntime = {
   recorder: new BinRecorder(),
   neuracle: null as NeuracleWsClient | null,
   bcigo: null as BcigoWsClient | null,
-  omni: null as OmniWsClient | OmniGuiHttpClient | null,
+  omni: null as OmniWsClient | OmniGuiHttpClient | OmniGuiSession | null,
   /** Latest GET /v1/status diagnostics from a 'gui' link; diagnostics only, no stream resets. */
   omniGuiStatus: null as GuiStatus | null,
   omniLink: 'api' as OmniLink,
@@ -272,6 +274,16 @@ export function subscribeRawBridgeBatches(
 /** Start a new continuity segment before accepting bridge samples. */
 export function beginRawBridgeStream(): void {
   rawBridgeStreamId += 1
+}
+
+export function clearBridgeContinuity(): void {
+  let dropped = 0
+  while (bridgeQ.length) dropped += bridgeQ.shift()!.samples
+  if (dropped) addPendingSamples(-dropped)
+  beginRawBridgeStream()
+  liveEegHub.clearSamples()
+  acqRuntime.filter.reset()
+  sampleClock.reset()
 }
 
 function ingestSerialToHub(chunk: Uint8Array): void {

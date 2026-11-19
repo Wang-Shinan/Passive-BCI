@@ -108,11 +108,14 @@ export async function startExperimentRecording(opts: {
   }
 }
 
-export async function stopExperimentRecording(): Promise<RecordControlResult> {
+export async function stopExperimentRecording(options?: {
+  interrupted?: boolean
+  interruptionReason?: string
+}): Promise<RecordControlResult> {
   if (!acqRuntime.recorder.recording) {
     return { ok: false, message: '当前没有进行中的录制' }
   }
-  const saved = await acqRuntime.recorder.stop()
+  const saved = await acqRuntime.recorder.stop(options)
   if (saved?.error) return { ok: false, message: `录制保存失败：${saved.error}` }
   if (!saved) return { ok: true, message: '本局没有 EEG 样本，未保留目录' }
   const where = saved.rel ?? saved.name

@@ -17,6 +17,7 @@ import {
   type OmniStreamKind,
 } from './omni/client'
 import { OmniGuiHttpClient, type GuiStatus } from './omni/guiClient'
+import { OmniGuiSession } from './omni/guiSession'
 import { sequenceGaps } from './omni/protocol'
 import { omniElectrodePositions } from './omni/positions'
 import { isOmniDeviceType, omniChannelCount, omniEndpointStorageKey, type OmniDeviceType } from './omni/device'
@@ -457,7 +458,7 @@ export function AcquisitionDebugPage() {
   const transportRef = useRef(acqRuntime.transport)
   const neuracleRef = useRef<NeuracleWsClient | null>(acqRuntime.neuracle)
   const bcigoRef = useRef<BcigoWsClient | null>(acqRuntime.bcigo)
-  const omniRef = useRef<OmniWsClient | OmniGuiHttpClient | null>(acqRuntime.omni)
+  const omniRef = useRef<OmniWsClient | OmniGuiHttpClient | OmniGuiSession | null>(acqRuntime.omni)
   const parserRef = useRef<AdsFrameParser | null>(acqRuntime.parser)
   const filterRef = useRef(acqRuntime.filter)
   const recorderRef = useRef(acqRuntime.recorder)
@@ -701,6 +702,20 @@ export function AcquisitionDebugPage() {
       },
       onBridgeBatch: (batch) => ingestBridgeBatchRef.current(batch),
       onGuiStatus: (s) => setGuiStatus(s),
+      onBridgeReset: (phase) => {
+        if (phase === 'resume') {
+          streamingRef.current = acqRuntime.streaming
+          return
+        }
+        streamingRef.current = false
+        writeHeadRef.current = 0
+        filledRef.current = 0
+        lastSeqRef.current = null
+        filterRef.current.reset()
+        for (const ring of rawRingRef.current) ring.fill(0)
+        for (const ring of filtRingRef.current) ring.fill(0)
+        validRingRef.current.fill(0)
+      },
     })
     return () => {
       setAcquisitionUi(null)
@@ -941,7 +956,7 @@ export function AcquisitionDebugPage() {
     bcigoRef.current?.disconnect()
     bcigoRef.current = null
     acqRuntime.bcigo = null
-    omniRef.current?.disconnect()
+    await omniRef.current?.disconnect()
     omniRef.current = null
     acqRuntime.omni = null
     acqRuntime.streaming = false
@@ -1021,7 +1036,7 @@ export function AcquisitionDebugPage() {
       bcigoRef.current?.disconnect()
       bcigoRef.current = null
       acqRuntime.bcigo = null
-      omniRef.current?.disconnect()
+      await omniRef.current?.disconnect()
       omniRef.current = null
       acqRuntime.omni = null
       acqRuntime.device = 'neuracle'
@@ -1125,7 +1140,7 @@ export function AcquisitionDebugPage() {
     if (sdk && !sdkEndpoint) { setDetail('请先搜索并选择 BLE 设备。'); return }
     void (async () => {
       stopDemo()
-      omniRef.current?.disconnect()
+      await omniRef.current?.disconnect()
       neuracleRef.current?.disconnect()
       neuracleRef.current = null
       acqRuntime.neuracle = null
@@ -1242,7 +1257,7 @@ export function AcquisitionDebugPage() {
         onError: (message) => setDetail(message),
       }
       const client = gui
-        ? new OmniGuiHttpClient({
+        ? new OmniGuiSession({
             ...clientCallbacks,
             onGuiStatus: (s) => {
               acqRuntime.omniGuiStatus = s
@@ -1342,7 +1357,7 @@ export function AcquisitionDebugPage() {
       neuracleRef.current?.disconnect()
       neuracleRef.current = null
       acqRuntime.neuracle = null
-      omniRef.current?.disconnect()
+      await omniRef.current?.disconnect()
       omniRef.current = null
       acqRuntime.omni = null
       acqRuntime.device = 'bcigo'

@@ -274,6 +274,15 @@ class LiveEegHub {
     this.emit()
   }
 
+  clearSamples(): void {
+    this.writeHead = 0
+    this.filled = 0
+    this.lastAt = 0
+    this.liveLatch = false
+    for (const buf of this.buffers) buf.fill(0)
+    this.emit()
+  }
+
   isFresh(maxAgeMs = LIVE_FRESH_MS): boolean {
     if (this.link !== 'streaming' && this.link !== 'demo') {
       this.liveLatch = false

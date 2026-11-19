@@ -20,6 +20,8 @@ export class SessionHub {
   private contextTimer: ReturnType<typeof setTimeout> | null = null
   private listeners = new Set<(info: SessionHubInfo) => void>()
   private flushChain: Promise<void> = Promise.resolve()
+  private deferred = new Map<string, Set<Promise<unknown>>>()
+  private finished = new Set<string>()
 
   get info(): SessionHubInfo {
     return { active: this.id !== null, id: this.id, rel: this.rel }
@@ -49,6 +51,7 @@ export class SessionHub {
 
   detach(): void {
     this.clearTimer()
+    if (this.id) this.finished.add(this.id)
     this.id = null
     this.rel = null
     this.eventQ = []
@@ -71,6 +74,45 @@ export class SessionHub {
       this.eventTimer = null
       void this.flushEvents()
     }, CONTEXT_FLUSH_MS)
+  }
+
+  logEventFor(id: string, record: SessionEventRecord): void {
+    if (this.finished.has(id)) {
+      console.error('[session] late event dropped for finished recording', id)
+      return
+    }
+    if (this.id === id) {
+      this.logEvent(record)
+      return
+    }
+    const line = JSON.stringify(record) + '\n'
+    this.flushChain = this.flushChain.then(async () => {
+      const res = await fetch('/api/record/' + id + '/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-ndjson' },
+        body: line,
+      })
+      if (!res.ok) throw new Error('record events failed (' + res.status + ')')
+    }).catch((err) => {
+      console.error('[session] late event flush failed', err)
+    })
+  }
+
+  defer(id: string, work: Promise<unknown>): void {
+    if (this.finished.has(id)) {
+      console.error('[session] deferred work dropped for finished recording', id)
+      return
+    }
+    let set = this.deferred.get(id)
+    if (!set) {
+      set = new Set()
+      this.deferred.set(id, set)
+    }
+    set.add(work)
+    void work.finally(() => {
+      set.delete(work)
+      if (set.size === 0 && this.deferred.get(id) === set) this.deferred.delete(id)
+    })
   }
 
   logContext(record: SessionContextRecord): void {
@@ -118,6 +160,11 @@ export class SessionHub {
 
   async flush(): Promise<void> {
     this.clearTimer()
+    for (let i = 0; i < 8; i++) {
+      const set = this.id ? this.deferred.get(this.id) : undefined
+      if (!set || !set.size) break
+      await Promise.allSettled([...set])
+    }
     await Promise.all([this.flushEvents(), this.flushContext()])
     await this.flushChain.catch(() => undefined)
   }

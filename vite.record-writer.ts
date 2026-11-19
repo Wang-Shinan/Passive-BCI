@@ -72,6 +72,7 @@ type SessionManifest = {
     context: string
   }
   eeg: Record<string, unknown> | null
+  interruption?: { reason?: string }
   experiment: string | null
   subjectId: string | null
   notes?: string
@@ -564,12 +565,21 @@ export function recordWriterPlugin(): Plugin {
           const bytes = session.bytes
           const { stem, binPath, dirPath } = session
           let clock: unknown = null
+          let interrupted = false
+          let interruptionReason: string | undefined
           try {
             const raw = await readBody(req)
             if (raw.byteLength) {
-              const parsed = JSON.parse(raw.toString('utf8')) as { clock?: unknown; expectedBytes?: number; incomplete?: boolean }
+              const parsed = JSON.parse(raw.toString('utf8')) as {
+                clock?: unknown; expectedBytes?: number; incomplete?: boolean
+                interrupted?: boolean; interruptionReason?: unknown
+              }
               clock = parsed.clock ?? null
               incomplete ||= parsed.incomplete === true || (parsed.expectedBytes !== undefined && parsed.expectedBytes !== bytes)
+              interrupted = parsed.interrupted === true
+              if (typeof parsed.interruptionReason === 'string') {
+                interruptionReason = parsed.interruptionReason.slice(0, 400)
+              }
             }
           } catch {
             clock = null
@@ -588,14 +598,18 @@ export function recordWriterPlugin(): Plugin {
               : null
           writeEegSidecar(session, {
             stoppedAt: new Date().toISOString(),
-            status: incomplete ? 'interrupted' : bytes === 0 ? 'empty' : 'complete',
+            status: incomplete || interrupted ? 'interrupted' : bytes === 0 ? 'empty' : 'complete',
             clock: clockSummary,
+            ...(interruptionReason !== undefined ? { interruptionReason } : {}),
           })
           if (clock && bytes > 0) {
             writeFileSync(session.idxPath, `${JSON.stringify(clock)}\n`, 'utf8')
           }
           session.manifest.stoppedAt = new Date().toISOString()
-          session.manifest.status = incomplete ? 'interrupted' : bytes === 0 ? 'empty' : 'complete'
+          session.manifest.status = incomplete || interrupted ? 'interrupted' : bytes === 0 ? 'empty' : 'complete'
+          if (interruptionReason !== undefined) {
+            session.manifest.interruption = { reason: interruptionReason }
+          }
           session.manifest.bytes = bytes
           session.manifest.clock = {
             ...(session.manifest.clock ?? {}),

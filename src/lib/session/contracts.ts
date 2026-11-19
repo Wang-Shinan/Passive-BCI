@@ -13,6 +13,7 @@ export type SessionEventRecord = {
   type: string
   data?: Record<string, unknown>
   eeg: SampleClockSnapshot | null
+  eventId?: string
 }
 
 export type SessionContextRecord = {
@@ -31,4 +32,5 @@ export type SessionBindMeta = {
   game?: string
   seed?: number
   notes?: string
+  runId?: string
 }
