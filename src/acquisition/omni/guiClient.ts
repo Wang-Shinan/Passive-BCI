@@ -2,11 +2,13 @@
 import { decodeGuiDataPage, type GuiDataPage } from './guiProtocol'
 import { OMNI_API_SCHEMA, OMNI_STREAM_RAW, type OmniDataBatch, type OmniHello } from './protocol'
 import type { OmniClientOptions } from './client'
+import { DEFAULT_OMNI_GUI_PORT, omniGuiOrigin, omniGuiProxyPath } from './guiEndpoint'
 
 /** GET /v1/status diagnostics; every field optional — missing means unknown, not 0. */
 export type GuiStatus = {
   schema_version?: number
   connected?: boolean
+  transport?: string
   streaming?: boolean
   api_control_enabled?: boolean
   sample_rate_hz?: number
@@ -39,7 +41,8 @@ export type GuiInterruption = {
 }
 
 export type OmniGuiClientOptions = OmniClientOptions & {
-  /** same-origin proxy prefix; the real service is http://127.0.0.1:8766 */
+  port?: number
+  /** Same-origin proxy prefix override. */
   basePath?: string
   fetchImpl?: FetchLike
   onGuiStatus?: (status: GuiStatus) => void
@@ -73,6 +76,7 @@ export function decodeGuiStatus(value: unknown): GuiStatus {
   return {
     schema_version: schema,
     connected: typeof raw.connected === 'boolean' ? raw.connected : undefined,
+    transport: typeof raw.transport === 'string' ? raw.transport : undefined,
     streaming: typeof raw.streaming === 'boolean' ? raw.streaming : undefined,
     api_control_enabled: typeof raw.api_control_enabled === 'boolean' ? raw.api_control_enabled : undefined,
     sample_rate_hz: optionalNumber(raw.sample_rate_hz),
@@ -123,7 +127,7 @@ export class OmniGuiHttpClient {
 
   constructor(opts: OmniGuiClientOptions = {}) {
     this.opts = opts
-    this.base = opts.basePath ?? '/api/omni-gui'
+    this.base = opts.basePath ?? omniGuiProxyPath(opts.port ?? DEFAULT_OMNI_GUI_PORT)
     this.fetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, init))
   }
 
@@ -138,7 +142,7 @@ export class OmniGuiHttpClient {
     this.lastSeq = null
     this.packetCount = 0
     this.packetLoss = 0
-    this.opts.onStatus?.('connecting', '正在连接 OmniBCI GUI HTTP 服务（127.0.0.1:8766）…')
+    this.opts.onStatus?.('connecting', `正在连接 OmniBCI GUI HTTP 服务（${omniGuiOrigin(this.opts.port ?? DEFAULT_OMNI_GUI_PORT)}）…`)
     void this.start(token)
   }
 
@@ -282,7 +286,7 @@ export class OmniGuiHttpClient {
     const status = await this.fetchStatus(token)
     if (!this.alive(token) || status === null) {
       if (status === null && this.alive(token)) {
-        this.fail(token, '无法连接 OmniBCI GUI HTTP 服务（/v1/status）。请确认 GUI 正在运行且 8766 端口可达。')
+        this.fail(token, `无法连接 OmniBCI GUI HTTP 服务（${omniGuiOrigin(this.opts.port ?? DEFAULT_OMNI_GUI_PORT)}/v1/status）。`)
       }
       return
     }

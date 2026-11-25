@@ -18,6 +18,22 @@ function sampleDelta(writeHead: number, lastWriteHead: number, bufLen: number): 
   return (((writeHead - lastWriteHead) % bufLen) + bufLen) % bufLen
 }
 
+function rawChannelCenter(buffer: Float32Array | undefined, head: number, count: number): number {
+  let low = Infinity
+  let high = -Infinity
+  if (buffer?.length) {
+    let i = (head - count + buffer.length) % buffer.length
+    for (let n = 0; n < count; n++) {
+      const value = buffer[i]!
+      if (++i === buffer.length) i = 0
+      if (!Number.isFinite(value)) continue
+      low = Math.min(low, value)
+      high = Math.max(high, value)
+    }
+  }
+  return low === Infinity ? 0 : low + (high - low) / 2
+}
+
 export interface WaveformSnapshot {
   buffers: Float32Array[]
   writeHead: number
@@ -36,6 +52,7 @@ export interface WaveformCanvasProps {
   theme?: 'dark' | 'omni'
   /** Collect-style left-to-right overwrite vs paper-tape scroll. */
   scan?: 'scroll' | 'sweep'
+  centerRawChannels?: boolean
   showChannelLabels?: boolean
   onChannelClick?: (index: number) => void
   onChannelDblClick?: (index: number) => void
@@ -52,6 +69,7 @@ export function WaveformCanvas({
   fill = false,
   theme = 'dark',
   scan = 'scroll',
+  centerRawChannels = false,
   showChannelLabels = true,
   onChannelClick,
   onChannelDblClick,
@@ -72,6 +90,7 @@ export function WaveformCanvas({
     fill,
     theme,
     scan,
+    centerRawChannels,
     showChannelLabels,
   })
   propsRef.current = {
@@ -84,6 +103,7 @@ export function WaveformCanvas({
     fill,
     theme,
     scan,
+    centerRawChannels,
     showChannelLabels,
   }
 
@@ -123,7 +143,7 @@ export function WaveformCanvas({
       if (!ctx || !tctx || !sctx) return
       const t0 = performance.now()
       const p = propsRef.current
-      const sweep = p.scan === 'sweep'
+      const sweep = p.scan === 'sweep' && !p.centerRawChannels
       const visibleIdx: number[] = []
       for (let i = 0; i < p.channelNames.length; i++) {
         if (p.visibleChannels[i] !== false) visibleIdx.push(i)
@@ -152,7 +172,7 @@ export function WaveformCanvas({
       const avail = Math.min(filled, displaySamples)
       const labelW = p.showChannelLabels ? 52 : 8
       const plotW = Math.max(1, cssW - labelW - 8)
-      const key = `${cssW}x${cssH}:${nVis}:${p.yScaleUv}:${p.windowSec}:${p.sampleRate}:${labelW}:${visibleIdx.length}:${p.scan}`
+      const key = `${cssW}x${cssH}:${nVis}:${p.yScaleUv}:${p.windowSec}:${p.sampleRate}:${labelW}:${visibleIdx.join(',')}:${p.scan}:${p.centerRawChannels}`
 
       const tw = plotW
       const th = Math.max(1, cssH - TIME_AXIS_PX)
@@ -196,6 +216,9 @@ export function WaveformCanvas({
       const shownAvail = avail
       const reset = layoutReset || bufReset
       const amp = PX_PER_CM / Math.max(1e-6, p.yScaleUv)
+      const rawCenters = p.centerRawChannels
+        ? visibleIdx.map(ch => rawChannelCenter(buffers[ch], shownHead, shownAvail))
+        : undefined
 
       const drawCols = (col0: number, col1: number, head: number, span: number) => {
         const origin = (((head - span) % bufLen) + bufLen) % bufLen
@@ -207,7 +230,10 @@ export function WaveformCanvas({
           const ch = visibleIdx[row]!
           const buf = buffers[ch]
           if (!buf) continue
-          const midY = row * rowH + rowH / 2
+          const top = row * rowH
+          const bottom = top + rowH
+          const midY = top + rowH / 2
+          const center = rawCenters?.[row] ?? 0
           tctx.fillStyle = pal[ch % pal.length]!
           for (let col = col0; col < col1; col++) {
             const i0 = (col * samplesPerCol) | 0
@@ -217,12 +243,20 @@ export function WaveformCanvas({
             let maxV = -Infinity
             for (let i = i0; i <= i1; i++) {
               const v = buf[(origin + i) % bufLen]!
+              if (!Number.isFinite(v)) continue
               if (v < minV) minV = v
               if (v > maxV) maxV = v
             }
             if (minV === Infinity) continue
-            const yHi = midY - maxV * amp
-            tctx.fillRect(col, yHi, 1, Math.max(1, midY - minV * amp - yHi))
+            const yHi = midY - (maxV - center) * amp
+            const yLow = midY - (minV - center) * amp
+            if (p.centerRawChannels) {
+              const first = Math.max(top, yHi)
+              const last = Math.min(bottom, Math.max(yHi + 1, yLow))
+              if (last > first) tctx.fillRect(col, first, 1, last - first)
+            } else {
+              tctx.fillRect(col, yHi, 1, Math.max(1, yLow - yHi))
+            }
           }
         }
         tctx.restore()
@@ -316,7 +350,7 @@ export function WaveformCanvas({
             mode = 'full'
             penCol = lastCol
           }
-        } else if (reset || (full && !scrolling)) {
+        } else if (reset || p.centerRawChannels || (full && !scrolling)) {
           tctx.setTransform(1, 0, 0, 1, 0, 0)
           tctx.fillStyle = bg
           tctx.fillRect(0, 0, tw, th)
@@ -471,8 +505,10 @@ export function WaveformCanvas({
       ctx.fillRect(labelW + 8, 2, 480, 16)
       ctx.fillStyle = omni ? '#5d6870' : '#9aa8c7'
       ctx.font = '11px IBM Plex Sans, sans-serif'
+      const centerText = rawCenters?.length === 1 ? `中心 ${rawCenters[0]!.toFixed(1)} μV · ` : ''
+      const scaleText = `${centerText}${p.yScaleUv} μV/cm`
       ctx.fillText(
-        `${p.yScaleUv} μV/cm · ${spanSec.toFixed(1)}s · ${sweep ? '扫描' : mode} ${ms.toFixed(1)}ms · ${nVis}ch`,
+        `${scaleText} · ${spanSec.toFixed(1)}s · ${sweep ? '扫描' : mode} ${ms.toFixed(1)}ms · ${nVis}ch`,
         labelW + 8,
         14,
       )

@@ -15,6 +15,7 @@ from bci_dayloop.serving.reve import (
     normalize_reve_task,
 )
 from bci_dayloop.serving.reve_lora import default_stieger_lora_checkpoint
+from bci_dayloop.serving.reve_filter import DEFAULT_REVE_FILTER, REVE_FILTER_MODES, validate_custom_filter
 from bci_dayloop.serving.server import run_model_service
 from bci_dayloop.serving.tcp_broadcast import DEFAULT_TCP_PORT
 
@@ -48,6 +49,9 @@ def main() -> None:
         ),
     )
     parser.add_argument("--lr", type=float, default=0.05)
+    parser.add_argument("--filter-mode", choices=REVE_FILTER_MODES, default=DEFAULT_REVE_FILTER,
+                        help="Select the input filter preset or use a custom band.")
+    parser.add_argument("--custom-filter", type=json.loads, help="JSON object containing lowHz, highHz, and useNotch.")
     parser.add_argument(
         "--window-sec",
         type=float,
@@ -55,7 +59,9 @@ def main() -> None:
         default=2.0,
         help="Live decode window length in seconds. S04 state-files pin their own recorded window.",
     )
-    parser.add_argument("--state-file", type=Path, default=None)
+    state = parser.add_mutually_exclusive_group()
+    state.add_argument("--state-file", type=Path, help="Load this existing classification head or fail startup.")
+    state.add_argument("--resume-state-file", type=Path, help="Resume a head, or initialize when no checkpoint exists yet.")
     parser.add_argument(
         "--checkpoint-root",
         type=Path,
@@ -73,6 +79,8 @@ def main() -> None:
         action="store_true",
         help="Do not auto-load the Stieger SMR LoRA when task=smr_control.",
     )
+    parser.add_argument("--require-lora-head", action="store_true",
+                        help="Require the LoRA checkpoint to provide all classes for the requested task.")
     parser.add_argument("--tcp-host", default="0.0.0.0", help="LAN follow TCP bind host.")
     parser.add_argument("--tcp-port", type=int, default=DEFAULT_TCP_PORT)
     parser.add_argument("--no-tcp", action="store_true", help="Disable JSONL TCP follow stream.")
@@ -84,6 +92,10 @@ def main() -> None:
     parser.add_argument("--omni-positions", help="Optional JSON array of XYZ triples, one per channel, metres in the REVE position-bank frame.")
     parser.add_argument('--model-dir', type=Path, help='Explicit complete backbone directory')
     args = parser.parse_args()
+    try:
+        custom_filter = validate_custom_filter(args.custom_filter) if args.filter_mode == 'custom' else None
+    except ValueError as error:
+        parser.error(str(error))
     if args.task == 'smr_dual_axis':
         if args.state_file is None:
             parser.error('smr_dual_axis requires a dual-axis manifest --state-file')
@@ -91,7 +103,8 @@ def main() -> None:
             parser.error('S04 dual-axis models require the trained 31 EEG electrodes; Omni input needs its own validated model')
         from bci_dayloop.serving.reve_dual_axis import DualAxisReveBackend
         backend = DualAxisReveBackend(args.checkpoint_root / f'reve-{args.size}', args.checkpoint_root / 'reve-positions',
-            args.state_file, device=args.device, step_sec=args.step_sec or .5)
+            args.state_file, device=args.device, step_sec=args.step_sec or .5,
+            filter_mode=args.filter_mode, custom_filter=custom_filter)
         backend.load()
         run_model_service(backend, host=args.host, port=args.port, tcp_host=args.tcp_host, tcp_port=args.tcp_port, tcp_enabled=not args.no_tcp)
         return
@@ -130,8 +143,12 @@ def main() -> None:
         step_sec=args.step_sec,
         window_sec=args.window_sec,
         lr=args.lr,
-        state_file=args.state_file,
+        state_file=args.state_file or args.resume_state_file,
+        allow_missing_state_file=args.resume_state_file is not None,
         lora_checkpoint=lora_checkpoint,
+        require_lora_head=args.require_lora_head,
+        filter_mode=args.filter_mode,
+        custom_filter=custom_filter,
     )
     backend.load()
     if omni_config is not None and omni_config.electrode_positions is None:
@@ -145,7 +162,7 @@ def main() -> None:
         f"task={backend.task} classes={len(backend.class_names)} "
         f"encoder={backend.encoder_id} "
         f"strategy={backend.strategy} window={backend.window_sec:g}s "
-        f"step={backend.step_sec:g}s target={backend.target_hz:g}Hz{state_note}"
+        f"step={backend.step_sec:g}s target={backend.target_hz:g}Hz filter={backend.effective_filter_mode}{state_note}"
     )
     if omni_config is not None:
         import asyncio

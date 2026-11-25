@@ -2,9 +2,11 @@ import type { ModelServiceBackend, ModelServiceEnsureResult, ModelHeadOption } f
 export type { ModelServiceBackend, ModelServiceEnsureResult, ModelHeadOption, GazeModelReport } from './modelServiceTypes'
 import { acqRuntime } from '../../acquisition/runtime'
 import { sessionHub } from '../session/sessionHub'
+import { SessionLogger } from '../logger'
 import { withRecordingTransition } from './recordingTransition'
 import { modelOperation } from './modelOperation'
 import { currentModelSubject, preferredModelHead, saveModelHeadPreference } from './modelHeadPreference'
+import { loadReveFilterSettings, sameReveCustomFilter, type ReveCustomFilter, type ReveFilterMode, type ReveFilterSettings } from './reveFilter'
 export { preferredModelHead, subscribeModelHeadPreference } from './modelHeadPreference'
 
 let appliedModel: ModelServiceEnsureResult | null = null
@@ -18,7 +20,7 @@ function publishAppliedModel(value: ModelServiceEnsureResult | null): void {
   const key = JSON.stringify(value && { running: value.running, starting: value.starting, task: value.task,
     owned: value.owned, pid: value.pid, loadedHead: value.loadedHead,
     backend: value.backend, weightId: value.weightId, headId: value.headId, configurationKey: value.configurationKey, modelRevision: value.modelRevision,
-    gazeReport: value.gazeReport })
+    gazeReport: value.gazeReport, reveFilterMode: value.reveFilterMode, reveCustomFilter: value.reveCustomFilter })
   if (key === appliedKey) return
   appliedKey = key; appliedModel = value
   for (const fn of appliedListeners) fn()
@@ -64,12 +66,21 @@ export async function ensureModelService(options?: {
   task?: string
   stepSec?: number
   windowSec?: number
+  reveFilterMode?: ReveFilterMode
+  reveCustomFilter?: ReveCustomFilter
   force?: boolean
   signal?: AbortSignal
 }): Promise<ModelServiceEnsureResult> {
   const subjectId = currentModelSubject()
   const headId = options?.headId ?? preferredModelHead(options?.task, subjectId)
-  const sdkSource = (options?.backend ?? 'reve') === 'reve' && acqRuntime.device === 'omni' && acqRuntime.omniLink === 'sdk'
+  const backend = options?.backend ?? 'reve'
+  const preferredFilter = loadReveFilterSettings()
+  const reveFilterMode = backend === 'reve' ? options?.reveFilterMode ?? preferredFilter.reveFilterMode : undefined
+  const reveCustomFilter = reveFilterMode === 'custom'
+    ? options?.reveCustomFilter ?? preferredFilter.reveCustomFilter : undefined
+  // Flex Ver2 selects 16 source channels in the browser, including for SDK capture.
+  const sdkSource = backend === 'reve' && acqRuntime.device === 'omni' &&
+    acqRuntime.omniLink === 'sdk' && !acqRuntime.omniFlexVer2.enabled
   if (sdkSource && !acqRuntime.omni) throw new Error('请先在采集调试页连接 SDK BLE 设备')
   let epoch = mutationEpoch
   // Latest control wins: supersede any in-flight operation instead of rejecting this one.
@@ -81,8 +92,8 @@ export async function ensureModelService(options?: {
     runtimeControl?.prepareManaged?.()
     const res = await fetch('/api/model-service/ensure', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ backend: options?.backend ?? 'reve', task: options?.task,
-        headId: (options?.backend ?? 'reve') === 'reve' ? headId : undefined,
+      body: JSON.stringify({ backend, task: options?.task,
+        headId: backend === 'reve' ? headId : undefined, reveFilterMode, reveCustomFilter,
         weightId: options?.weightId, eegnetChannels: options?.eegnetChannels, eegnetSeed: options?.eegnetSeed,
         ...(sdkSource ? { omniSource: { endpoint: acqRuntime.omniSdkEndpoint, deviceType: acqRuntime.omniSdkDeviceType, channelNames: acqRuntime.omniSdkChannelNames,
           electrodeNames: acqRuntime.omniElectrodeNames, electrodePositions: acqRuntime.omniElectrodePositions } } : {}),
@@ -90,6 +101,9 @@ export async function ensureModelService(options?: {
     })
     const body = await parseResult(res)
     if (!res.ok || !body.ok) throw new Error(body.message || '无法启动模型服务')
+    if (backend === 'reve' && headId && body.headId !== headId) {
+      throw new Error(`模型服务没有确认载入指定分类头 ${headId}`)
+    }
     signal.throwIfAborted()
     publishAppliedModel(body)
     return body
@@ -102,6 +116,44 @@ export async function ensureModelService(options?: {
     catch (error) { console.warn(error) }
   }
   return result
+}
+
+/** Reapply the shared filter to a running managed REVE using its current launch configuration. */
+export async function applyModelInputFilter(settings: ReveFilterSettings, onApplied: () => void): Promise<void> {
+  let current
+  try { current = await modelServiceStatus() }
+  catch (error) {
+    if (appliedModel?.running && appliedModel.owned && appliedModel.backend === 'reve') throw error
+    onApplied()
+    return
+  }
+  if ((!current.running && !current.starting) || !current.owned || current.backend !== 'reve') {
+    onApplied()
+    return
+  }
+  const { reveFilterMode } = settings
+  const reveCustomFilter = reveFilterMode === 'custom' ? settings.reveCustomFilter : undefined
+  if (current.reveFilterMode === reveFilterMode && sameReveCustomFilter(current.reveCustomFilter, reveCustomFilter)) {
+    onApplied()
+    return
+  }
+  await modelOperation.run(async signal => {
+    const epoch = ++mutationEpoch
+    const response = await fetch('/api/model-service/filter', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+      body: JSON.stringify({ reveFilterMode, reveCustomFilter }),
+    })
+    const result = await parseResult(response)
+    if (!response.ok || !result.ok) throw new Error(result.message || '无法应用输入滤波')
+    signal.throwIfAborted()
+    if (epoch === mutationEpoch) publishAppliedModel(result)
+    onApplied()
+    if (sessionHub.active) {
+      const meta = sessionHub.boundMeta
+      const logger = new SessionLogger(meta.experiment ?? 'acquisition', meta.subjectId ?? 'anon')
+      logger.log('reve_filter_changed', { reveFilterMode, reveCustomFilter })
+    }
+  })
 }
 
 /** Emergency stop is allowed during recording, but is recorded as an interruption. */

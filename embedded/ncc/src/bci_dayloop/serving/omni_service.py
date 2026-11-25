@@ -7,6 +7,7 @@ from collections import OrderedDict
 import time
 
 from .omni_source import OmniSourceConfig, OmniWindowAssembler, connect_board, read_available, validate_board
+from .omni_gui_filter import OmniGuiWindowFilter
 from .protocol import ProtocolError, dumps, error_message, parse_feedback, parse_json_object, prediction_message
 from .server import ALLOWED_PATHS, _connection_path
 from .tcp_broadcast import TcpBroadcastHub, attach_follow_info, start_follow_server
@@ -33,6 +34,8 @@ async def serve_omni_model_service(
 
     hello = backend.hello_payload()
     contract = hello["input"]
+    filter_settings = getattr(backend, "omni_gui_filter_settings", None)
+    omni_gui_filter = OmniGuiWindowFilter(filter_settings) if filter_settings is not None else None
     assembler = OmniWindowAssembler(config.channel_names, contract["window_sec"], contract["step_sec"],
                                     electrode_names=config.electrode_names, electrode_positions=config.electrode_positions)
     hello["input"] = {**contract, "source": "omni-sdk", "device_type": config.device_type, "channel_names": list(config.channel_names), "sample_rate": 250}
@@ -86,6 +89,8 @@ async def serve_omni_model_service(
                 publish({"type": "error", "code": "source_reset", "message": "Omni 连续段已重置，等待完整 EEG 窗口", "schema_version": 1})
             dropped += max(0, assembler.window_id - old_id - (1 if window is not None else 0))
             if window is not None:
+                if omni_gui_filter is not None:
+                    window = omni_gui_filter.apply(window)
                 if not pending.empty():
                     pending.get_nowait()
                     dropped += 1

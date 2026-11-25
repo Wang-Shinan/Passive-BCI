@@ -120,15 +120,17 @@ describe('group boundary probing', () => {
     server(report(false))
     const state = round()
     await runGroupProbe(state, options, new AbortController().signal, mock.progress)
-    expect(state.baseline).toMatchObject({ headId: 'copy.pt', revision: 'old' })
+    expect(state.baseline).toMatchObject({ headId: 'old.pt', revision: 'old' })
     expect(mock.ensure).not.toHaveBeenCalledWith(expect.objectContaining({ headId: 'new.pt' }))
   })
   it('restores the original model after a failed training process', async () => {
     server(report(), true)
     const state = round()
+    state.baseline.weightId = 'reve-adapter:participant/best.pt'
     const message = await runGroupProbe(state, options, new AbortController().signal, mock.progress)
     expect(message).toContain('GPU error')
     expect(state.baseline.headId).toBe('old.pt')
+    expect(mock.ensure).toHaveBeenCalledWith(expect.objectContaining({ weightId: state.baseline.weightId }))
   })
   it('rolls back a failed candidate load; failed rollback remains blocked', async () => {
     server()

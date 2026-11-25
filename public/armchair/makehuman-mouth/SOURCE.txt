@@ -1,0 +1,8 @@
+MakeHuman Community — teeth_base and tongue01, from makehuman_system_assets_cc0.zip.
+https://static.makehumancommunity.org/assets/assetpacks/makehuman_system_assets.html
+CC0 1.0 — https://creativecommons.org/publicdomain/zero/1.0/
+The original OBJ headers credit Data Collection AB, Joel Palmius and Jonas Hauquier.
+
+mouth.glb retains the original surface meshes, with the dental arches grouped for jaw
+movement, a half-section for the tongue view, and the separate tongue fitted to the arch.
+Materials and the contact pose are generated in the preview.

@@ -8,6 +8,7 @@ import { modelServiceManagerPlugin } from './vite.model-service-manager.ts'
 import { recordWriterPlugin } from './vite.record-writer.ts'
 import { trainingPlugin } from './vite.training.ts'
 import { clientDiagnosticsPlugin } from './vite.client-diagnostics.ts'
+import { omniGuiPlugin } from './vite.omni-gui.ts'
 
 const MAX_LOG_CHARS = 2400
 
@@ -313,6 +314,7 @@ export default defineConfig({
     recordWriterPlugin(),
     trainingPlugin(),
     clientDiagnosticsPlugin(),
+    omniGuiPlugin(),
   ],
   server: {
     watch: {
@@ -335,12 +337,6 @@ export default defineConfig({
         target: 'ws://127.0.0.1:8766',
         ws: true,
         rewrite: (path) => path.replace(/^\/ws\/neuracle/, '/v1/stream'),
-      },
-      // OmniBCI GUI HTTP service (api-control build); the client only uses
-      // GET /v1/status and /v1/data — the proxy itself forwards any method.
-      '/api/omni-gui': {
-        target: 'http://127.0.0.1:8766',
-        rewrite: (path) => path.replace(/^\/api\/omni-gui/, ''),
       },
       // BrainCo BCIGo bridge (bridges/bcigo/ws_bridge.py) — Wi‑Fi TCP → WS
       '/ws/bcigo': {

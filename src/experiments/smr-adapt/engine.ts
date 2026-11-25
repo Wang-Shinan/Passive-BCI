@@ -1,4 +1,5 @@
 import { mulberry32, shuffleInPlace } from '../../lib/rng'
+import { TONGUE_CUE } from './labels'
 import {
   proficient,
   pvc,
@@ -146,6 +147,26 @@ export function currentTrial(session: SessionState): TrialRecord | null {
   return session.trials[session.cursor] ?? null
 }
 
+export type SavedTrialResult = Pick<TrialRecord, 'index' | 'target' | 'outcome' | 'hit' | 'feedbackSec'>
+
+export function restoreSavedSession(plan: PlanSpec, seed: number, results: readonly SavedTrialResult[]): SessionState {
+  const session = createSession(plan, seed)
+  for (const result of results) {
+    const trial = session.trials[result.index]
+    if (!trial || result.target !== trial.target || !result.outcome || trial.outcome !== null) {
+      throw new Error('已保存的试次与原始采集计划不一致')
+    }
+    Object.assign(trial, result)
+  }
+  const next = session.trials[results.length]
+  const last = session.trials[results.length - 1]
+  if (!last || !next || next.run === last.run
+    || session.trials.some((trial, index) => (trial.outcome !== null) !== (index < results.length))) {
+    throw new Error('已保存的进度无法恢复到组间休息点')
+  }
+  return { ...session, cursor: results.length, phase: 'rest' }
+}
+
 export function startSession(session: SessionState, now: number): SessionState {
   if (session.trials.length === 0) return { ...session, phase: 'done', phaseStartedAt: now }
   return { ...session, cursor: 0, phase: 'iti', phaseStartedAt: now }
@@ -192,12 +213,12 @@ export function resumeGroup(session: SessionState, now: number): SessionState {
   return session.phase === 'rest' ? { ...session, phase: 'iti', phaseStartedAt: now } : session
 }
 
-export type GroupedAcquisitionMode = '1D' | 'UD'
+export type GroupedAcquisitionMode = '1D' | 'LR' | 'UD'
 
 export function groupedPlan(groups: number, trialsPerGroup: number, mode: GroupedAcquisitionMode = '1D'): PlanSpec {
   if (!Number.isInteger(groups) || groups < 1 || groups > 50) throw new Error('组数必须为 1–50')
-  if (mode !== '1D' && mode !== 'UD') throw new Error('Unsupported grouped acquisition mode')
-  const multiple = mode === 'UD' ? 2 : 4
+  if (mode !== '1D' && mode !== 'LR' && mode !== 'UD') throw new Error('Unsupported grouped acquisition mode')
+  const multiple = mode === '1D' ? 4 : 2
   if (!Number.isInteger(trialsPerGroup) || trialsPerGroup < multiple || trialsPerGroup > 200 || trialsPerGroup % multiple !== 0) {
     throw new Error(`每组试次数必须为 ${multiple}–200，且为 ${multiple} 的倍数`)
   }
@@ -206,6 +227,9 @@ export function groupedPlan(groups: number, trialsPerGroup: number, mode: Groupe
     ...(mode === 'UD' ? {
       label: '仅上下采集',
       hint: '每组仅采集上（舌头想象）与下（放松），两类等量随机，组间保存后继续。',
+    } : mode === 'LR' ? {
+      label: '仅左右采集',
+      hint: '每组仅采集左手与右手运动想象，两类等量随机，组间保存后继续。',
     } : {}),
     blocks: [{ task: mode, runs: groups, trialsPerRun: trialsPerGroup }],
   }
@@ -217,7 +241,7 @@ export function instructionFor(task: SmrTask | '1D'): string {
     return '想象左手反复开合 → 光标向左；右手开合 → 向右。'
   }
   if (task === 'UD') {
-    return '舌头运动想象 → 光标向上；主动放空休息 → 向下。'
+    return `${TONGUE_CUE} → 光标向上；主动放空休息 → 向下。`
   }
   return '左/右手控左右，舌头向上，休息向下。'
 }
@@ -225,7 +249,7 @@ export function instructionFor(task: SmrTask | '1D'): string {
 export function cueLabel(target: TargetDir): string {
   if (target === 'left') return '左手开合 → 左'
   if (target === 'right') return '右手开合 → 右'
-  if (target === 'up') return '舌头运动想象 → 上'
+  if (target === 'up') return `${TONGUE_CUE} → 上`
   return '放空休息 → 下'
 }
 

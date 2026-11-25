@@ -269,7 +269,7 @@ export function recordWriterPlugin(): Plugin {
             return
           }
           try {
-            const rel = saveNBackSnapshot(recordingsDir(), JSON.parse(buffer.toString('utf8')))
+            const rel = await saveNBackSnapshot(recordingsDir(), JSON.parse(buffer.toString('utf8')))
             sendJson(res, 200, { ok: true, rel })
           } catch (error) {
             sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
@@ -548,6 +548,7 @@ export function recordWriterPlugin(): Plugin {
             if (typeof raw.notes === 'string') session.manifest.notes = raw.notes.slice(0, 4000)
             const game = session.manifest.game ? { ...session.manifest.game } : {}
             if (typeof raw.game === 'string') game.name = raw.game
+            if (typeof raw.tongueAction === 'string') game.tongueAction = raw.tongueAction
             if (typeof raw.seed === 'number' && Number.isFinite(raw.seed)) game.seed = raw.seed
             session.manifest.game = Object.keys(game).length ? game : session.manifest.game
           } catch {

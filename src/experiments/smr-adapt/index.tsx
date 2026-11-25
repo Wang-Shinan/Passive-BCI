@@ -11,18 +11,21 @@ import {
   LIVE_PREDICTION_MAX_AGE_MS,
   modelRuntimeHub,
   modelServiceStatus,
+  modelUrlPresets,
   useModelRuntime,
   useTemporalFilter,
 } from '../../lib/model-runtime'
 import { randomSeed } from '../../lib/rng'
 import { preferredModelHead, saveModelHeadPreference, notifyModelSubjectChanged } from '../../lib/model-runtime/modelHeadPreference'
-import { connectEegnetSmr, connectSmrModel, S04_HEAD } from '../../lib/model-runtime/connectSmrModel'
+import { connectGroupedSmrModel, connectSmrModel, S04_HEAD } from '../../lib/model-runtime/connectSmrModel'
+import { getAppliedModel } from '../../lib/model-runtime/modelServiceApi'
+import { useAppliedModel } from '../../lib/model-runtime/useModelConfiguration'
 import {
   startExperimentRecording,
   stopExperimentRecording,
   recorderIsActive,
 } from '../../lib/session/recordControl'
-import { finalizeActiveRecording } from '../../lib/session/finalizeRecording'
+import { activeRecordingId, finalizeActiveRecording } from '../../lib/session/finalizeRecording'
 import { ExportButtons, loadStoredSubjectId } from '../../lib/ui/ExportButtons'
 import { Panel } from '../../lib/ui/Panel'
 import {
@@ -43,7 +46,10 @@ import {
   groupedPlan,
   type GroupedAcquisitionMode,
   resumeGroup,
+  restoreSavedSession,
   type PlanId,
+  type PlanSpec,
+  type SavedTrialResult,
   type SessionState,
 } from './engine'
 import { loadSmrProfile, proficientSummary, saveSmrProfile } from './profile'
@@ -67,11 +73,13 @@ import {
 } from './smrControl'
 import './smrAdapt.css'
 import type { SmrModeProps } from '../smr/types'
-import { useGroupedProbe } from './useGroupedProbe'
+import { useGroupedProbe, type ProbeOptions } from './useGroupedProbe'
+import { trainingRequest, type ProbeRound } from './groupedProbe'
 import { AcquisitionView } from '../smr-acquisition/AcquisitionView'
-import { SMR_IMAGERY_SCHEMA, SMR_TARGET_CLASSES, canLabelSmrHead } from './labels'
+import { SMR_IMAGERY_SCHEMA, SMR_TARGET_CLASSES, TONGUE_ACTION, TONGUE_CUE, canLabelSmrHead, smrModelAxes } from './labels'
 
 type CursorDrive = 'reve' | 'features'
+type SavedGroup = { plan: PlanSpec; results: SavedTrialResult[]; round: ProbeRound; needsProcessing: boolean; message?: string; options?: ProbeOptions }
 
 const CURSOR_DRIVE_KEY = 'passive-bci.smr-adapt-cursor-drive'
 
@@ -103,22 +111,22 @@ function demoControl(target: 'left' | 'right' | 'up' | 'down'): { zH: number; zV
   return { zH: n() * 0.3, zV: -1.35 + n() }
 }
 
-export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false, embedded = false, subjectId: sharedSubject, onSubjectChange, onBusyChange }: SmrModeProps & { autoStartModel?: boolean; groupedAcquisition?: boolean } = {}) {
+export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false, guidedCursor, embedded = false, subjectId: sharedSubject, onSubjectChange, onBusyChange }: SmrModeProps & { autoStartModel?: boolean; groupedAcquisition?: boolean; guidedCursor?: { preview: boolean; seed: number; revision: string | null } } = {}) {
   const [localSubject, setLocalSubject] = useState(() => loadStoredSubjectId('S01'))
   const subjectId = sharedSubject ?? localSubject
   const setSubjectId = onSubjectChange ?? setLocalSubject
   const [starting, setStarting] = useState(false)
-  const [preview, setPreview] = useState(false)
+  const [preview, setPreview] = useState(guidedCursor?.preview ?? false)
   const connectionController = useRef<AbortController | null>(null)
   const recordingRevision = useRef<string | null>(null)
   useEffect(() => () => connectionController.current?.abort(), [])
   const [saving, setSaving] = useState(false)
   const [planId, setPlanId] = useState<PlanId>(groupedAcquisition ? 'grouped' : 'quick')
-  const [groupCount, setGroupCount] = useState(3)
+  const [groupCount, setGroupCount] = useState(guidedCursor ? 1 : 3)
   const [groupTrials, setGroupTrials] = useState(20)
   const [groupedMode, setGroupedMode] = useState<GroupedAcquisitionMode>('1D')
   const [groupSaved, setGroupSaved] = useState(false)
-  const [autoProbe, setAutoProbe] = useState(true)
+  const [autoProbe, setAutoProbe] = useState(!guidedCursor)
   const [minimumGain, setMinimumGain] = useState(0.02)
   const [maximumRecallDrop, setMaximumRecallDrop] = useState(0)
   const [autoLora, setAutoLora] = useState(false)
@@ -137,11 +145,12 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
   const [cursor, setCursor] = useState<CursorState>(resetCursor)
   const [notice, setNotice] = useState('')
   const [startError, setStartError] = useState(false)
+  const [hasSavedGroup, setHasSavedGroup] = useState(false)
   const [horizFlipped, setHorizFlipped] = useState(false)
   const [cursorDrive, setCursorDrive] = useState<CursorDrive>(() => groupedAcquisition ? 'reve' : loadCursorDrive())
   const { config: temporalConfig, setConfig: setTemporalConfig, filterRef: temporalFilterRef } =
     useTemporalFilter(liveStepSecForReveTask('smr_control'))
-  const loggerRef = useRef(new SessionLogger('smr-adapt', subjectId))
+  const loggerRef = useRef(new SessionLogger('smr-adapt', subjectId, guidedCursor?.preview))
   const sessionRef = useRef(session)
   const cursorRef = useRef(cursor)
   const horizNorm = useRef(new BalancedNorm())
@@ -151,11 +160,18 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
   const cursorDriveRef = useRef(cursorDrive)
   const runtime = useModelRuntime()
   const eeg = useLiveEeg()
+  const appliedModel = useAppliedModel()
+  const modelAxes = smrModelAxes(runtime.serviceHello?.class_names)
+  const binaryAxis = !guidedCursor && !preview && cursorDrive === 'reve' && (modelAxes === 'LR' || modelAxes === 'UD') ? modelAxes : null
+  const effectiveGroupedMode = binaryAxis ?? groupedMode
+  const groupedRunModelManaged = Boolean(appliedModel?.owned && modelUrlPresets().some(item => item.url === runtime.url))
   const autoTrainingCompatible = runtime.serviceHello?.supports_group_training !== false
     && (!runtime.serviceHello?.window_sec || [2, 4].includes(runtime.serviceHello.window_sec))
+    && (!groupedAcquisition || (effectiveGroupedMode === '1D'
+      && (!runtime.serviceHello || (modelAxes === '1D' && groupedRunModelManaged))))
   useEffect(() => {
-    if (!autoTrainingCompatible) setAutoProbe(false)
-  }, [autoTrainingCompatible])
+    if (!groupedAcquisition && !autoTrainingCompatible) setAutoProbe(false)
+  }, [autoTrainingCompatible, groupedAcquisition])
 
   sessionRef.current = session
   cursorRef.current = cursor
@@ -173,13 +189,12 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
     const ac = new AbortController()
     void (async () => {
       try {
+        if (!autoStartModel || cursorDrive !== 'reve') return
         const status = await modelServiceStatus(ac.signal)
         if (ac.signal.aborted) return
         // Visiting a page must never replace a running participant model.
-        if (!autoStartModel || cursorDrive !== 'reve') return
         if (groupedAcquisition) {
-          if (!status.running || status.backend !== 'eegnet') return
-          await modelRuntimeHub.setUrl(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/model`)
+          if (!status.running || !modelUrlPresets().some(item => item.url === modelRuntimeHub.snapshot.url)) return
           if (!modelRuntimeHub.snapshot.enabled) modelRuntimeHub.setEnabled(true)
           else if (!['ready', 'connecting'].includes(modelRuntimeHub.snapshot.status)) modelRuntimeHub.connect()
           return
@@ -207,29 +222,45 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
   const running = session.phase !== 'idle' && session.phase !== 'done' && !resting
   const workflowLocked = running || resting || starting || saving || probe.busy || probe.blocked
   useLayoutEffect(() => { onBusyChange?.(workflowLocked) }, [onBusyChange, workflowLocked])
+  useEffect(() => {
+    if (guidedCursor || !groupedAcquisition || session.phase !== 'idle') return
+    const controller = new AbortController()
+    setHasSavedGroup(false)
+    void trainingRequest<{ saved: SavedGroup | null }>(`rounds?subjectId=${encodeURIComponent(subjectId)}`, undefined, controller.signal)
+      .then(({ saved }) => { if (!controller.signal.aborted) setHasSavedGroup(Boolean(saved)) })
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [guidedCursor, groupedAcquisition, session.phase, subjectId])
   const scores = useMemo(() => scoresByTask(session.trials), [session.trials])
   const hint = useMemo(() => scoreHint(scores), [scores])
   const saved = loadSmrProfile(subjectId)
 
-  async function prepareModel() {
+  async function prepareModel(groupedHeadId?: string) {
     connectionController.current?.abort()
     const controller = new AbortController()
     connectionController.current = controller
-    await (groupedAcquisition ? connectEegnetSmr(controller.signal, setNotice) : connectSmrModel(controller.signal, setNotice, preferredModelHead('smr_control', subjectId)))
+    if (groupedAcquisition) await connectGroupedSmrModel(controller.signal, setNotice, groupedHeadId, Boolean(guidedCursor))
+    else await connectSmrModel(controller.signal, setNotice, preferredModelHead('smr_control', subjectId))
     controller.signal.throwIfAborted()
     const hello = modelRuntimeHub.snapshot.serviceHello
     if (!hello) throw new Error('模型握手未返回服务信息')
+    if (guidedCursor && (smrModelAxes(hello.class_names) !== '1D' || hello.model_type === 'mock')) {
+      throw new Error('光标需要当前已应用的左手、右手、舌头、放松四分类模型。采集数据已保存，请核对模型后重试。')
+    }
+    if (guidedCursor && hello.model_revision !== guidedCursor.revision) {
+      throw new Error('当前模型与本轮采集已验证的个体化版本不一致，请恢复已训练模型后再开始光标控制。')
+    }
     if (!liveEegHub.isFresh()) throw new Error('模型已连接，但本页没有可录制的原始 EEG 数据，请先连接采集数据流')
     return hello
   }
 
-  async function connectOnly() {
+  async function connectOnly(groupedHeadId?: string) {
     if (workflowLocked) return
     setStarting(true); setStartError(false)
     try {
       setNotice('正在保存已有录制；保存完成后连接模型…')
       await finalizeActiveRecording()
-      await prepareModel()
+      await prepareModel(groupedHeadId)
     }
     catch (error) { setStartError(true); setNotice(error instanceof Error ? error.message : String(error)) }
     finally { setStarting(false) }
@@ -241,7 +272,8 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       <button className="btn" onClick={() => {
         setSubjectId('S04'); localStorage.setItem('passive-bci.subject-id', 'S04')
         saveModelHeadPreference('smr_control', S04_HEAD, 'S04'); notifyModelSubjectChanged()
-        setNotice('已选择 S04 个体化四分类模型，连接或开始时应用。')
+        if (groupedAcquisition) void connectOnly(S04_HEAD)
+        else setNotice('已选择 S04 个体化四分类模型，连接或开始时应用。')
       }}>使用 S04 个体化模型</button>
       <label className="smr-operator-check"><input type="checkbox" checked={preview} onChange={e => setPreview(e.target.checked)} />仅演示预览（不录制、不使用模型反馈）</label>
     </fieldset>
@@ -262,15 +294,20 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       // The recording lock can belong to this runtime or to a refreshed/old tab.
       // Preserve either kind before prepareModel may load another head.
       setNotice('正在保存已有录制；保存完成后核对模型并开始新一轮…')
-      await finalizeActiveRecording()
+      if (!preview) await finalizeActiveRecording()
       const hello = !preview && cursorDrive === 'reve' ? await prepareModel() : null
       const live = !preview && liveEegHub.isFresh()
       if (!preview && !live) throw new Error('EEG 未开流，不能开始正式采集；请连接设备，或明确选择仅演示预览')
       recordingRevision.current = hello?.model_revision ?? null
       trainingWindowSecRef.current = live ? hello?.window_sec ?? SMR_WINDOW_SEC : 0
+      const axes = smrModelAxes(hello?.class_names)
+      const mode = groupedAcquisition && (axes === 'LR' || axes === 'UD') ? axes : groupedMode
       const trainingCompatible = hello?.supports_group_training !== false
         && Boolean(hello?.window_sec && [2, 4].includes(hello.window_sec))
-      const plan = planId === 'grouped' ? groupedPlan(groupCount, groupTrials, groupedMode) : PLANS[planId]
+        && (!groupedAcquisition || (mode === '1D' && axes === '1D' && getAppliedModel()?.owned === true
+          && modelUrlPresets().some(item => item.url === modelRuntimeHub.snapshot.url)))
+      const plan = planId === 'grouped' ? groupedPlan(groupCount, groupTrials, mode) : PLANS[planId]
+      const tongueAction = plan.blocks.some(block => block.task !== 'LR') ? TONGUE_ACTION : undefined
       horizNorm.current = new BalancedNorm()
       vertNorm.current = new BalancedNorm()
       warmupH.current = { n: 0, mean: 0, m2: 0 }
@@ -284,6 +321,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       if (live) {
         const rec = await startExperimentRecording({
           experiment: 'smr-adapt',
+          tongueAction,
           subjectId,
           seed,
         })
@@ -302,6 +340,8 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       setSession(next)
       setCursor(resetCursor())
       loggerRef.current.log('session_start', {
+        tongueAction,
+        ...(guidedCursor ? { protocol: 'smr-guided-cursor-v1', calibrationSeed: guidedCursor.seed } : {}),
         roundId: probe.round.current?.id,
         model: probe.round.current?.baseline ?? (recordingRevision.current ? { revision: recordingRevision.current } : null),
         planId,
@@ -315,14 +355,14 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
           ? { c3: montage.neighborNamesC3, c4: montage.neighborNamesC4 }
           : null,
       })
-      loggerRef.current.log('group_start', { run: 1, roundId: probe.round.current?.id,
+      loggerRef.current.log('group_start', { run: 1, tongueAction, roundId: probe.round.current?.id,
         imagerySchema: SMR_IMAGERY_SCHEMA, mapping: SMR_TARGET_CLASSES,
         model: probe.round.current?.baseline ?? (recordingRevision.current ? { revision: recordingRevision.current } : null), seed, plan, live })
       setNotice(
         live
           ? cursorDrive === 'features'
             ? `C3/C4 mu 驱动光标。${notes.filter(Boolean).join(' ')}`
-            : `REVE 驱动光标；SMR 头冻结，不在线微调。${notes.filter(Boolean).join(' ')}`
+            : `${hello?.model_type === 'eegnet' ? 'EEGNet' : hello?.model_type === 'reve' ? 'REVE' : 'SMR 模型'}驱动光标。${notes.filter(Boolean).join(' ')}`
           : notes.join(' '),
       )
     } catch (error) {
@@ -345,8 +385,9 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       }
       if (recordingLive.current && !liveEegHub.isFresh()) throw new Error('EEG 断流，请恢复采集后继续')
       await probe.check()
+      const tongueAction = session.plan.blocks.some(block => block.task !== 'LR') ? TONGUE_ACTION : undefined
       if (recordingLive.current) {
-        const result = await startExperimentRecording({ experiment: 'smr-adapt', subjectId, seed: session.seed })
+        const result = await startExperimentRecording({ experiment: 'smr-adapt', subjectId, seed: session.seed, tongueAction })
         if (!result.ok || result.sink !== 'disk' || !result.rel) {
           if (result.ok) await stopExperimentRecording()
           throw new Error(result.message)
@@ -354,13 +395,37 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       }
       temporalFilterRef.current.reset()
       setCursor(resetCursor())
-      loggerRef.current.log('group_start', { run: currentTrial(session)?.run, seed: session.seed, plan: session.plan,
+      loggerRef.current.log('group_start', { run: currentTrial(session)?.run, seed: session.seed, plan: session.plan, tongueAction,
         imagerySchema: SMR_IMAGERY_SCHEMA, mapping: SMR_TARGET_CLASSES,
         roundId: probe.round.current?.id, model: probe.round.current?.baseline ?? (recordingRevision.current ? { revision: recordingRevision.current } : null), live: recordingLive.current })
       setGroupSaved(false)
       setSession(resumeGroup(session, performance.now()))
     } catch (error) { setNotice(String(error)) }
     finally { setStarting(false) }
+  }
+
+  const restoreSavedGroup = async () => {
+    if (workflowLocked || session.phase !== 'idle') return
+    setStarting(true)
+    setStartError(false)
+    try {
+      if (await activeRecordingId()) throw new Error('正在录制，请在当前录制保存后恢复该轮。')
+      const { saved } = await trainingRequest<{ saved: SavedGroup | null }>(`rounds?subjectId=${encodeURIComponent(subjectId)}`)
+      if (!saved) throw new Error('当前被试没有可恢复的组间进度。')
+      const restored = restoreSavedSession(saved.plan, saved.round.seed, saved.results)
+      recordingLive.current = true
+      recordingRevision.current = saved.round.baseline.revision
+      trainingWindowSecRef.current = saved.round.baseline.windowSec
+      stoppingRef.current = false
+      setCursorDrive('reve')
+      setPreview(false)
+      setSession(restored)
+      setCursor(resetCursor())
+      setGroupSaved(await probe.restore(saved.round, saved.needsProcessing, saved.message ?? '已恢复本轮模型。', saved.options))
+    } catch (error) {
+      setStartError(true)
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally { setStarting(false) }
   }
 
   const persist = useCallback((state: SessionState, montageNow: LaplacianMontage | null) => {
@@ -390,8 +455,8 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
     probeRef.current.interrupt(reason)
     const current = sessionRef.current
     const item = currentTrial(current)
-    loggerRef.current.log('group_interrupted', { run: item?.run, index: item?.index, reason, complete: false })
-    loggerRef.current.log('trial_invalid', { index: item?.index, run: item?.run, reason })
+    loggerRef.current.log('group_interrupted', { run: item?.run, index: item?.index, reason, complete: false, live: recordingLive.current })
+    loggerRef.current.log('trial_invalid', { index: item?.index, run: item?.run, reason, live: recordingLive.current })
     const stopped: SessionState = { ...current, phase: 'done', phaseStartedAt: performance.now() }
     sessionRef.current = stopped
     setSession(stopped)
@@ -433,16 +498,21 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
 
       if (current.phase === 'iti' && elapsed >= ITI_SEC) {
         const next = advancePhase(current, now)
+        sessionRef.current = next
         setSession(next)
         setCursor(resetCursor())
         const nextTrial = currentTrial(next)
-        loggerRef.current.log('cue', { index: nextTrial?.index, run: nextTrial?.run, target: nextTrial?.target, task: nextTrial?.task })
+        loggerRef.current.log('cue', { index: nextTrial?.index, run: nextTrial?.run, target: nextTrial?.target,
+          ...(nextTrial?.target === 'up' ? { tongueAction: TONGUE_ACTION, cueText: TONGUE_CUE } : {}),
+          task: nextTrial?.task, live: recordingLive.current })
         return
       }
       if (current.phase === 'cue' && elapsed >= CUE_SEC) {
         temporalFilterRef.current.reset()
-        loggerRef.current.log('feedback_start', { index: item?.index, run: item?.run, target: item?.target })
-        setSession(advancePhase(current, now))
+        const next = advancePhase(current, now)
+        sessionRef.current = next
+        setSession(next)
+        loggerRef.current.log('feedback_start', { index: item?.index, run: item?.run, target: item?.target, live: recordingLive.current })
         setCursor(resetCursor())
         return
       }
@@ -452,8 +522,8 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         setSession(next)
         setCursor(resetCursor())
         if (next.phase === 'done' || next.phase === 'rest') {
-          if (next.phase === 'done') persist(next, montage)
-          loggerRef.current.log('group_end', { run: item?.run, complete: true, seed: next.seed,
+          if (next.phase === 'done' && !(guidedCursor && !recordingLive.current)) persist(next, montage)
+          loggerRef.current.log('group_end', { run: item?.run, complete: true, seed: next.seed, live: recordingLive.current,
             roundId: probeRef.current.round.current?.id, model: probeRef.current.round.current?.baseline })
           if (!recordingLive.current) {
             setGroupSaved(true)
@@ -476,12 +546,16 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       let zV: number
       const useReve = cursorDriveRef.current === 'reve'
       const pred = useReve && recordingLive.current ? modelRuntimeHub.latestObservation(LIVE_PREDICTION_MAX_AGE_MS) : null
+      const predictedAxes = groupedAcquisition ? smrModelAxes(pred?.class_names) : null
+      const usableAxis = predictedAxes === '1D' || (!guidedCursor && predictedAxes === item.task)
       if (useReve && recordingLive.current && (modelRuntimeHub.snapshot.status !== 'ready' || !pred
-        || pred.probabilities.length !== pred.class_names.length || pred.probabilities.some(p => !Number.isFinite(p) || p < 0 || p > 1))) {
-        interruptGroup('REVE 预测中断')
+        || pred.probabilities.length !== pred.class_names.length || pred.probabilities.some(p => !Number.isFinite(p) || p < 0 || p > 1)
+        || (guidedCursor && modelRuntimeHub.snapshot.serviceHello?.model_revision !== guidedCursor.revision)
+        || (groupedAcquisition && !usableAxis))) {
+        interruptGroup('SMR 模型预测中断或类别不匹配')
         return
       }
-      if (pred && canLabelSmrHead(pred.class_names) && pred.probabilities.length === pred.class_names.length) {
+      if (pred && (groupedAcquisition ? usableAxis : canLabelSmrHead(pred.class_names)) && pred.probabilities.length === pred.class_names.length) {
         const decision = temporalFilterRef.current.observePrediction(pred)
         const axes = reveCursorDrive(decision)
         zH = axes.zH
@@ -513,12 +587,15 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       } else if (recordingLive.current) {
         if (elapsed >= FEEDBACK_SEC) {
           const next = finishTrial(current, 'timeout', null, elapsed, now)
+          sessionRef.current = next
           setSession(next)
           loggerRef.current.log('trial', {
+            ...(item.target === 'up' ? { tongueAction: TONGUE_ACTION, cueText: TONGUE_CUE } : {}),
             imagerySchema: SMR_IMAGERY_SCHEMA, className: SMR_TARGET_CLASSES[item.target],
             index: item.index,
             run: item.run,
             valid: false,
+            live: recordingLive.current,
             invalidReason: 'eeg_unavailable',
             task: item.task,
             target: item.target,
@@ -543,8 +620,10 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       if ((hit && elapsed >= trainingWindowSecRef.current) || elapsed >= FEEDBACK_SEC) {
         const outcome = outcomeForHit(item.target, hit, elapsed >= FEEDBACK_SEC)
         const next = finishTrial(current, outcome, hit, elapsed, now)
+        sessionRef.current = next
         setSession(next)
         loggerRef.current.log('trial', {
+          ...(item.target === 'up' ? { tongueAction: TONGUE_ACTION, cueText: TONGUE_CUE } : {}),
           imagerySchema: SMR_IMAGERY_SCHEMA, className: SMR_TARGET_CLASSES[item.target],
           index: item.index,
           run: item.run,
@@ -558,7 +637,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
       }
     }, Math.round(SMR_TICK_SEC * 1000))
     return () => window.clearInterval(id)
-  }, [running, live, montage, subjectId, persist, interruptGroup])
+  }, [running, live, montage, subjectId, persist, interruptGroup, groupedAcquisition, guidedCursor])
 
   const flash =
     session.phase === 'post' && trial?.outcome === 'hit'
@@ -568,11 +647,13 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         : ''
 
   if (groupedAcquisition) return <AcquisitionView
-    acquisitionMode={session.phase === 'idle' || session.phase === 'done' ? groupedMode : session.plan.blocks[0]?.task}
+    guided={Boolean(guidedCursor)}
+    acquisitionMode={session.phase === 'idle' || session.phase === 'done' ? effectiveGroupedMode : session.plan.blocks[0]?.task}
     session={session} trial={trial} cursor={cursor} running={running} starting={starting}
     processing={saving || probe.busy} blocked={startError || probe.blocked || (resting && !groupSaved && !saving && !probe.busy)}
     canContinue={groupSaved && !saving && !starting && !probe.busy && !probe.blocked}
     locked={workflowLocked} live={live} preview={preview} onStart={startRound} onContinue={continueGroup} onStop={interruptGroup}
+    onRestore={!guidedCursor && hasSavedGroup && session.phase === 'idle' ? restoreSavedGroup : undefined}
     statusMessage={probe.blocked ? probe.message : notice}
     operator={<>
       <LiveEegBadge />
@@ -585,19 +666,19 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
         <h3>采集计划</h3>
         <fieldset className="smr-operator-fields" disabled={workflowLocked}>
           <label>每轮组数<input type="number" min={1} max={50} value={groupCount} onChange={e => setGroupCount(Number(e.target.value))} /></label>
-          <label>采集模式<select value={groupedMode} onChange={e => setGroupedMode(e.target.value as GroupedAcquisitionMode)}>
-            <option value="1D">水平+垂直（原模式）</option><option value="UD">仅上下（舌头/放松）</option>
+          <label>采集模式<select value={effectiveGroupedMode} disabled={binaryAxis !== null} onChange={e => setGroupedMode(e.target.value as GroupedAcquisitionMode)}>
+            <option value="1D">水平 + 垂直</option><option value="LR">仅左右（左手／右手）</option><option value="UD">仅上下（舌头／放松）</option>
           </select></label>
-          <label>每组试次数<input type="number" min={groupedMode === 'UD' ? 2 : 4} max={200} step={groupedMode === 'UD' ? 2 : 4} value={groupTrials} onChange={e => setGroupTrials(Number(e.target.value))} /></label>
+          <label>每组试次数<input type="number" min={effectiveGroupedMode === '1D' ? 4 : 2} max={200} step={effectiveGroupedMode === '1D' ? 4 : 2} value={groupTrials} onChange={e => setGroupTrials(Number(e.target.value))} /></label>
           <label>光标驱动<select value={cursorDrive} onChange={e => setCursorDrive(e.target.value as CursorDrive)}>
-            <option value="reve">{groupedAcquisition ? 'EEGNet 四分类' : 'REVE 四分类'}</option><option value="features">C3/C4 mu</option>
+            <option value="reve">当前 SMR 模型</option><option value="features">C3/C4 mu</option>
           </select></label>
-          <label className="smr-operator-check"><input type="checkbox" checked={autoProbe} disabled={!autoTrainingCompatible} onChange={e => setAutoProbe(e.target.checked)} />组间自动训练并评估接管</label>
+          <label className="smr-operator-check"><input type="checkbox" checked={autoProbe && autoTrainingCompatible} disabled={!autoTrainingCompatible} onChange={e => setAutoProbe(e.target.checked)} />组间自动训练并评估接管</label>
           {autoProbe && autoTrainingCompatible && runtime.serviceHello?.model_type === 'eegnet' && <p>每组保存后自动 LP→FT 离线训练（推理不中断）；验证集达到设定阈值才接管，否则保留原模型。</p>}
-          {!autoTrainingCompatible && <p>{runtime.serviceHello?.model_type === 'eegnet' ? '当前是随机初始化 EEGNet：左手、右手、舌头、休息。本页分组采集并保存原始 EEG 与试次标签；组间不做 LoRA。之后对这份数据做线性探测，再微调。' : '当前导入模型的预处理尚未接入组间训练，已关闭自动训练。推理和原始数据保存照常进行。'}</p>}
-          {autoProbe && cursorDrive === 'reve' && <>
-            <label className="smr-operator-check"><input type="checkbox" checked={autoLora} onChange={e => setAutoLora(e.target.checked)} />轮末 LoRA（同被试历史数据）</label>
-            {autoLora && <>
+          {!autoTrainingCompatible && <p>{effectiveGroupedMode !== '1D' ? '单轴采集保存两类数据。组间自动训练需要四类数据。' : '组间自动训练需要兼容的托管四分类模型。'}</p>}
+          {autoProbe && autoTrainingCompatible && cursorDrive === 'reve' && <>
+            {runtime.serviceHello?.model_type !== 'eegnet' && <label className="smr-operator-check"><input type="checkbox" checked={autoLora} onChange={e => setAutoLora(e.target.checked)} />轮末 LoRA（同被试历史数据）</label>}
+            {autoLora && runtime.serviceHello?.model_type !== 'eegnet' && <>
               <label>LoRA epochs<input type="number" min={1} max={100} value={loraEpochs} onChange={e => setLoraEpochs(Number(e.target.value))} /></label>
               <label>LoRA 学习率<input type="number" min={.000001} max={.01} step={.00001} value={loraLr} onChange={e => setLoraLr(Number(e.target.value))} /></label>
             </>}
@@ -605,8 +686,8 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
             <label>单类召回最多下降（百分点）<input type="number" min={0} max={100} value={maximumRecallDrop * 100} onChange={e => setMaximumRecallDrop(Number(e.target.value) / 100)} /></label>
           </>}
         </fieldset>
-        <p className="smr-operator-status">准备 2 秒 · 提示 2 秒 · 执行最多 6 秒 · 结束 1 秒。{groupedMode === 'UD' ? '每组仅上下，舌头想象→上、放松→下；两类等量随机，组间保存后继续。' : '每组前半水平、后半垂直；只控制一个轴，各方向等量随机，组间保存后继续。'}</p>
-        {autoProbe && autoLora && cursorDrive === 'reve' && <p className="smr-operator-status">轮末从当前模型初始化，联合更新 LoRA 与分类头；rank 4 / alpha 8，batch 1，累积 8 步。历史验证与测试试次不进入训练；验证达标且模型载入检查通过后，下一轮使用选定模型。失败则恢复原模型。</p>}
+        <p className="smr-operator-status">准备 2 秒 · 提示 2 秒 · 执行最多 6 秒 · 结束 1 秒。{effectiveGroupedMode === '1D' ? '每组前半水平、后半垂直。' : effectiveGroupedMode === 'LR' ? '左右手运动想象各占一半。' : '舌头想象和放松各占一半。'}组间保存后继续。</p>
+        {autoProbe && autoTrainingCompatible && autoLora && cursorDrive === 'reve' && runtime.serviceHello?.model_type !== 'eegnet' && <p className="smr-operator-status">轮末从当前模型初始化，联合更新 LoRA 与分类头；rank 4 / alpha 8，batch 1，累积 8 步。历史验证与测试试次不进入训练；验证达标且模型载入检查通过后，下一轮使用选定模型。失败则恢复原模型。</p>}
         {cursorDrive === 'features' && <p className="smr-operator-status">C3/C4 模式仅采集，不自动训练或接管。{!montage && live ? '当前导联缺少 C3/C4。' : ''}</p>}
         {cursorDrive === 'reve' && <fieldset disabled={workflowLocked} style={{ border: 0, padding: 0 }}>
           <TemporalFilterControls config={temporalConfig} onChange={setTemporalConfig} compact />
@@ -642,7 +723,7 @@ export function SmrAdaptPage({ autoStartModel = true, groupedAcquisition = false
           {embedded ? <h2>运动想象 · 个体化适配</h2> : <h1 className="m-0 mt-2 text-2xl font-semibold tracking-tight">{groupedAcquisition ? 'SMR 分组采集与训练' : 'SMR 个体化适配'}</h1>}
           {!embedded && !groupedAcquisition && <Link to="/smr-gaze" className="btn mt-3">全屏 SMR 采集</Link>}
           <p className="muted mt-1 max-w-2xl text-sm">
-            {groupedAcquisition ? '四方向均衡随机采集，光标由 8773 上随机初始化的 EEGNet 驱动。请先在采集页开流，再点开始本轮采集。组间不做 LoRA；之后线性探测再微调。' : <>
+            {groupedAcquisition ? '光标使用当前 SMR 模型，按模型支持的方向分组采集。请先在采集页开流，再点开始本轮采集。' : <>
             Stieger 式连续光标：左手左、右手右、舌头上、休息下。光标可选 REVE 四分类或原来的 C3/C4 mu。SMR 头冻结，不在线微调。只展示上下可去{' '}
             <Link to="/smr-ud" style={{ color: 'var(--accent)' }}>
               SMR 上下控制

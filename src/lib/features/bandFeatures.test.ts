@@ -83,4 +83,26 @@ describe('computeLiveFeatures', () => {
     expect(snap).not.toBeNull()
     expect(snap!.nChannels).toBeLessThanOrEqual(8)
   })
+
+  it('honors an explicit selection including more than eight channels', () => {
+    const channelNames = Array.from({ length: 12 }, (_, i) => `CH${i + 1}`)
+    const buffers = channelNames.map((_, i) => new Float32Array(64).fill(i < 2 ? 1_000 : 10))
+    const snap = computeLiveFeatures({
+      buffers, filled: 64, writeHead: 0, sampleRate: 250, channelNames,
+      channelMask: channelNames.map((_, i) => i >= 2),
+      useAllSelectedChannels: true,
+      enabledFeatures: ['mean'],
+    })
+    expect(snap?.nChannels).toBe(10)
+    expect(snap?.values.mean).toBe(10)
+  })
+
+  it('returns no result when the mask excludes all EEG channels', () => {
+    const result = computeLiveFeatures({
+      buffers: [new Float32Array(64).fill(50), new Float32Array(64).fill(20)],
+      filled: 64, writeHead: 0, sampleRate: 250,
+      channelNames: ['CH2', 'IO'], channelMask: [false, true], enabledFeatures: ['mean'],
+    })
+    expect(result).toBeNull()
+  })
 })

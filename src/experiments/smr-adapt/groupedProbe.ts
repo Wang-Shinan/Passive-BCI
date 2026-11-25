@@ -1,10 +1,13 @@
 import { ensureModelService, modelServiceStatus, stopModelService } from '../../lib/model-runtime/modelServiceApi'
 import { modelRuntimeHub } from '../../lib/model-runtime/modelRuntimeHub'
 import { liveStepSecForReveTask } from '../../lib/model-runtime/reveTasks'
+import { sameReveCustomFilter, type ReveCustomFilter, type ReveFilterMode } from '../../lib/model-runtime/reveFilter'
 
 export type ProbeBaseline = { headId: string; revision: string; modelName: string; stepSec: number; windowSec: number
+  weightId?: string
   /** Absolute checkpoint path reported by the EEGNet service hello. */
-  checkpoint?: string }
+  checkpoint?: string
+  reveFilterMode?: ReveFilterMode; reveCustomFilter?: ReveCustomFilter; reveFilterBand?: ReveCustomFilter }
 export type ProbeRound = { id: string; subjectId: string; seed: number; sessions: string[]; baseline: ProbeBaseline }
 export type LoraOptions = { epochs: number; lr: number; rank: number; alpha: number; batchSize: number; accumulationSteps: number }
 export type ProbeReport = {
@@ -46,10 +49,15 @@ export async function currentProbeBaseline(signal: AbortSignal): Promise<ProbeBa
   if (hello.model_type === 'eegnet') {
     if (!hello.checkpoint) throw new Error('EEGNet 服务未报告 checkpoint 路径，无法作为组间训练基线')
     return { headId: '', revision: hello.model_revision, modelName: 'eegnet',
-      stepSec: status.stepSec ?? 0.1, windowSec: hello.window_sec ?? 2, checkpoint: hello.checkpoint }
+      stepSec: status.stepSec ?? 0.1, windowSec: hello.window_sec ?? 2, checkpoint: hello.checkpoint,
+      weightId: status.weightId ?? undefined }
   }
   return { headId: status.headId || status.loadedHead || '', revision: hello.model_revision,
+    weightId: status.weightId ?? undefined,
     modelName: hello.model_name || 'reve', stepSec: status.stepSec ?? liveStepSecForReveTask('smr_control'),
+    reveFilterMode: hello.filter_mode ?? status.reveFilterMode ?? hello.effective_filter_mode ?? undefined,
+    reveCustomFilter: hello.effective_custom_filter ?? status.reveCustomFilter ?? undefined,
+    reveFilterBand: hello.effective_filter_band,
     windowSec: hello.window_sec && [2, 4].includes(hello.window_sec) ? hello.window_sec : 4 }
 }
 
@@ -68,8 +76,13 @@ export async function waitForProbePrediction(baseline: ProbeBaseline, signal: Ab
 
 export async function loadProbeBaseline(baseline: ProbeBaseline, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted()
+  if (baseline.modelName === 'eegnet' && baseline.checkpoint) {
+    return loadEegnetCheckpoint(baseline.weightId ?? eegnetWeightId(baseline.checkpoint), baseline.revision, baseline.stepSec, signal)
+  }
   const result = await ensureModelService({ backend: 'reve', task: 'smr_control', headId: baseline.headId,
-    stepSec: baseline.stepSec, signal })
+    weightId: baseline.weightId,
+    stepSec: baseline.stepSec, windowSec: baseline.windowSec, reveFilterMode: baseline.reveFilterMode ?? 'checkpoint',
+    reveCustomFilter: baseline.reveCustomFilter, signal })
   if (!result.running) throw new Error('模型未启动')
   modelRuntimeHub.disconnect()
   modelRuntimeHub.setEnabled(true)
@@ -80,7 +93,10 @@ export async function loadProbeBaseline(baseline: ProbeBaseline, signal: AbortSi
   while (Date.now() < deadline) {
     signal.throwIfAborted()
     const { status, serviceHello: hello } = modelRuntimeHub.snapshot
-    if (status === 'ready' && hello?.model_revision === baseline.revision) return
+    if (status === 'ready' && hello?.model_revision === baseline.revision &&
+      (!baseline.reveFilterMode || (hello.filter_mode ?? hello.effective_filter_mode) === baseline.reveFilterMode)
+      && sameReveCustomFilter(baseline.reveCustomFilter, hello.effective_custom_filter)
+      && (!baseline.reveFilterBand || sameReveCustomFilter(baseline.reveFilterBand, hello.effective_filter_band))) return
     await delay(200, signal)
   }
   throw new Error('模型载入后未确认预期版本和四分类接口；已保存的数据及训练结果不受影响，可重试载入')
@@ -177,13 +193,13 @@ async function runEegnetTraining(round: ProbeRound, options: { minimumGain: numb
     if (report.decision.promote) {
       progress(`${message}；正在载入选定权重…`)
       try {
-        await loadEegnetCheckpoint(eegnetWeightId(report.decision.checkpoint), report.decision.revision,
-          original.stepSec, signal)
-        chosen = { ...original, revision: report.decision.revision, checkpoint: report.decision.checkpoint }
+        const weightId = eegnetWeightId(report.decision.checkpoint)
+        await loadEegnetCheckpoint(weightId, report.decision.revision, original.stepSec, signal)
+        chosen = { ...original, revision: report.decision.revision, checkpoint: report.decision.checkpoint, weightId }
       } catch (error) {
         signal.throwIfAborted()
         progress('候选载入检查失败，正在恢复原模型…')
-        await loadEegnetCheckpoint(eegnetWeightId(original.checkpoint!), original.revision, original.stepSec, signal)
+        await loadProbeBaseline(original, signal)
         message = `候选未通过载入检查，已恢复原模型：${error instanceof Error ? error.message : String(error)}`
       }
     }
@@ -210,6 +226,11 @@ async function runAdaptiveTraining(round: ProbeRound, options: { minimumGain: nu
   const original = { ...round.baseline }
   const actual = await currentProbeBaseline(signal)
   if (actual.headId !== original.headId || actual.revision !== original.revision) throw new Error('模型在本组期间被更换，停止自动接管')
+  if (original.reveFilterMode && (actual.reveFilterMode !== original.reveFilterMode ||
+    !sameReveCustomFilter(original.reveCustomFilter, actual.reveCustomFilter) ||
+    (original.reveFilterBand && !sameReveCustomFilter(original.reveFilterBand, actual.reveFilterBand)))) {
+    throw new Error('本组期间 REVE 输入滤波已变更，停止本次组间训练')
+  }
   progress(`${stage}：释放推理模型，准备导出${lora ? '同被试历史' : '本轮累计'}数据…`)
   await stopModelService(signal)
   let chosen = original
@@ -224,14 +245,16 @@ async function runAdaptiveTraining(round: ProbeRound, options: { minimumGain: nu
     progress(lora ? '轮末休息：联合训练 LoRA 与分类头，在相同历史验证快照上比较…' : '组间休息：均衡训练分类头，并在固定验证集上比较…')
     const fitted = await runJob({ kind: lora ? 'lora' : 'fit', roundId: round.id, datasetId: exported.id, splitBy: 'trial',
       headId: original.headId, baselineRevision: original.revision, modelName: original.modelName,
+      weightId: original.weightId,
+      reveFilterMode: original.reveFilterMode ?? 'checkpoint',
+      reveCustomFilter: original.reveCustomFilter,
       seed: round.seed, device: 'auto', epochs: 100, lr: .001, ...options, ...lora }, signal)
     report = fitted.report
     if (report.skipped) message = report.reason || '有效样本不足，本次跳过训练'
     else {
       if (report.baselineRevision !== original.revision) throw new Error('评估基线版本不一致')
       const promote = report.decision.promote
-      chosen = { ...original, headId: promote ? report.headId : report.baselineHeadId,
-        revision: promote ? report.modelRevision : original.revision }
+      if (promote) chosen = { ...original, headId: report.headId, weightId: undefined, revision: report.modelRevision }
       message = `${report.decision.reason}。验证平衡准确率 ${(report.baseline.balancedAccuracy * 100).toFixed(1)}% → ${(report.metrics.validation.balancedAccuracy * 100).toFixed(1)}%`
     }
   } catch (error) {

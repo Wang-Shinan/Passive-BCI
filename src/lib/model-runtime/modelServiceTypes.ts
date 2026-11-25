@@ -1,3 +1,5 @@
+import type { ReveCustomFilter, ReveFilterMode } from './reveFilter.js'
+
 export type ModelServiceBackend = 'reve' | 'mock' | 'eegnet'
 
 export type ModelServiceEnsureResult = {
@@ -12,6 +14,8 @@ export type ModelServiceEnsureResult = {
   task?: string | null
   stepSec?: number | null
   windowSec?: number | null
+  reveFilterMode?: ReveFilterMode | null
+  reveCustomFilter?: ReveCustomFilter | null
   port: number
   proxyPort?: number
   running: boolean

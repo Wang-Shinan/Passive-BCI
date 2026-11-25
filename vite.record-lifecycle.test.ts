@@ -35,6 +35,7 @@ it('finishing waits for accepted request bodies and refuses new chunks before re
   const { root, request } = setup()
   const started = await request('/api/record/start', 'POST', '{"filename":"lifecycle.bin"}').done
   const id = started.body.id as string
+  await request(`/api/record/${id}/meta`, 'POST', JSON.stringify({game:'smr-adapt', tongueAction:'tongue_to_palate'})).done
   operationGate.beginModelChange()()
   const chunk = request(`/api/record/${id}/chunk`)
   chunk.stream.write(Buffer.alloc(8, 1))
@@ -51,6 +52,7 @@ it('finishing waits for accepted request bodies and refuses new chunks before re
   expect(result.body.bytes).toBe(16)
   const manifest = JSON.parse(readFileSync(join(root, 'recordings/lifecycle/session.json'), 'utf8'))
   expect(manifest.status).toBe('interrupted')
+  expect(manifest.game.tongueAction).toBe('tongue_to_palate')
   expect(readFileSync(join(root, 'recordings/lifecycle/eeg.bin'))).toEqual(Buffer.concat([Buffer.alloc(8, 1), Buffer.alloc(8, 2)]))
   expect((await request('/api/record/active', 'GET', '').done).body.id).toBeNull()
   const release = operationGate.beginModelChange()

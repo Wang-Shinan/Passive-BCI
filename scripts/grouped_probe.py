@@ -19,7 +19,10 @@ def seal_recordings(recordings, manifest_path):
         if meta.get('format') != 'float32-le-interleaved' or meta.get('unit') != 'uV':
             raise ValueError('自动 probing 当前要求 float32、uV 录制格式')
         hashes = {}
-        for name in ('eeg.bin', 'events.jsonl', 'eeg.json', 'session.json'):
+        names = ['eeg.bin', 'events.jsonl', 'eeg.json', 'session.json']
+        if meta.get('reveInput') is None and (folder / 'reve-input.json').is_file():
+            names.append('reve-input.json')
+        for name in names:
             digest = hashlib.sha256()
             with (folder / name).open('rb') as handle:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b''):
@@ -113,12 +116,12 @@ def history_split(labels, groups, sessions, history):
 def balanced_probe(head, features, labels, val_features, val_labels, epochs, lr, seed):
     import torch
     torch.manual_seed(seed)
-    torch.nn.init.zeros_(head.weight)
-    torch.nn.init.zeros_(head.bias)
+    # Start from the deployed head. Reinitializing it to zero also erases the
+    # probability differences that determine SMR cursor speed.
     optimizer = torch.optim.Adam(head.parameters(), lr=lr)
     classes = [(labels == label).nonzero().flatten() for label in range(4)]
     per_class = max(len(indices) for indices in classes)
-    best_score, best = -1., None
+    best_score, best = (-1., float('-inf')), None
     for _ in range(epochs):
         # Exactly equal counts per class, with replacement only in training.
         selected = torch.cat([idx[torch.randint(len(idx), (per_class,), device=idx.device)] for idx in classes])
@@ -129,7 +132,10 @@ def balanced_probe(head, features, labels, val_features, val_labels, epochs, lr,
         torch.nn.utils.clip_grad_norm_(head.parameters(), 1.)
         optimizer.step()
         head.eval()
-        score = classification_metrics(head, val_features, val_labels)['balancedAccuracy']
+        with torch.no_grad():
+            validation = classification_metrics(head, val_features, val_labels)
+            validation_loss = torch.nn.functional.cross_entropy(head(val_features), val_labels)
+            score = (validation['balancedAccuracy'], -float(validation_loss))
         if score > best_score:
             best_score = score
             best = {key: value.detach().clone() for key, value in head.state_dict().items()}

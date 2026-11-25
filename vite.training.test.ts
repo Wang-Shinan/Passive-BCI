@@ -68,13 +68,19 @@ describe('grouped training HTTP integration', () => {
     writeFileSync(path.join(group, 'session.json'), JSON.stringify({ status: 'complete', subjectId: 'S-甲', experiment: 'smr-adapt' }))
     writeFileSync(path.join(group, 'eeg.bin'), Buffer.alloc(100))
     writeFileSync(path.join(group, 'eeg.json'), JSON.stringify({ format: 'float32-le-interleaved', unit: 'uV', channels: 2, sampleRate: 250 }))
-    const events = [{ type: 'trial', subjectId: 'S-甲', data: { index: 0, target: 'left' } },
-      { type: 'group_end', subjectId: 'S-甲', data: { roundId, complete: false } }]
+    const events = [{ type: 'trial', subjectId: 'S-甲', experiment: 'smr-adapt', data: { index: 0, target: 'left' } },
+      { type: 'group_end', subjectId: 'S-甲', experiment: 'smr-adapt', data: { roundId, complete: false } },
+      { type: 'trigger_ack', subjectId: 'ledger', experiment: 'gui-trigger', data: { command: 7 } },
+      { type: 'trigger_error', subjectId: 'ledger', experiment: 'gui-trigger', data: { valid: false } }]
     const saveEvents = () => writeFileSync(path.join(group, 'events.jsonl'), events.map(e => JSON.stringify(e)).join('\n'))
     saveEvents()
     const request = { kind: 'export', roundId, sessions: ['group1'], labelSource: 'trial' }
     expect((await call('jobs', request)).status).toBe(400)
     events[1]!.data.complete = true
+    events[0]!.subjectId = 'S-乙'
+    saveEvents()
+    expect((await call('jobs', request)).status).toBe(400)
+    events[0]!.subjectId = 'S-甲'
     saveEvents()
     const exported = await call('jobs', request)
     expect(exported.status).toBe(202)

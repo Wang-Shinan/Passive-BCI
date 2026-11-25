@@ -14,6 +14,7 @@ vi.mock('../../lib/model-runtime/modelRuntimeHub', () => ({
 vi.mock('../../lib/model-runtime/modelServiceApi', () => ({ modelServiceStatus: h.status, ensureModelService: h.ensure }))
 vi.mock('../smr-grid/ensureBcigoStream', () => ({ ensureGridBcigoStream: h.bridge }))
 import { connectNeuroSlide, S04_HEAD } from './connection'
+import { connectGroupedSmrModel } from '../../lib/model-runtime/connectSmrModel'
 import { S04_MODEL_OPTIONS } from '../../lib/model-runtime/subjectModels'
 
 beforeEach(() => {
@@ -27,27 +28,22 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
-async function connectWithPrediction(headId?: string) {
-  const progress = vi.fn((message: string) => {
-    if (message.includes('首个新预测')) setTimeout(() => {
-      h.snapshot.latestPrediction = { observation_id: 'new', received_at_ms: performance.now() }
-    }, 200)
-  })
-  const result = connectNeuroSlide(new AbortController().signal, progress, headId)
-  await vi.advanceTimersByTimeAsync(300)
-  await result
-  expect(progress).toHaveBeenLastCalledWith('已接入现有模型 · 正在接收 EEG 四分类预测')
+async function connectWithoutPrediction(headId?: string) {
+  const progress = vi.fn()
+  await connectNeuroSlide(new AbortController().signal, progress, headId)
+  expect(progress).toHaveBeenLastCalledWith('模型与 EEG 来源已接入')
+  expect(h.snapshot.latestPrediction).toBeNull()
 }
 
-it('attaches EEG in a fresh tab, and only reports success after receiving a new prediction', async () => {
-  await connectWithPrediction()
+it('attaches EEG in a fresh tab without waiting for a prediction', async () => {
+  await connectWithoutPrediction()
   expect(h.bridge).toHaveBeenCalledOnce()
   expect(h.ensure).not.toHaveBeenCalled()
   expect(h.connect).not.toHaveBeenCalled()
 })
 it('reuses a fresh same-tab EEG source without reconnecting the device', async () => {
   h.acq.streaming = true; h.acq.device = 'neuracle'; h.fresh = true
-  await connectWithPrediction()
+  await connectWithoutPrediction()
   expect(h.bridge).not.toHaveBeenCalled()
   expect(h.fetch).not.toHaveBeenCalled()
 })
@@ -56,7 +52,7 @@ it.each(S04_MODEL_OPTIONS)('reuses the verified historical head $label when its 
   h.snapshot.serviceHello.model_revision = option.revision
   h.acq.streaming = true; h.fresh = true
   h.ensure.mockRejectedValue(new Error('recording lock'))
-  await connectWithPrediction(option.id)
+  await connectWithoutPrediction(option.id)
   expect(h.ensure).not.toHaveBeenCalled()
   expect(h.bridge).not.toHaveBeenCalled()
 })
@@ -68,11 +64,11 @@ it('does not treat an initial-head handshake as the selected S04 model', async (
 })
 it('does not attach BCIGo for a model that consumes SDK EEG directly', async () => {
   h.snapshot.serviceHello.input_source = 'omni-sdk'
-  await connectWithPrediction(); expect(h.bridge).not.toHaveBeenCalled()
+  await connectWithoutPrediction(); expect(h.bridge).not.toHaveBeenCalled()
 })
 it('starts a model only when no service is running', async () => {
   h.status.mockResolvedValue({ ok: true, running: false })
-  await connectWithPrediction()
+  await connectWithoutPrediction()
   expect(h.ensure).toHaveBeenCalledWith(expect.objectContaining({ backend: 'reve', task: 'smr_control' }))
 })
 it('loads an explicitly selected subject head instead of silently keeping the initial head', async () => {
@@ -80,34 +76,67 @@ it('loads an explicitly selected subject head instead of silently keeping the in
     h.snapshot.serviceHello.model_revision = 's04-revision'
     return { ok: true, running: true, headId: 's04.pt', modelRevision: 's04-revision' }
   })
-  const result = connectNeuroSlide(new AbortController().signal, message => {
-    if (message.includes('首个新预测')) setTimeout(() => { h.snapshot.latestPrediction = { observation_id: 's04', received_at_ms: performance.now() } }, 100)
-  }, 's04.pt')
-  await vi.advanceTimersByTimeAsync(300); await result
+  await connectWithoutPrediction('s04.pt')
   expect(h.ensure).toHaveBeenCalledWith(expect.objectContaining({ headId: 's04.pt' }))
 })
 it('keeps the live model when its revision differs from the selected head', async () => {
   h.ensure.mockResolvedValue({ ok: true, running: true, headId: 's04.pt', modelRevision: 'expected-s04' })
   h.snapshot.serviceHello.model_revision = 'old-initial-head'
   h.acq.streaming = true; h.fresh = true
-  await connectWithPrediction('s04.pt')
+  await connectWithoutPrediction('s04.pt')
 })
 it('connects to the shared stream even while another tab is recording', async () => {
   h.fetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, id: 'recording' }) })
-  await connectWithPrediction()
+  await connectWithoutPrediction()
   expect(h.bridge).toHaveBeenCalledOnce()
 })
 it('connects a model even when its class names are not the four SMR labels', async () => {
   h.snapshot.serviceHello.class_names = ['a', 'b', 'c']
   h.acq.streaming = true; h.fresh = true
-  await connectWithPrediction()
+  await connectWithoutPrediction()
   expect(h.ensure).not.toHaveBeenCalled()
 })
-it('reports missing predictions even when model and bridge handshakes succeeded', async () => {
-  const result = expect(connectNeuroSlide(new AbortController().signal, vi.fn())).rejects.toThrow('未收到新预测')
-  await vi.advanceTimersByTimeAsync(21000); await result
+it.each(['eegnet', 'reve'])('reuses the applied %s model for grouped SMR', async backend => {
+  h.status.mockResolvedValue({ ok: true, running: true, backend })
+  h.snapshot.serviceHello.model_type = backend
+  h.acq.streaming = true
+  h.fresh = true
+  const progress = vi.fn()
+  await connectGroupedSmrModel(new AbortController().signal, progress)
+  expect(progress).toHaveBeenLastCalledWith('已接入当前 4 类 SMR 模型与原始 EEG')
+  expect(h.ensure).not.toHaveBeenCalled()
+  expect(h.snapshot.latestPrediction).toBeNull()
 })
-it('cancels readiness waits when leaving the page or switching input', async () => {
+it.each([['right_hand', 'left_hand'], ['tongue', 'rest']])('reuses a running binary model with labels %s and %s', async (a, b) => {
+  h.snapshot.serviceHello.class_names = [a, b]
+  h.acq.streaming = true; h.fresh = true
+  const progress = vi.fn()
+  await connectGroupedSmrModel(new AbortController().signal, progress)
+  expect(progress).toHaveBeenLastCalledWith('已接入当前 2 类 SMR 模型与原始 EEG')
+  expect(h.ensure).not.toHaveBeenCalled()
+})
+it('uses the selected external model socket for grouped SMR', async () => {
+  h.snapshot.url = 'ws://other/v1/model'
+  h.snapshot.serviceHello.class_names = ['left_hand', 'right_hand']
+  h.acq.streaming = true; h.fresh = true
+  await connectGroupedSmrModel(new AbortController().signal, vi.fn())
+  expect(h.snapshot.url).toBe('ws://other/v1/model')
+  expect(h.status).not.toHaveBeenCalled()
+  expect(h.ensure).not.toHaveBeenCalled()
+})
+it('starts the configured REVE head when the managed service is idle', async () => {
+  h.status.mockResolvedValue({ ok: false, running: false })
+  h.acq.streaming = true; h.fresh = true
+  await connectGroupedSmrModel(new AbortController().signal, vi.fn())
+  expect(h.ensure).toHaveBeenCalledWith(expect.objectContaining({ backend: 'reve', task: 'smr_control' }))
+})
+it('reports labels for an incompatible model without replacing it', async () => {
+  h.snapshot.serviceHello.class_names = ['left_hand', 'tongue']
+  await expect(connectGroupedSmrModel(new AbortController().signal, vi.fn())).rejects.toThrow('left_hand / tongue')
+  expect(h.ensure).not.toHaveBeenCalled()
+})
+it('cancels the handshake wait when leaving the page or switching input', async () => {
+  h.snapshot.status = 'connecting'
   const controller = new AbortController()
   const result = expect(connectNeuroSlide(controller.signal, vi.fn())).rejects.toThrow()
   await vi.advanceTimersByTimeAsync(100)

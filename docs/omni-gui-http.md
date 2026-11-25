@@ -1,7 +1,6 @@
 # OmniBCI GUI HTTP 链路
 
-采集页设备 = OmniBCI、链路 = **GUI HTTP 广播** 时，前端通过同源代理
-`/api/omni-gui/*` → `http://127.0.0.1:8766/*` 订阅本机 OmniBCI GUI 的
+采集页设备 = OmniBCI、链路 = **GUI HTTP 广播** 时，前端通过同源代理订阅本机 OmniBCI GUI 的
 web service（见 GUI 仓库 `docs/api-control.md`）。设备仍归 GUI 所有：
 本链路不调用 `/v1/control`，不启动/停止 GUI 采集，不直接操作硬件。
 
@@ -13,7 +12,7 @@ web service（见 GUI 仓库 `docs/api-control.md`）。设备仍归 GUI 所有�
    状态未过期与有效数据尾页；实验开始及中断后恢复另需新鲜连续样本。
    收数依赖 `/v1/data`；非预览专注/咬牙还需 `/v1/trigger`。触发接口缺失或
    `collect` 起始标记未获有效 ACK 会使相关试次无效，不会自动改用本地时间充当成功的 GUI 锚点。
-3. 采集页选 链路 = GUI HTTP 广播 → 连接 → 开始采集。
+3. 采集页选择「GUI HTTP 广播」。留空「GUI HTTP 端口」会自动查询本机 8766 和 8769，优先选正在采集的 GUI。也可以输入转发端口，浏览器会记住输入。点击「连接」后再点「开始采集」。
    - `GET /v1/status`：诊断（connected / streaming / api_control_enabled / frames / sequence_lost / frame_crc_bad / stale / snapshot_age_ms / session_id）。状态栏显示这些上游计数，与本地丢包统计基准不同，不混用。
    - `GET /v1/data`：原始设备帧的有序游标订阅（generation + cursor，页上限 5000，缓冲约 90 s）。本地从连接时的末尾游标开始，不回放历史；`409`、游标/generation 变化、序号跳变/回退、无效帧或断流停滞时自动隔离旧数据并复位连续性：被中断的录制片段按「中断」落盘保存（含中断原因），随后只接受上游新的连续数据流并另开**关联的新片段**，绝不跨间隙拼接同一段数据。协议/页面结构变化、通道布局变化或 api-control 被停用时显式报错停止。
    - `POST /v1/trigger`：实验标记（见下节）。
@@ -21,8 +20,13 @@ web service（见 GUI 仓库 `docs/api-control.md`）。设备仍归 GUI 所有�
 
 ## POST /v1/trigger 实验标记
 
-仅 **GUI HTTP 链路 + 非预览** 的专注/咬牙实验会发送标记；SDK、USB、LSL、
-演示及预览路径一律不发。行为约束：
+在「采集调试 → OmniBCI → GUI HTTP 广播 → CH340 硬件打标」选择配套打标板，并以只读方式授权 GUI 保存 BDF+ 的录制目录。此后专注、咬牙、SMR 和 N-back 录制在 STM32 32 导模式优先用已授权的 CH340，按 `10000/8N1` 发送 `A5、事件码、事件码 XOR FF`。
+
+网页读取当前 GUI 会话新增的 `<会话号>_events.jsonl` 设备事件，核对后记录真实样点序号。授权或硬件在发送前不可用时，沿用 GUI HTTP 打标。串口发送一旦尝试，确认超时计为不确定，避免重复标记。会话事件的 `transport` 字段记录 `hardware_serial` 或 `gui_http`。
+
+专注、咬牙及 SMR 采集在 GUI HTTP 链路的正式录制中发送标记。SMR 分组采集和普通 SMR 共用事件码。会话开始为 10，组开始、完成和中断分别为 150、151、152。各类提示用 160–163，采集起点用 170–173，试次结束用 180–183，各范围内依次为左手、右手、舌头和休息。无效试次用 190。
+
+N-back 在 GUI HTTP 链路的正式录制中为字母出现和有效作答打标。目标刺激用 245，非目标刺激用 246，空格或「相同」按钮作答用 247，开头不计分的记忆试次刺激用 248。
 
 - FIFO 异步队列，单在途请求；每条标记 2 秒超时，队列长度上限 32 条，
   排队超过约 2 秒即按过期取消，永不重试。
@@ -35,8 +39,8 @@ web service（见 GUI 仓库 `docs/api-control.md`）。设备仍归 GUI 所有�
 - 已取得 GUI 录制上下文的标记，其 request / ack / error 及
   uncertain / cancelled 结果写入该录制的事件审计（关联本地
   recording id / 分段号 + 上游 session id / generation），未发出的请求不写
-  request。无可用 GUI 上下文时不发 POST，`collect` 阶段起始标记未获 ACK 的
-  试次仍判无效。
+  request。专注和咬牙的 `collect` 起始标记缺少 ACK 时，相应试次记为无效。
+  SMR 和 N-back 的打标结果按原始事件 ID 写入事件日志，打标异步执行。
 
 ## 采集中断与恢复（专注 / 咬牙）
 

@@ -52,6 +52,7 @@ export function modelWeightArgs(weight: ModelWeight | null, head: ModelHead | nu
     return ['--lora-checkpoint', weight.file]
   }
   const folder = path.dirname(weight.file)
-  if (head && (head.loraCheckpoint || head.encoderId !== path.basename(folder))) throw new Error('分类头与所选骨干不配套')
+  if (head && (head.loraCheckpoint || head.encoderId !== path.basename(folder)
+    || head.modelDir && realpathSync(head.modelDir) !== folder)) throw new Error('分类头与所选骨干不配套')
   return ['--model-dir', folder, '--no-lora', ...(!head ? ['--fresh-head'] : [])]
 }

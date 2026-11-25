@@ -3,6 +3,7 @@
 import { liveEegHub } from '../lib/eeg/liveHub'
 import { sampleClock } from '../lib/eeg/sampleClock'
 import type { OmniGuiSession } from './omni/guiSession'
+import { DEFAULT_OMNI_GUI_PORT } from './omni/guiEndpoint'
 import { LiveIirFilter } from './filter/iir'
 import { CHANNELS, FRAME_BYTES, FS, channelLsbUv, defaultChannelConfig } from './protocol/constants'
 import { ConfigAckScanner, type ConfigAck } from './protocol/configAck'
@@ -14,6 +15,7 @@ import type { NeuracleWsClient } from './neuracle/client'
 import type { OmniWsClient } from './omni/client'
 import type { OmniGuiHttpClient, GuiStatus } from './omni/guiClient'
 import type { OmniDeviceType } from './omni/device'
+import { loadOmniFlexVer2Config } from './omni/flexVer2'
 import {
   INGEST_DRAIN_BUDGET_MS,
   BRIDGE_DRAIN_BUDGET_MS,
@@ -53,6 +55,7 @@ export type BridgeBatch = {
 export type RawBridgeBatch = BridgeBatch & {
   device: DeviceKind
   streamId: number
+  omniFlexVer2Mapping?: readonly string[]
 }
 
 export type AcquisitionUiSink = {
@@ -74,12 +77,14 @@ export const acqRuntime = {
   omni: null as OmniWsClient | OmniGuiHttpClient | OmniGuiSession | null,
   /** Latest GET /v1/status diagnostics from a 'gui' link; diagnostics only, no stream resets. */
   omniGuiStatus: null as GuiStatus | null,
+  omniGuiPort: DEFAULT_OMNI_GUI_PORT,
   omniLink: 'api' as OmniLink,
   omniSdkEndpoint: '',
   omniSdkDeviceType: 'esp32' as OmniDeviceType,
   omniSdkChannelNames: [] as string[],
   omniElectrodeNames: undefined as string[] | undefined,
   omniElectrodePositions: undefined as number[][] | undefined,
+  omniFlexVer2: loadOmniFlexVer2Config(),
   streaming: false,
   lsb: channelLsbUv(defaultChannelConfig().gains),
   device: 'omni' as DeviceKind,
@@ -193,7 +198,7 @@ function deliverSerial(chunk: Uint8Array): void {
   if (!acqRuntime.streaming) return
   const frames = acqRuntime.parser?.feed(rest) ?? []
   for (const f of frames) {
-    acqRuntime.filter.processSample(f.uv, f.valid)
+    acqRuntime.filter.processSample(f.uv, f.valid, f.sequence)
     if (!acqRuntime.impedanceActive) liveEegHub.pushFrame(f.uv)
     if (acqRuntime.recorder.recording && !acqRuntime.impedanceActive) {
       acqRuntime.recorder.append(f.raw)
@@ -228,6 +233,8 @@ function deliverBridge(batch: BridgeBatch): void {
       ...batch,
       device: acqRuntime.device,
       streamId: rawBridgeStreamId,
+      ...(acqRuntime.device === 'omni' && acqRuntime.omniFlexVer2.enabled
+        ? { omniFlexVer2Mapping: acqRuntime.omniFlexVer2.channelNames } : {}),
     }
     for (const listener of rawBridgeListeners) {
       try {

@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   GuiTriggerQueue,
   guiTriggerLabel,
+  guiTriggerQueue,
   mapLogEventTrigger,
   setGuiTriggerLedger,
   validateGuiTriggerAck,
   type GuiTriggerContext,
   type GuiTriggerLedgerRecord,
 } from './guiTrigger'
+import { authorizeHardwareTriggerDirectory } from './hardwareTrigger'
 import { SessionLogger } from '../../lib/logger'
 import { sessionHub } from '../../lib/session/sessionHub'
 
@@ -77,6 +79,32 @@ describe('mapLogEventTrigger', () => {
     expect(mapLogEventTrigger('focus', 'focus_phase', { phase: 'hasOwnProperty', trialIndex: 0 })).toBeNull()
   })
 
+  it.each([['left', 0], ['right', 1], ['up', 2], ['down', 3]] as const)(
+    'maps SMR %s cue, collection onset and trial end to distinct byte codes', (target, offset) => {
+      const data = { index: 7, target, live: true }
+      expect(mapLogEventTrigger('smr-adapt', 'cue', data))
+        .toEqual({ code: 160 + offset, trialIndex: 7, phase: 'cue' })
+      expect(mapLogEventTrigger('smr-adapt', 'feedback_start', data))
+        .toEqual({ code: 170 + offset, trialIndex: 7, phase: 'feedback_start' })
+      expect(mapLogEventTrigger('smr-adapt', 'trial', data))
+        .toEqual({ code: 180 + offset, trialIndex: 7, phase: 'trial' })
+    },
+  )
+
+  it('marks SMR group boundaries and invalid trials only during real acquisition', () => {
+    const data = { live: true, index: 2, target: 'left' }
+    expect(mapLogEventTrigger('smr-adapt', 'session_start', data)?.code).toBe(10)
+    expect(mapLogEventTrigger('smr-adapt', 'group_start', data)?.code).toBe(150)
+    expect(mapLogEventTrigger('smr-adapt', 'group_end', data)?.code).toBe(151)
+    expect(mapLogEventTrigger('smr-adapt', 'group_interrupted', data)?.code).toBe(152)
+    expect(mapLogEventTrigger('smr-adapt', 'trial_invalid', data)?.code).toBe(190)
+    expect(mapLogEventTrigger('smr-adapt', 'trial', { ...data, valid: false })?.code).toBe(190)
+    expect(mapLogEventTrigger('smr-adapt', 'cue', { ...data, live: false })).toBeNull()
+    expect(mapLogEventTrigger('smr-adapt', 'group_start', {})).toBeNull()
+    expect(mapLogEventTrigger('smr-adapt', 'feedback_start', { ...data, target: 'constructor' })).toBeNull()
+    expect(mapLogEventTrigger('smr-adapt', 'trial', { ...data, index: undefined })).toBeNull()
+  })
+
   it('builds a bounded ASCII label', () => {
     const label = guiTriggerLabel('focus', 'uuid-1', { code: 100, trialIndex: 3, phase: 'prepare' })
     expect(label).toBe('pbc1|focus|uuid-1|3|prepare')
@@ -117,20 +145,94 @@ describe('GuiTriggerQueue', () => {
     vi.useRealTimers()
   })
 
-  it('POSTs {code,label} once to the trigger route and resolves acked on strict ack', async () => {
-    const calls: { url: string; init?: RequestInit }[] = []
-    const { queue } = makeQueue(async (url, init) => {
-      calls.push({ url, init })
-      return jsonResponse(ack())
+  it('prefers a prepared hardware trigger, with HTTP used only before a serial send is attempted', async () => {
+    const gui = vi.fn(async () => jsonResponse(ack({ label: 'marker' })))
+    const serial = vi.fn(async () => ({ ...ack(), label: undefined }))
+    const failure = { reason: 'journal_not_found', message: 'Missing active event journal' }
+    const prepare = vi.fn(async (): Promise<{ send: typeof serial } | typeof failure> => ({ send: serial }))
+    const open = vi.fn(async () => failure)
+    const queue = new GuiTriggerQueue({ fetchImpl: gui, prepareHardware: prepare, openHardware: open })
+    queue.setContextProvider(() => ({ ...CTX, hardwareTrigger: true }))
+    expect(serial).not.toHaveBeenCalled()
+    expect(gui).not.toHaveBeenCalled()
+    const completed = await queue.enqueue(10, 'marker')
+    expect(completed).toMatchObject({ outcome: 'acked', transport: 'hardware_serial', ack: { sequence: 42 } })
+    expect(serial).toHaveBeenCalledOnce()
+    expect(gui).not.toHaveBeenCalled()
+
+    serial.mockRejectedValueOnce(new Error('hardware_trigger_ack_timeout'))
+    expect(await queue.enqueue(10, 'marker')).toMatchObject({
+      outcome: 'uncertain', transport: 'hardware_serial', error: 'hardware_trigger_ack_timeout',
     })
-    const result = await queue.enqueue(10, 'pbc1|focus|ev1|0|prepare')
-    expect(result.outcome).toBe('acked')
-    expect(result.ack?.sequence).toBe(42)
-    expect(calls).toHaveLength(1)
-    expect(calls[0]!.url).toBe('/api/omni-gui/v1/trigger')
-    expect(calls[0]!.init?.method).toBe('POST')
-    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ code: 10, label: 'pbc1|focus|ev1|0|prepare' })
+    expect(gui).not.toHaveBeenCalled()
+
+    const records: GuiTriggerLedgerRecord[] = []
+    setGuiTriggerLedger(record => records.push(record))
+    prepare.mockResolvedValueOnce(failure)
+    expect(await queue.enqueue(10, 'marker')).toMatchObject({ outcome: 'acked', transport: 'gui_http', hardwareUnavailable: failure })
+    expect(gui).toHaveBeenCalledOnce()
+    expect(records).toMatchObject([
+      { kind: 'trigger_request', transport: 'gui_http', hardwareUnavailable: failure },
+      { kind: 'trigger_ack', transport: 'gui_http', hardwareUnavailable: failure },
+    ])
+
+    expect(await queue.checkHardware()).toEqual(failure)
+    expect(await queue.enqueue(10, 'marker', { requireHardware: true })).toMatchObject({
+      outcome: 'failed', error: 'hardware_trigger_not_prepared',
+    })
+    expect(records).toHaveLength(3)
+    expect(records[2]).toMatchObject({ kind: 'trigger_error', error: 'hardware_trigger_not_prepared' })
+    expect(gui).toHaveBeenCalledOnce()
+    expect(serial).toHaveBeenCalledTimes(2)
+
+    queue.setContextProvider(null)
+    expect(await queue.checkHardware()).toMatchObject({ reason: 'no_gui_trigger_context' })
   })
+
+  it('dispatches prepared hardware immediately and drains confirmations independently', async () => {
+    let confirmFirst!: (body: unknown) => void
+    const firstAck = new Promise(resolve => { confirmFirst = resolve })
+    const send = vi.fn((code: number) => code === 10 ? firstAck :
+      Promise.resolve(ack({ code, sequence: 43, label: undefined })))
+    const open = vi.fn(async () => ({ send }))
+    const gui = vi.fn()
+    const queue = new GuiTriggerQueue({ fetchImpl: gui, openHardware: open })
+    queue.setContextProvider(() => ({ ...CTX, hardwareTrigger: true }))
+    expect(await queue.checkHardware()).toBeNull()
+
+    const first = queue.enqueue(10, 'first', { requireHardware: true })
+    const second = queue.enqueue(11, 'second', { requireHardware: true })
+    expect(send.mock.calls).toEqual([[10, expect.any(AbortSignal)], [11, expect.any(AbortSignal)]])
+    expect(open).toHaveBeenCalledOnce()
+    expect(await second).toMatchObject({ outcome: 'acked', ack: { sequence: 43 } })
+    const drained = vi.fn()
+    const drain = queue.drain().then(drained)
+    await Promise.resolve()
+    expect(drained).not.toHaveBeenCalled()
+    confirmFirst(ack({ label: undefined }))
+    expect(await first).toMatchObject({ outcome: 'acked', ack: { sequence: 42 } })
+    await drain
+    expect(drained).toHaveBeenCalledOnce()
+    expect(gui).not.toHaveBeenCalled()
+  })
+
+  it.each([[undefined, '/api/omni-gui/v1/trigger'], [8769, '/api/omni-gui/8769/v1/trigger']] as const)(
+    'POSTs one trigger to the active GUI port %s and validates its ACK', async (guiPort, expectedUrl) => {
+      const calls: { url: string; init?: RequestInit }[] = []
+      const { queue, setCtx } = makeQueue(async (url, init) => {
+        calls.push({ url, init })
+        return jsonResponse(ack())
+      })
+      setCtx({ ...CTX, guiPort })
+      const result = await queue.enqueue(10, 'pbc1|focus|ev1|0|prepare')
+      expect(result.outcome).toBe('acked')
+      expect(result.ack?.sequence).toBe(42)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.url).toBe(expectedUrl)
+      expect(calls[0]!.init?.method).toBe('POST')
+      expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ code: 10, label: 'pbc1|focus|ev1|0|prepare' })
+    },
+  )
 
   it('keeps FIFO order with a single request in flight', async () => {
     const order: string[] = []
@@ -333,7 +435,6 @@ describe('SessionLogger trigger integration', () => {
     const queue = new GuiTriggerQueue({ fetchImpl: async () => jsonResponse(ack({ code: 10 })) })
     queue.setContextProvider(() => CTX)
     void queue
-    const { guiTriggerQueue } = await import('./guiTrigger')
     let ctx: GuiTriggerContext | null = CTX
     guiTriggerQueue.setContextProvider(() => ctx)
     const posts: string[] = []
@@ -361,6 +462,63 @@ describe('SessionLogger trigger integration', () => {
     } finally {
       globalThis.fetch = originalFetch
       guiTriggerQueue.setContextProvider(null)
+    }
+  })
+
+  it('marks N-back stimuli with prepared CH340 and preserves optional HTTP fallback', async () => {
+    let connected = true
+    let journal = ''
+    const write = vi.fn(async (frame: Uint8Array) => {
+      journal += JSON.stringify(ack({
+        code: frame[1], host_time: new Date().toISOString(), label: 'stm32_hardware_trigger',
+      })) + '\n'
+    })
+    const port = {
+      getInfo: () => ({ usbVendorId: 0x1a86, usbProductId: 0x7523 }),
+      writable: new WritableStream<Uint8Array>({ write: frame => write(frame) }),
+    }
+    vi.stubGlobal('navigator', { serial: { getPorts: async () => connected ? [port] : [] } })
+    vi.stubGlobal('window', { showDirectoryPicker: async () => ({
+      name: 'recordings', queryPermission: async () => 'granted',
+      getFileHandle: async () => ({ getFile: async () => new Blob([journal]) }),
+    }) })
+    const fetchMarker = vi.fn(async (_url: string, init?: RequestInit) =>
+      jsonResponse(ack(JSON.parse(init!.body as string))))
+    vi.stubGlobal('fetch', fetchMarker)
+    try {
+      await authorizeHardwareTriggerDirectory()
+      guiTriggerQueue.setContextProvider(() => ({ ...CTX, hardwareTrigger: true, guiPort: 8769 }))
+      const logger = new SessionLogger('nback', 'S01')
+      expect(await guiTriggerQueue.checkHardware()).toBeNull()
+      const marker = logger.log('stimulus_onset', { index: 3, scored: true, target: true }, { requireHardware: true })
+      await vi.advanceTimersByTimeAsync(40)
+      expect(await marker).toMatchObject({ code: 245, outcome: 'acked', transport: 'hardware_serial' })
+      expect(write).toHaveBeenCalledExactlyOnceWith(Uint8Array.of(0xa5, 245, 10))
+      expect(fetchMarker).not.toHaveBeenCalled()
+
+      connected = false
+      expect(await logger.log('stimulus_onset', { index: 4, scored: true, target: false }))
+        .toMatchObject({ code: 246, outcome: 'acked', transport: 'gui_http' })
+      expect(await logger.log('response', { index: 4, rtMs: 302, scored: true, input: 'match' }))
+        .toMatchObject({ code: 247, outcome: 'acked', transport: 'gui_http' })
+      expect(fetchMarker.mock.calls[1]?.[0]).toBe('/api/omni-gui/8769/v1/trigger')
+      expect(JSON.parse(fetchMarker.mock.calls[1]![1]!.body as string)).toEqual({
+        code: 247, label: `pbc1|nback|${logger.getEvents().at(-1)!.eventId}|4|response`,
+      })
+      expect(await logger.log('stimulus_onset', { index: 0, scored: false, target: false }))
+        .toMatchObject({ code: 248, outcome: 'acked', transport: 'gui_http' })
+      expect(logger.log('stimulus_offset', { index: 4 })).toBeNull()
+      expect(logger.log('trial_end', { index: 4 })).toBeNull()
+      expect(logger.log('stimulus_onset', { index: 4, scored: true })).toBeNull()
+      expect(fetchMarker).toHaveBeenCalledTimes(3)
+
+      guiTriggerQueue.setContextProvider(null)
+      expect(await logger.log('response', { index: 1 })).toMatchObject({ code: 247, outcome: 'cancelled' })
+      expect(fetchMarker).toHaveBeenCalledTimes(3)
+      expect(logger.getEvents().at(-1)).toMatchObject({ type: 'response', data: { index: 1 } })
+    } finally {
+      guiTriggerQueue.setContextProvider(null)
+      vi.unstubAllGlobals()
     }
   })
 })

@@ -12,6 +12,8 @@ import {
 } from './guiClient'
 import { guiTriggerQueue, type GuiTriggerContext } from './guiTrigger'
 
+const STM32_GUI_TRANSPORTS = new Set(['STM32', 'E73_BLE_32', 'E73_DONGLE', 'INTEL_BLE_32', 'INTEL_WIFI_32'])
+
 export type GuiContinuityEvent =
   | { type: 'interrupt'; reason: string; detail: string; context: GuiStreamContext | null }
   | { type: 'ready'; context: GuiStreamContext }
@@ -61,6 +63,7 @@ type Boundary = {
 
 export class OmniGuiSession {
   private readonly client: OmniGuiHttpClient
+  private readonly port: number | undefined
   private closed = true
   private terminated = false
   private stoppedSent = false
@@ -68,6 +71,7 @@ export class OmniGuiSession {
   private segmentChain: Promise<void> = Promise.resolve()
 
   constructor(opts: OmniGuiClientOptions) {
+    this.port = opts.port
     this.client = new OmniGuiHttpClient({
       ...opts,
       autoRecover: true,
@@ -155,6 +159,9 @@ export class OmniGuiSession {
       upstreamSessionId: stream.sessionId,
       generation: stream.generation,
       segmentId: stream.segmentId,
+      ...(this.port === undefined ? {} : { guiPort: this.port }),
+      ...(stream.channelNames.length === 32 && STM32_GUI_TRANSPORTS.has(acqRuntime.omniGuiStatus?.transport?.toUpperCase() ?? '')
+        ? { hardwareTrigger: true } : {}),
     }
   }
 

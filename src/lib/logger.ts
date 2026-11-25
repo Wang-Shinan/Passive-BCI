@@ -3,6 +3,8 @@ import { sampleClock } from './eeg/sampleClock'
 import { CONTEXT_SCHEMA, EVENT_SCHEMA, type SessionContextRecord } from './session/contracts'
 import { sessionHub } from './session/sessionHub'
 
+export type EventClock = { perfMs: number; eeg: ReturnType<typeof sampleClock.snapshot> }
+
 export interface LogEvent {
   t: number
   experiment: string
@@ -34,10 +36,12 @@ setGuiTriggerLedger((record) => {
       label: record.label,
       context: { ...record.context },
       outcome: record.outcome,
+      transport: record.transport,
       sequence: record.sequence,
       sample_index: record.sample_index,
       host_time: record.host_time,
       error: record.error,
+      hardwareUnavailable: record.hardwareUnavailable,
       sourceTms: record.sourceTms,
       sourcePerfMs: record.sourcePerfMs,
       requestedAtMs: record.requestedAtMs,
@@ -67,8 +71,10 @@ export class SessionLogger {
   private events: LogEvent[] = []
   private contexts: Record<string, unknown>[] = []
   private t0: number
+  private readonly localOnly: boolean
 
-  constructor(experiment: string, subjectId = 'anon') {
+  constructor(experiment: string, subjectId = 'anon', localOnly = false) {
+    this.localOnly = localOnly
     this.meta = {
       subjectId,
       experiment,
@@ -79,15 +85,15 @@ export class SessionLogger {
 
   setSubjectId(subjectId: string): void {
     this.meta.subjectId = subjectId
-    if (sessionHub.active) {
+    if (!this.localOnly && sessionHub.active) {
       sessionHub.bindMeta({ experiment: this.meta.experiment, subjectId })
     }
   }
 
-  log(type: string, data?: Record<string, unknown>): Promise<GuiTriggerResult | null> | null {
-    const eeg = sampleClock.snapshot()
-    const t = performance.now() - this.t0
-    const perf_ms = performance.now()
+  log(type: string, data?: Record<string, unknown>, options?: { requireHardware?: boolean; sourcePerfMs?: number; clock?: EventClock }): Promise<GuiTriggerResult | null> | null {
+    const eeg = options?.clock ? options.clock.eeg : sampleClock.snapshot()
+    const perf_ms = options?.clock?.perfMs ?? performance.now()
+    const t = perf_ms - this.t0
     const eventId = newEventId()
     this.events.push({
       t,
@@ -99,6 +105,7 @@ export class SessionLogger {
     if (this.events.length > EVENT_RING) {
       this.events.splice(0, this.events.length - EVENT_RING)
     }
+    if (this.localOnly) return null
     sessionHub.logEvent({
       schema: EVENT_SCHEMA,
       t_ms: t,
@@ -115,8 +122,9 @@ export class SessionLogger {
     return guiTriggerQueue.enqueue(mapped.code, guiTriggerLabel(this.meta.experiment, eventId, mapped), {
       sourceEventId: eventId,
       sourceExperiment: this.meta.experiment,
-      sourceTms: t,
-      sourcePerfMs: perf_ms,
+      sourceTms: options?.sourcePerfMs === undefined ? t : options.sourcePerfMs - this.t0,
+      sourcePerfMs: options?.sourcePerfMs ?? perf_ms,
+      requireHardware: options?.requireHardware,
     })
   }
 
@@ -135,6 +143,7 @@ export class SessionLogger {
     if (this.events.length > EVENT_RING) {
       this.events.splice(0, this.events.length - EVENT_RING)
     }
+    if (this.localOnly) return
     sessionHub.logEventFor(recordingId, {
       schema: EVENT_SCHEMA,
       t_ms: t,
@@ -161,13 +170,13 @@ export class SessionLogger {
       eeg,
       ...(row as Record<string, unknown>),
     }
-    if (!sessionHub.active) {
+    if (this.localOnly || !sessionHub.active) {
       this.contexts.push(record)
       if (this.contexts.length > CONTEXT_RING) {
         this.contexts = this.contexts.slice(-Math.floor(CONTEXT_RING / 2))
       }
     }
-    sessionHub.logContext(record)
+    if (!this.localOnly) sessionHub.logContext(record)
   }
 
   getEvents(): readonly LogEvent[] {

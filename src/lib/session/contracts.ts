@@ -27,6 +27,7 @@ export type SessionContextRecord = {
 }
 
 export type SessionBindMeta = {
+  tongueAction?: string
   experiment?: string
   subjectId?: string
   game?: string

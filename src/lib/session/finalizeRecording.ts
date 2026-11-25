@@ -14,7 +14,7 @@ export function finalizeActiveRecording(): Promise<void> {
   return pending
 }
 
-async function activeRecordingId(): Promise<string | null> {
+export async function activeRecordingId(): Promise<string | null> {
   const response = await fetch('/api/record/active')
   if (!response.ok) throw new Error('无法确认录制状态，尚未切换模型。')
   const active = await response.json() as { ok?: boolean; id?: string | null }

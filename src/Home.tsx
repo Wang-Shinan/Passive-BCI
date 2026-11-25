@@ -17,9 +17,9 @@ const TOOLS = [
     tag: '提示式采集 · 放松 / 专注', accent: '#63d6ff',
   },
   {
-    path: '/smr-acquisition', title: 'SMR 分组采集与训练',
-    blurb: '四方向随机采集。光标由随机初始化 EEGNet 驱动；组间保存原始 EEG 与试次标签，不做 LoRA。',
-    tag: '分组采集 · 左手 / 右手 / 舌头 / 休息', accent: '#34d399',
+    path: '/smr-acquisition', title: 'SMR 运动想象采集',
+    blurb: '先跟随动画熟悉动作，每组均衡采集 20 个试次，使用本轮训练并验证的模型控制光标。',
+    tag: '组间训练 · 四类光标', accent: '#34d399',
   },
   {
     path: '/training', title: '数据导出与 Linear Probing',

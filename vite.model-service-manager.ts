@@ -3,6 +3,10 @@ import { operationGate } from './vite.operation-gate.ts'
 import { parseOmniModelSource, type OmniModelSource } from './vite.omni-source.ts'
 import { readGazeHead } from './vite.gaze-heads.ts'
 import type { GazeModelReport } from './src/lib/model-runtime/modelServiceTypes.ts'
+import {
+  DEFAULT_REVE_FILTER, isReveFilterMode, parseReveCustomFilter, sameReveCustomFilter,
+  type ReveCustomFilter, type ReveFilterMode,
+} from './src/lib/model-runtime/reveFilter.ts'
 /**
  * Vite plugin: one-click start/stop for the local NCC model WebSocket
  * (REVE / mock) so the online-learn UI need not ask users for npm scripts.
@@ -30,6 +34,8 @@ interface EnsureRequest {
   task: string
   stepSec: number
   windowSec: number | null
+  reveFilterMode: ReveFilterMode | null
+  reveCustomFilter: ReveCustomFilter | null
   headId: string | null
   weightId: string
   eegnetChannels: number
@@ -40,6 +46,8 @@ interface EnsureRequest {
 
 interface ManagedService {
   weightId?: string | null
+  reveFilterMode?: ReveFilterMode | null
+  reveCustomFilter?: ReveCustomFilter | null
   weightKey?: string | null
   omniSourceKey?: string
   configurationKey?: string | null
@@ -47,6 +55,7 @@ interface ManagedService {
   gazeReport?: GazeModelReport | null
   generation?: number
   headId?: string | null
+  loadedHeadPath?: string | null
   child: ChildProcess | null
   owned: boolean
   backend: ModelServiceBackend | null
@@ -56,12 +65,15 @@ interface ManagedService {
   lastError: string
   logBuf: string
   starting: Promise<EnsureResult> | null
+  stopping?: Promise<EnsureResult>
   startingChild?: ChildProcess | null
   request?: EnsureRequest | null
 }
 
 export interface EnsureResult {
   weightId?: string | null
+  reveFilterMode?: ReveFilterMode | null
+  reveCustomFilter?: ReveCustomFilter | null
   configurationKey?: string | null
   modelRevision?: string | null
   gazeReport?: GazeModelReport | null
@@ -111,6 +123,8 @@ function proxyModelUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
   }
   target.once('error', fail)
   socket.once('error', fail)
+  target.once('close', fail)
+  socket.once('close', fail)
   target.once('connect', () => {
     const dest = rewriteModelWsPath(req.url ?? '/')
     let msg = `GET ${dest} HTTP/1.1\r\n`
@@ -139,21 +153,21 @@ function attachModelWsProxy(httpServer: {
   })
 }
 
-function isPortOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
+export function isPortOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
   return new Promise((resolve) => {
-    const server = net.createServer()
-    server.once('error', (err: NodeJS.ErrnoException) => {
-      resolve(err.code === 'EADDRINUSE')
-    })
-    server.once('listening', () => {
-      server.close(() => resolve(false))
-    })
-    try {
-      server.listen(port, host)
-    } catch {
-      resolve(false)
+    const socket = net.connect(port, host)
+    const finish = (listening: boolean) => {
+      socket.destroy()
+      resolve(listening)
     }
+    socket.once('connect', () => finish(true))
+    socket.once('error', () => finish(false))
+    socket.setTimeout(500, () => finish(false))
   })
+}
+
+function loadedHeadPath(log: string): string | null {
+  return log.match(/^\[reve\] state-file loaded [^\r\n]* step=\d+ ([^\r\n]+\.pt)\r?$/m)?.[1] ?? null
 }
 
 function sendJson(res: import('node:http').ServerResponse, status: number, body: unknown) {
@@ -238,13 +252,13 @@ function killPidTree(pid: number) {
   }
 }
 
-async function freePort(port: number) {
-  for (const pid of pidsOnPort(port)) killPidTree(pid)
+async function waitForPortClose(port: number) {
   const deadline = Date.now() + 4000
   while (Date.now() < deadline) {
     if (!(await isPortOpen(port))) return
     await sleep(150)
   }
+  throw new Error(`模型服务停止后端口 ${port} 仍在监听`)
 }
 
 function parseBackend(value: unknown): ModelServiceBackend {
@@ -300,20 +314,27 @@ export function modelServiceManagerPlugin(): Plugin {
   )
   let projectRoot = process.cwd()
 
+  function confirmedHeadPath(): string | null {
+    return state.loadedHeadPath ?? loadedHeadPath(state.logBuf)
+  }
+
   function snapshot(extra: Partial<EnsureResult> = {}): EnsureResult {
     const alive = Boolean(state.child && state.child.exitCode === null && !state.child.killed)
+    const confirmed = alive ? confirmedHeadPath() : null
     return {
       ok: extra.ok ?? true,
       backend: extra.backend ?? state.backend,
       task: extra.task ?? state.task,
       stepSec: extra.stepSec ?? state.stepSec,
       windowSec: extra.windowSec ?? state.windowSec,
+      reveFilterMode: state.reveFilterMode ?? null,
+      reveCustomFilter: state.reveCustomFilter ?? null,
       headId: state.headId ?? null,
       weightId: state.weightId ?? null,
       configurationKey: state.configurationKey ?? null,
       modelRevision: state.modelRevision ?? null,
       gazeReport: state.gazeReport ?? null,
-      loadedHead: alive ? state.logBuf.match(/\[reve\] state-file loaded[^\r\n]*[\\/]([^\\/\r\n]+\.pt)/)?.[1] ?? null : null,
+      loadedHead: confirmed ? path.basename(confirmed) : null,
       port: PORT,
       proxyPort: PROXY_PORT,
       running: extra.running ?? false,
@@ -357,12 +378,14 @@ export function modelServiceManagerPlugin(): Plugin {
     state.task = null
     state.stepSec = null
     state.windowSec = null
+    state.reveFilterMode = null
+    state.reveCustomFilter = null
     state.headId = null
+    state.weightId = null
     state.configurationKey = null
     state.modelRevision = null
     state.gazeReport = null
     state.startingChild = null
-    state.request = null
   }
 
   async function ensure(
@@ -376,9 +399,12 @@ export function modelServiceManagerPlugin(): Plugin {
     eegnetChannels = 32,
     eegnetSeed = 20261022,
     windowSec: number | null = null,
+    reveFilterMode: ReveFilterMode | null = null,
+    reveCustomFilter: ReveCustomFilter | null = null,
   ): Promise<EnsureResult> {
+    if (state.stopping) await state.stopping
     const request: EnsureRequest = {
-      backend, task, stepSec, windowSec, headId, weightId,
+      backend, task, stepSec, windowSec, headId, weightId, reveFilterMode, reveCustomFilter,
       eegnetChannels, eegnetSeed,
       omniSourceKey: JSON.stringify(omniSource ?? null),
       force,
@@ -391,12 +417,10 @@ export function modelServiceManagerPlugin(): Plugin {
       const staleChild = state.startingChild
       if (staleChild?.pid && staleChild.exitCode === null && !staleChild.killed) {
         killPidTree(staleChild.pid)
-        // Wait for the killed child's port to free so the replacement below does
-        // not mistake the dying process for a foreign listener.
-        const deadline = Date.now() + 5000
-        while (Date.now() < deadline && (await isPortOpen(PORT))) await sleep(150)
+        await waitForPortClose(PORT)
       }
       try { await inFlight } catch { /* superseded */ }
+      if (state.stopping) await state.stopping
     }
     state.request = request
     const generation = (state.generation ?? 0) + 1
@@ -415,6 +439,10 @@ export function modelServiceManagerPlugin(): Plugin {
       const configurationKey = [selected?.configurationKey ?? '', weightKey ?? ''].join('|')
       if (weight && process.env.MODEL_PACKAGE) throw new Error('MODEL_PACKAGE 与独立权重选择不能同时使用')
       if (selected && process.env.MODEL_PACKAGE) throw new Error('当前使用 MODEL_PACKAGE，不能选择 REVE 线性头')
+      if (process.env.MODEL_PACKAGE && reveFilterMode && reveFilterMode !== DEFAULT_REVE_FILTER) {
+        throw new Error('当前使用 MODEL_PACKAGE，滤波由模型包控制')
+      }
+      const managedFilter = process.env.MODEL_PACKAGE ? null : reveFilterMode
       const listening = await isPortOpen(PORT)
       assertCurrent()
       const alive = Boolean(state.child && state.child.exitCode === null && !state.child.killed)
@@ -437,7 +465,10 @@ export function modelServiceManagerPlugin(): Plugin {
         state.task === wantedTask &&
         (state.omniSourceKey ?? 'null') === omniSourceKey &&
         (state.headId ?? null) === (selected?.id ?? null) &&
+        (!selected || confirmedHeadPath() === path.resolve(selected.stateFile)) &&
         (state.configurationKey ?? null) === configurationKey &&
+        (state.reveFilterMode ?? null) === managedFilter &&
+        sameReveCustomFilter(state.reveCustomFilter, reveCustomFilter) &&
         hopOk &&
         winOk &&
         !force
@@ -473,9 +504,13 @@ export function modelServiceManagerPlugin(): Plugin {
 
       assertCurrent()
       release = operationGate.beginModelChange()
-      if (listening || (state.owned && alive) || force) {
+      const owned = state.owned && alive
+      if (listening || owned || force) {
         stopOwned()
-        if (force || listening) await freePort(PORT)
+        if (force && listening && !owned) {
+          for (const pid of pidsOnPort(PORT)) killPidTree(pid)
+        }
+        await waitForPortClose(PORT)
       }
 
       assertCurrent()
@@ -490,6 +525,7 @@ export function modelServiceManagerPlugin(): Plugin {
 
       state.lastError = ''
       state.logBuf = ''
+      state.loadedHeadPath = null
       state.weightId = weightId || null
       state.weightKey = weightKey
       state.backend = backend
@@ -497,6 +533,8 @@ export function modelServiceManagerPlugin(): Plugin {
       state.omniSourceKey = omniSourceKey
       state.stepSec = backend === 'reve' || backend === 'eegnet' ? stepSec : null
       state.windowSec = effWindowSec
+      state.reveFilterMode = managedFilter
+      state.reveCustomFilter = reveCustomFilter
       state.headId = selected?.id ?? null
       state.configurationKey = configurationKey
       state.gazeReport = selected?.gazeReport ?? null
@@ -515,6 +553,8 @@ export function modelServiceManagerPlugin(): Plugin {
         spawnArgs.push('--task', task)
         spawnArgs.push('--step-sec', String(stepSec))
         if (effWindowSec != null) spawnArgs.push('--window-sec', String(effWindowSec))
+        if (managedFilter) spawnArgs.push('--filter-mode', managedFilter)
+        if (reveCustomFilter) spawnArgs.push('--custom-filter', JSON.stringify(reveCustomFilter))
         if (task === 'smr_control' || task === 'gaze_smr') spawnArgs.push('--strategy', 'none')
         if (selected) spawnArgs.push(...modelHeadArgs(selected))
       }
@@ -569,15 +609,18 @@ export function modelServiceManagerPlugin(): Plugin {
             owned: false,
             pid: null,
             backend,
-            message: `${state.lastError || '模型服务启动失败'}。请运行 npm run backend:doctor 检查本地 Python 环境和模型资产。`,
+            message: selected
+              ? `所选分类头 ${selected.id} 加载失败。\n${state.lastError || state.logBuf.trim()}`
+              : `${state.lastError || '模型服务启动失败'}。请运行 npm run backend:doctor 检查本地 Python 环境和模型资产。`,
           })
         }
         if (!sawReadyLog && READY_PATTERN.test(state.logBuf)) sawReadyLog = true
         if (sawReadyLog && (await isPortOpen(PORT))) {
           assertCurrent()
-          if (backend === 'reve' && (selected || task === 'gaze_smr') && !state.logBuf.includes('[reve] state-file loaded')) {
+          state.loadedHeadPath = loadedHeadPath(state.logBuf)
+          if (selected && state.loadedHeadPath !== path.resolve(selected.stateFile)) {
             if (child.pid) killPidTree(child.pid)
-            state.lastError = '所选线性头未成功加载（任务或编码器维度不匹配），已停止本次启动。'
+            state.lastError = `模型服务未确认载入指定分类头 ${selected.id}，已停止本次启动。`
             return snapshot({ ok: false, running: false, message: state.lastError })
           }
           return snapshot({
@@ -622,16 +665,18 @@ export function modelServiceManagerPlugin(): Plugin {
     }
   }
 
-  async function stop(): Promise<EnsureResult> {
+  async function stopOwnedService(): Promise<EnsureResult> {
     state.generation = (state.generation ?? 0) + 1
     const stale = state.starting
     const staleChild = state.startingChild
-    if (staleChild?.pid && staleChild.exitCode === null && !staleChild.killed) killPidTree(staleChild.pid)
+    const owned = state.owned && state.child !== null
+    if (owned) stopOwned()
+    else if (staleChild?.pid && staleChild.exitCode === null && !staleChild.killed) killPidTree(staleChild.pid)
     if (stale) {
       try { await stale } catch { /* cancelled by stop */ }
     }
-    if (state.child && state.owned) {
-      stopOwned()
+    if (owned || staleChild) {
+      await waitForPortClose(PORT)
       return snapshot({
         ok: true,
         running: false,
@@ -643,12 +688,20 @@ export function modelServiceManagerPlugin(): Plugin {
     }
     return snapshot({
       ok: true,
-      running: false,
+      running: await isPortOpen(PORT),
       owned: false,
       pid: null,
       alreadyRunning: false,
       message: '没有由本页托管的模型服务（外部启动的不会自动杀，请勾选强制启动或关掉对应终端）',
     })
+  }
+
+  async function stop(): Promise<EnsureResult> {
+    if (state.stopping) return state.stopping
+    const stopping = stopOwnedService()
+    state.stopping = stopping
+    try { return await stopping }
+    finally { state.stopping = undefined }
   }
 
   let gazeFitting = false
@@ -697,7 +750,7 @@ export function modelServiceManagerPlugin(): Plugin {
         }
         if (action === 'heads' && req.method === 'GET') {
           const heads = await listModelHeads(projectRoot)
-          sendJson(res, 200, { ok: true, heads: heads.map(({ stateFile: _state, loraCheckpoint: _lora, reportFile: _report, ...head }) => head) })
+          sendJson(res, 200, { ok: true, heads: heads.map(({ stateFile: _state, loraCheckpoint: _lora, modelDir: _model, reportFile: _report, ...head }) => head) })
           return
         }
         if (action === 'weights' && req.method === 'GET') {
@@ -707,9 +760,30 @@ export function modelServiceManagerPlugin(): Plugin {
           sendJson(res, 200, await statusOf())
           return
         }
-        if (action === 'ensure' && req.method === 'POST') {
+        if ((action === 'ensure' || action === 'filter') && req.method === 'POST') {
           const body = await readJson(req)
-          const backend = parseBackend(body.backend)
+          const backend = action === 'filter' ? 'reve' : parseBackend(body.backend)
+          if (action === 'ensure' && body.headId != null && (typeof body.headId !== 'string' || (backend !== 'reve' && body.headId))) {
+            throw new Error('分类头标识无效或当前架构不支持该分类头')
+          }
+          const filter = body.reveFilterMode ?? DEFAULT_REVE_FILTER
+          if (backend === 'reve' && !isReveFilterMode(filter)) throw new Error('REVE 输入滤波选项无效')
+          const custom = backend === 'reve' && filter === 'custom' ? parseReveCustomFilter(body.reveCustomFilter) : undefined
+          if (backend === 'reve' && filter === 'custom' && !custom) throw new Error('REVE 自定义滤波参数无效')
+          const filterMode = backend === 'reve' && isReveFilterMode(filter) ? filter : null
+          if (action === 'filter') {
+            if (state.starting) await state.starting
+            const current = await statusOf()
+            if (!current.owned || current.backend !== 'reve' || !current.running || !current.task || current.stepSec == null) {
+              sendJson(res, 200, current)
+              return
+            }
+            const source = JSON.parse(state.omniSourceKey ?? 'null') as OmniModelSource | null
+            const result = await ensure('reve', false, current.task, current.stepSec, current.headId ?? null,
+              source, current.weightId ?? '', undefined, undefined, current.windowSec ?? null, filterMode, custom ?? null)
+            sendJson(res, result.ok ? 200 : 409, result)
+            return
+          }
           const result = await ensure(
             backend,
             body.force === true,
@@ -721,6 +795,8 @@ export function modelServiceManagerPlugin(): Plugin {
             body.eegnetChannels == null ? 32 : Number(body.eegnetChannels),
             body.eegnetSeed == null ? 20261022 : Number(body.eegnetSeed),
             parseWindowSec(body.windowSec ?? body.window_sec, backend),
+            filterMode,
+            custom ?? null,
           )
           sendJson(res, result.ok ? 200 : 409, result)
           return

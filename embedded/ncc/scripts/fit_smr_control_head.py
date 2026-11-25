@@ -62,6 +62,7 @@ def encode_windows(backend: ReveModelBackend, windows) -> tuple[torch.Tensor, to
                 end_time_sec=None,
                 data=item.data,
                 profile=None,
+                electrode_positions=getattr(item, 'electrode_positions', None),
             )
         )
         cached = backend._cache.get(prediction.observation_id)
@@ -87,7 +88,7 @@ def train_linear_head(
     reset: bool = True,
 ) -> None:
     if reset:
-        init_linear_head(head)
+        init_linear_head(head, seed=int(torch.randint(0, 2**32, ()).item()))
     n_out = len(class_indices) if class_indices is not None else head.out_features
     counts = torch.bincount(labels, minlength=n_out).float()
     weights = (counts.clamp_min(1).sum() / (counts.clamp_min(1) * len(counts))).to(features.device)

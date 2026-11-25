@@ -17,6 +17,15 @@ import { notifyModelSubjectChanged } from '../model-runtime/modelHeadPreference'
 
 const SUBJECT_KEY = 'passive-bci.subject-id'
 
+export function storeSubjectId(id: string) {
+  try {
+    localStorage.setItem(SUBJECT_KEY, id)
+    notifyModelSubjectChanged()
+  } catch {
+    /* ignore */
+  }
+}
+
 export function ExportButtons({
   logger,
   subjectId,
@@ -51,12 +60,7 @@ export function ExportButtons({
 
   const changeSubject = (id: string) => {
     onSubjectChange(id)
-    try {
-      localStorage.setItem(SUBJECT_KEY, id)
-      notifyModelSubjectChanged()
-    } catch {
-      /* ignore */
-    }
+    storeSubjectId(id)
   }
 
   const metaArgs = () => ({

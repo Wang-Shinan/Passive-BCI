@@ -57,7 +57,7 @@ export function ChannelRail({
                 e.preventDefault()
                 onToggle(i)
               }}
-              title="单击设置；勾选/双击：显示并参与特征计算"
+              title="单击设置；勾选或双击切换波形显示"
             >
               <input
                 type="checkbox"
@@ -68,7 +68,7 @@ export function ChannelRail({
                   e.stopPropagation()
                   onToggle(i)
                 }}
-                title="显示并参与特征计算"
+                title="显示波形"
               />
               <span
                 className="acq-rail-dot"

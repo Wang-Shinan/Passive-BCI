@@ -15,6 +15,9 @@ test('new SMR subject uses the embedded head without a saved subject state', () 
   assert.deepEqual(resolveReveHeadMode({ task: 'smr_control', argv: ['--fresh-head'] }),
     { freshHead: true, checkpointHead: false })
   assert.throws(() => resolveReveHeadMode({ task: 'smr_control', argv: ['--state-file', 'x', '--checkpoint-head'] }), /mutually exclusive/)
+  assert.deepEqual(resolveReveHeadMode({ task: 'smr_control', argv: ['--resume-state-file', 'subject.pt'] }),
+    { freshHead: false, checkpointHead: false })
+  assert.throws(() => resolveReveHeadMode({ task: 'smr_control', argv: ['--state-file', 'x', '--resume-state-file', 'y'] }), /mutually exclusive/)
 })
 
 test('embedded SMR default resolves the general LoRA, not a previous subject adapter', t => {

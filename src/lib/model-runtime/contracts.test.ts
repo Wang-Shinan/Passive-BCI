@@ -181,6 +181,7 @@ describe('model runtime protocol', () => {
           step_sec: 0.5,
           unit: 'uV',
           layout: 'CT',
+          required_electrodes: ['AF8', 'Fp2', 'Fp1', 'AF7'],
         },
         follow: {
           transport: 'tcp-jsonl',
@@ -198,6 +199,7 @@ describe('model runtime protocol', () => {
       class_names: ['left', 'right', 'feet', 'rest'],
       window_sec: 2,
       step_sec: 0.5,
+      required_electrodes: ['AF8', 'Fp2', 'Fp1', 'AF7'],
       follow: {
         transport: 'tcp-jsonl',
         bind: '0.0.0.0:8769',

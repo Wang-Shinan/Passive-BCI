@@ -1,6 +1,7 @@
 import { BCIGO_CHANNEL_NAMES } from '../../acquisition/bcigo/client'
 import { NEURACLE_59_EEG_CHANNEL_NAMES } from '../../acquisition/neuracle/client'
 import { OMNI_CHANNEL_NAMES } from '../../acquisition/omni/client'
+import { matchOmniFlexVer2Channels, OMNI_FLEX_VER2_ELECTRODES } from '../../acquisition/omni/flexVer2'
 import type { RawBridgeBatch } from '../../acquisition/runtime'
 
 export type ModelSourceProfile = {
@@ -14,6 +15,14 @@ export type MatchedModelSource = {
   profile: ModelSourceProfile
   /** Source indices in `batch.values` (sample-major) for each profile channel. */
   indices: number[]
+  electrodePositions?: number[][]
+}
+
+const OMNI_FLEX_VER2_PROFILE: ModelSourceProfile = {
+  id: 'omni-flex-ver2',
+  device: 'omni',
+  channelNames: OMNI_FLEX_VER2_ELECTRODES.map(({ name }) => name),
+  label: 'OmniBCI 柔性 Ver2 · 16 导',
 }
 
 export const MODEL_SOURCE_PROFILES: readonly ModelSourceProfile[] = [
@@ -76,8 +85,19 @@ export function channelPickIndices(
 }
 
 export function matchModelSourceProfile(
-  batch: RawBridgeBatch,
+  batch: Pick<RawBridgeBatch, 'device' | 'channelNames' | 'channels' | 'omniFlexVer2Mapping'>,
+  useOmniFlexVer2 = true,
 ): MatchedModelSource | null {
+  if (batch.device === 'omni' && useOmniFlexVer2 && batch.omniFlexVer2Mapping !== undefined) {
+    if (batch.channels !== batch.channelNames.length) return null
+    const indices = matchOmniFlexVer2Channels(batch.channelNames, batch.omniFlexVer2Mapping)
+    if (!indices) return null
+    return {
+      profile: OMNI_FLEX_VER2_PROFILE,
+      indices,
+      electrodePositions: OMNI_FLEX_VER2_ELECTRODES.map(({ position }) => [...position]),
+    }
+  }
   for (const profile of MODEL_SOURCE_PROFILES) {
     if (profile.device !== batch.device) continue
     // Omni columns are hardware ordered. Preserve the user's montage instead of
@@ -100,10 +120,10 @@ export function projectRawBatchToProfile(
   batch: RawBridgeBatch,
   match: MatchedModelSource,
 ): RawBridgeBatch {
-  const { profile, indices } = match
+  const { profile, indices, electrodePositions } = match
   const outChannels = profile.channelNames.length
   if (
-    indices.length === batch.channels &&
+    !electrodePositions && indices.length === batch.channels &&
     indices.every((src, i) => src === i) &&
     sameChannelNames(batch.channelNames, profile.channelNames)
   ) {
@@ -125,13 +145,13 @@ export function projectRawBatchToProfile(
     values,
     channels: outChannels,
     channelNames: [...profile.channelNames],
-    ...(batch.electrodeNames ? { electrodeNames: indices.map(i => batch.electrodeNames![i]!) } : {}),
-    ...(batch.electrodePositions ? { electrodePositions: indices.map(i => batch.electrodePositions![i]!) } : {}),
+    electrodeNames: electrodePositions ? undefined : batch.electrodeNames && indices.map(i => batch.electrodeNames![i]!),
+    electrodePositions: electrodePositions ?? (batch.electrodePositions && indices.map(i => batch.electrodePositions![i]!)),
   }
 }
 
 export function describeWaitingModelSource(): string {
-  return MODEL_SOURCE_PROFILES.map((profile) => profile.label).join(' / ')
+  return [...MODEL_SOURCE_PROFILES, OMNI_FLEX_VER2_PROFILE].map((profile) => profile.label).join(' / ')
 }
 
 export function describeModelSource(
@@ -140,9 +160,8 @@ export function describeModelSource(
   sourceChannels = batch.channels,
 ): string {
   const dropped = sourceChannels - profile.channelNames.length
-  const prefix =
-    dropped > 0
-      ? `${profile.label} · 已从 ${sourceChannels} 导去掉 ${dropped} 路非头皮`
-      : profile.label
+  const prefix = profile === OMNI_FLEX_VER2_PROFILE || dropped <= 0
+    ? profile.label
+    : `${profile.label} · 已从 ${sourceChannels} 导去掉 ${dropped} 路非头皮`
   return `${prefix} · ${batch.sampleRate} Hz · 原始 uV`
 }

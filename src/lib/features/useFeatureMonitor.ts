@@ -39,7 +39,7 @@ export function useFeatureMonitor(opts: {
   preferLive?: boolean
   /** Extra feature ids that must stay enabled (e.g. control drivers). */
   ensureFeatures?: string[]
-  /** Restrict live feature computation to a channel subset; overrides the hub mask. */
+  /** Restrict live features further for this monitor. */
   channelMask?: boolean[] | null
 }) {
   const {
@@ -58,6 +58,7 @@ export function useFeatureMonitor(opts: {
   const ringRef = useRef(makeSynthRing(5))
   const phaseRef = useRef(0)
   const sawLiveRef = useRef(false)
+  const channelSelectionRef = useRef('')
   const modulatorsRef = useRef(modulators)
   modulatorsRef.current = modulators
   const autonomousRef = useRef(autonomous)
@@ -122,6 +123,18 @@ export function useFeatureMonitor(opts: {
     const id = window.setInterval(() => {
       const enabled = enabledNow()
       if (!enabled.length) return
+      const { channelNames, channelTypes } = liveEegHub.meta
+      const subset = channelMaskRef.current
+      const channelMask = liveEegHub.featureChannelMask(channelNames, subset)
+      const useAllSelectedChannels = liveEegHub.hasFeatureChannelSelection || subset !== null
+      const selection = JSON.stringify([channelNames, channelTypes, channelMask, useAllSelectedChannels])
+      if (channelSelectionRef.current !== selection) {
+        if (sawLiveRef.current) {
+          setLatest(null)
+          setHistory([])
+        }
+        channelSelectionRef.current = selection
+      }
       const wantLive = preferLiveRef.current || (!autonomousRef.current && liveEegHub.isFresh())
       if (wantLive) {
         if (!liveEegHub.isFresh()) {
@@ -136,15 +149,21 @@ export function useFeatureMonitor(opts: {
           sampleRate: ring.sampleRate,
           windowSec: WINDOW_SEC,
           enabledFeatures: enabled,
-          channelMask: channelMaskRef.current ?? liveEegHub.featureChannelMask(),
-          channelNames: liveEegHub.meta.channelNames,
+          channelMask,
+          useAllSelectedChannels,
+          channelNames,
+          channelTypes,
         })
-        if (!snap) return
+        if (!snap) {
+          setLatest(null)
+          return
+        }
         sawLiveRef.current = true
         setOrigin('live')
-        setLatest(snap)
+        const liveSnapshot = { ...snap, sampleEndAt: ring.lastSampleAt }
+        setLatest(liveSnapshot)
         setHistory((prev) => {
-          const next = [...prev, snap]
+          const next = [...prev, liveSnapshot]
           return next.length > HISTORY ? next.slice(-HISTORY) : next
         })
         return

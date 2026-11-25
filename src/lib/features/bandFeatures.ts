@@ -13,6 +13,8 @@ export type BandPowers = Record<BandName, number>
 
 export interface LiveFeatureSnapshot {
   t: number
+  /** Arrival time of the newest EEG sample in the input window. */
+  sampleEndAt?: number
   nChannels: number
   windowSec: number
   /** Channel-mean scalar metrics keyed by catalog / expand ids. */
@@ -20,7 +22,7 @@ export interface LiveFeatureSnapshot {
 }
 
 const EPS = 1e-12
-const HEAVY_CH_CAP = 8
+export const LIVE_FEATURE_CHANNEL_CAP = 8
 const FEATURE_FS = 250
 const PREFERRED_LIVE_CHANNELS = [
   'C3', 'C4', 'CZ', 'F3', 'F4', 'P3', 'P4', 'PZ', 'FC3', 'FC4', 'CP3', 'CP4',
@@ -675,6 +677,7 @@ export function computeLiveFeatures(opts: {
   sampleRate: number
   windowSec?: number
   channelMask?: boolean[]
+  useAllSelectedChannels?: boolean
   channelNames?: string[]
   channelTypes?: string[]
   enabledFeatures?: string[]
@@ -686,6 +689,7 @@ export function computeLiveFeatures(opts: {
     sampleRate,
     windowSec = 1.0,
     channelMask,
+    useAllSelectedChannels = false,
     channelNames,
     channelTypes,
     enabledFeatures,
@@ -712,21 +716,17 @@ export function computeLiveFeatures(opts: {
   const winSamples = Math.min(filled, Math.max(16, Math.floor(windowSec * sampleRate)))
   const bufLen = buffers[0]!.length
   const usedIdx: number[] = []
-  const consider = (c: number, honorMask: boolean) => {
-    if (honorMask && channelMask && channelMask[c] === false) return
-    if (isNonScalpEegChannel(channelNames?.[c], channelTypes?.[c])) return
+  for (let c = 0; c < buffers.length; c++) {
+    if (channelMask && channelMask[c] !== true) continue
+    if (isNonScalpEegChannel(channelNames?.[c], channelTypes?.[c])) continue
     usedIdx.push(c)
   }
-  for (let c = 0; c < buffers.length; c++) consider(c, true)
-  if (!usedIdx.length) {
-    for (let c = 0; c < buffers.length; c++) consider(c, false)
-  }
+  if (!usedIdx.length) return null
 
-  const liveIdx = pickLiveChannels(usedIdx, channelNames, HEAVY_CH_CAP)
-  const heavyIdx = needHeavy(enabled) ? liveIdx : []
+  const cappedIdx = pickLiveChannels(usedIdx, channelNames, LIVE_FEATURE_CHANNEL_CAP)
+  const liveIdx = useAllSelectedChannels ? usedIdx : cappedIdx
+  const heavyIdx = needHeavy(enabled) ? cappedIdx : []
   const wantSpec = needSpectral(enabled)
-  const specIdx = wantSpec ? liveIdx : []
-  const specSet = new Set(specIdx)
   const stride = Math.max(1, Math.round(sampleRate / FEATURE_FS))
   const nKeep = Math.max(16, Math.floor(winSamples / stride))
   const featFs = sampleRate / stride
@@ -836,7 +836,7 @@ export function computeLiveFeatures(opts: {
     if (enabled.has('petrosian_fd')) bump('petrosian_fd', petrosianFd(slice))
     if (enabled.has('perm_entropy')) bump('perm_entropy', permEntropy(slice))
 
-    if (wantSpec && specSet.has(c)) {
+    if (wantSpec) {
       const spec = channelPsd(slice, featFs)
       if (spec) {
         const { psd, freq } = spec

@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Link } from 'react-router-dom'
-import { DEFAULT_BAND_SOS, DEFAULT_NOTCH_SOS } from './filter/iir'
-import { designBandpassSos, designNotchCascade } from './filter/design'
+import {
+  designBandpassSos,
+  designNotchCascade,
+  designNotchSos,
+  designOmniGuiFilter,
+  displayNotchFrequencies,
+  maxBandpassHighHz,
+} from './filter/design'
 import {
   NEURACLE_59_EEG_CHANNEL_NAMES,
   NeuracleWsClient,
@@ -18,8 +24,11 @@ import {
 } from './omni/client'
 import { OmniGuiHttpClient, type GuiStatus } from './omni/guiClient'
 import { OmniGuiSession } from './omni/guiSession'
+import { HardwareTriggerSettings } from './omni/HardwareTriggerSettings'
+import { loadOmniGuiPort, OMNI_GUI_PORT_CANDIDATES, omniGuiOrigin, resolveOmniGuiPort, saveOmniGuiPort } from './omni/guiEndpoint'
 import { sequenceGaps } from './omni/protocol'
 import { omniElectrodePositions } from './omni/positions'
+import { defaultOmniFlexVer2SourceNames, matchOmniFlexVer2Channels, OMNI_FLEX_VER2_ELECTRODES, saveOmniFlexVer2Config, type OmniFlexVer2Config } from './omni/flexVer2'
 import { isOmniDeviceType, omniChannelCount, omniEndpointStorageKey, type OmniDeviceType } from './omni/device'
 import {
   CMD_START,
@@ -95,7 +104,12 @@ import {
   saveEnabledFeatures,
   type LiveFeatureSnapshot,
 } from '../lib/features'
-import { ModelServicePanel } from '../lib/model-runtime'
+import { ModelServicePanel, modelRuntimeHub } from '../lib/model-runtime'
+import { applyModelInputFilter } from '../lib/model-runtime/modelServiceApi'
+import {
+  DEFAULT_REVE_BAND, S04_REVE_BAND, REVE_FILTER_LABELS, REVE_FILTER_STORAGE_KEY, isReveFilterMode, loadReveFilterSettings,
+  parseReveCustomFilter, saveReveFilterSettings, type ReveFilterSettings,
+} from '../lib/model-runtime/reveFilter'
 import {
   RECORD_FLUSH_BYTES,
   formatRecordBytes,
@@ -107,6 +121,9 @@ const RING_SECONDS = 6
 /** Extra ring beyond the visible window so scrolling never wraps inside the plot. */
 const RING_HEADROOM_SEC = 2
 const MAX_RING_SAMPLES = 120_000
+
+const subscribeModelHello = (listener: () => void) => modelRuntimeHub.subscribe(listener)
+const getModelHello = () => modelRuntimeHub.snapshot.serviceHello
 
 function ringCapacityFor(sampleRate: number, windowSec: number): number {
   const fs = Math.max(1, sampleRate)
@@ -273,7 +290,7 @@ function deviceDetail(d: DeviceKind, supported: boolean, omniLink: OmniLink = 'a
     return '连接强脑 BCIGo Wi‑Fi（点连接会自动启动本机桥接；基于 bcigo-sdk）。'
   }
   if (omniLink === 'sdk') return '选择 ESP32 8 通道或 STM32/E73 32 通道，再搜索 BLE 设备并连接，再点开始采集查看波形和录制。电极位置可稍后填写。'
-  if (omniLink === 'gui') return '连接本机 OmniBCI GUI 的 HTTP 广播（http://127.0.0.1:8766/v1/status 诊断 · /v1/data 只读数据）。先在 GUI 里开始采集；需要启用了 api-control 的 GUI 构建才有数据。'
+  if (omniLink === 'gui') return '先在 OmniBCI GUI 里开始采集，再连接 HTTP 广播。端口可自动探测或手动输入。'
   if (omniLink === 'api') {
     return '先在 OmniBCI 中开始测量并启用 LSL，再点连接。本页会自动启动 LSL 桥接并订阅 EEG 流。'
   }
@@ -347,6 +364,7 @@ export function AcquisitionDebugPage() {
   const [omniStream, setOmniStream] = useState<OmniStreamKind>(() => loadOmniStream())
   const [omniProbe, setOmniProbe] = useState('')
   const [guiStatus, setGuiStatus] = useState<GuiStatus | null>(acqRuntime.omniGuiStatus)
+  const [guiPortInput, setGuiPortInput] = useState(loadOmniGuiPort)
   const [sdkDeviceType, setSdkDeviceType] = useState<OmniDeviceType>(loadSdkDeviceType)
   const [sdkDevices, setSdkDevices] = useState<OmniSdkDevice[]>([])
   const [sdkSearching, setSdkSearching] = useState(false)
@@ -378,6 +396,12 @@ export function AcquisitionDebugPage() {
     () => liveEegHub.meta.detail || deviceDetail(device, supported, loadOmniLink()),
   )
   const [cfg, setCfg] = useState<ChannelConfig>(() => loadSavedConfig())
+  const [omniFlexVer2, setOmniFlexVer2] = useState(() => acqRuntime.omniFlexVer2)
+  const updateOmniFlexVer2 = (next: OmniFlexVer2Config) => {
+    acqRuntime.omniFlexVer2 = next
+    setOmniFlexVer2(next)
+    saveOmniFlexVer2Config(next)
+  }
   const switchSdkDeviceType = (next: OmniDeviceType) => {
     if (status === 'connecting' || status === 'open' || status === 'streaming' || status === 'demo' || sdkSearching) return
     const nextConfig = loadSavedConfig(omniChannelCount(next))
@@ -393,10 +417,51 @@ export function AcquisitionDebugPage() {
   }
   const [montageId, setMontageId] = useState('custom')
   const [eegMode, setEegMode] = useState(1)
-  const [viewFiltered, setViewFiltered] = useState(true)
-  const [useNotch, setUseNotch] = useState(true)
-  const [bandLoHz, setBandLoHz] = useState(5)
-  const [bandHiHz, setBandHiHz] = useState(50)
+  const [filterSettings, setFilterSettings] = useState(loadReveFilterSettings)
+  const [filterDraft, setFilterDraft] = useState(() => filterSettings.reveCustomFilter ?? DEFAULT_REVE_BAND)
+  const [editingFilterMode, setEditingFilterMode] = useState(filterSettings.reveFilterMode)
+  const [filterApplying, setFilterApplying] = useState(false)
+  const [filterError, setFilterError] = useState('')
+  const modelHello = useSyncExternalStore(subscribeModelHello, getModelHello)
+  const filterMode = filterSettings.reveFilterMode
+  const effectiveMode = filterMode === 'checkpoint' ? modelHello?.effective_filter_mode : filterMode
+  const omniGuiFilter = filterMode === 'checkpoint'
+    ? modelHello?.effective_filter_algorithm === 'omni_gui'
+    : effectiveMode === 'pretraining' || effectiveMode === 'custom'
+  const displayFilter = effectiveMode === 'checkpoint' ? S04_REVE_BAND
+    : effectiveMode === 'custom' ? (
+      filterMode === 'checkpoint' ? modelHello?.effective_custom_filter : filterSettings.reveCustomFilter
+    ) : filterMode === 'checkpoint' && effectiveMode === 'pretraining'
+      ? modelHello?.effective_filter_band ?? { ...DEFAULT_REVE_BAND, useNotch: false }
+      : DEFAULT_REVE_BAND
+  const viewFiltered = Boolean(effectiveMode && effectiveMode !== 'none' && displayFilter)
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.key !== REVE_FILTER_STORAGE_KEY) return
+      const settings = loadReveFilterSettings()
+      setFilterSettings(settings)
+      setEditingFilterMode(settings.reveFilterMode)
+      setFilterDraft(settings.reveCustomFilter ?? DEFAULT_REVE_BAND)
+    }
+    window.addEventListener('storage', sync)
+    return () => window.removeEventListener('storage', sync)
+  }, [])
+  const applyFilterSettings = async (settings: ReveFilterSettings) => {
+    setFilterApplying(true)
+    setFilterError('')
+    try {
+      await applyModelInputFilter(settings, () => {
+        saveReveFilterSettings(settings)
+        setFilterSettings(settings)
+        setEditingFilterMode(settings.reveFilterMode)
+      })
+    } catch (error) {
+      if (settings.reveFilterMode !== 'custom') {
+        setEditingFilterMode(loadReveFilterSettings().reveFilterMode)
+      }
+      setFilterError(error instanceof Error ? error.message : String(error))
+    } finally { setFilterApplying(false) }
+  }
   const [yScaleUv, setYScaleUv] = useState(100)
   const [windowSec, setWindowSec] = useState(10)
   const [featureWindowSec, setFeatureWindowSec] = useState(1)
@@ -411,7 +476,7 @@ export function AcquisitionDebugPage() {
       ? [...liveEegHub.meta.channelNames]
       : [...loadSavedConfig().labels],
   )
-  const [streamTypes, setStreamTypes] = useState<string[]>([])
+  const [streamTypes, setStreamTypes] = useState(() => liveEegHub.meta.channelTypes)
   const [visible, setVisible] = useState(() => {
     const names = liveEegHub.meta.channelNames
     if (names.length) return visibleMaskForNames(names)
@@ -420,6 +485,12 @@ export function AcquisitionDebugPage() {
   })
   const [badText, setBadText] = useState(() => loadBadChannelNames().join(' '))
   const [sampleRate, setSampleRate] = useState(() => liveEegHub.meta.sampleRate || FS)
+  const maxLowpassHz = maxBandpassHighHz(sampleRate)
+  const bandHiHz = Math.min(displayFilter?.highHz ?? DEFAULT_REVE_BAND.highHz, maxLowpassHz)
+  const bandLoHz = Math.max(0.05, Math.min(displayFilter?.lowHz ?? DEFAULT_REVE_BAND.lowHz, bandHiHz - 0.5))
+  const s04Filter = effectiveMode === 'checkpoint'
+  const notchHz = s04Filter && sampleRate > 100 ? [50] : displayNotchFrequencies(sampleRate)
+  const useNotch = displayFilter?.useNotch === true && notchHz.length > 0
   const [jfHost, setJfHost] = useState('')
   const [jfPort, setJfPort] = useState<number | ''>('')
   const [jfSampleRate, setJfSampleRate] = useState(0)
@@ -465,6 +536,7 @@ export function AcquisitionDebugPage() {
   const rawRingRef = useRef(makeRing(nChannels, capacity))
   const filtRingRef = useRef(makeRing(nChannels, capacity))
   const validRingRef = useRef(new Uint8Array(capacity))
+  const sequenceRingRef = useRef(new Float64Array(capacity))
   const writeHeadRef = useRef(0)
   const filledRef = useRef(0)
   const nChRef = useRef(nChannels)
@@ -518,6 +590,7 @@ export function AcquisitionDebugPage() {
     rawRingRef.current = makeRing(n, cap)
     filtRingRef.current = makeRing(n, cap)
     validRingRef.current = new Uint8Array(cap)
+    sequenceRingRef.current = new Float64Array(cap)
     writeHeadRef.current = 0
     filledRef.current = 0
   }, [])
@@ -536,7 +609,7 @@ export function AcquisitionDebugPage() {
   )
 
   const pushFrame = useCallback(
-    (uv: Float32Array, filtered: Float32Array, valid = true, toHub = true) => {
+    (uv: Float32Array, filtered: Float32Array, valid = true, toHub = true, sequence?: number) => {
       const head = writeHeadRef.current
       const n = nChRef.current
       for (let c = 0; c < n; c++) {
@@ -544,6 +617,7 @@ export function AcquisitionDebugPage() {
         filtRingRef.current[c]![head] = filtered[c] ?? 0
       }
       validRingRef.current[head] = valid ? 1 : 0
+      sequenceRingRef.current[head] = sequence ?? Number.NaN
       const cap = rawRingRef.current[0]?.length || capacityRef.current
       writeHeadRef.current = (head + 1) % cap
       filledRef.current = Math.min(cap, filledRef.current + 1)
@@ -581,8 +655,8 @@ export function AcquisitionDebugPage() {
           if (enabled[ch] === false) continue
           if (Math.abs(f.rawCounts[ch]!) > satLim) sat += 1
         }
-        const filtered = filterRef.current.processSample(f.uv, f.valid)
-        pushFrame(f.uv, filtered, f.valid)
+        const filtered = filterRef.current.processSample(f.uv, f.valid, f.sequence)
+        pushFrame(f.uv, filtered, f.valid, true, f.sequence)
         if (recorderRef.current.recording && !acqRuntime.impedanceActive) {
           recorderRef.current.append(f.raw)
         }
@@ -813,6 +887,7 @@ export function AcquisitionDebugPage() {
     saveEnabledFeatures(ids)
   }
 
+  const featureSelectionRef = useRef('')
   // Sliding-window feature analysis on the raw ring (band scores need θ/δ).
   useEffect(() => {
     if (status !== 'streaming' && status !== 'demo') {
@@ -823,39 +898,65 @@ export function AcquisitionDebugPage() {
       setFeatureLatest(null)
       return
     }
+    const channelTypes = usesBridgeStream(device, omniLink) && status !== 'demo' ? streamTypes : []
     const id = window.setInterval(() => {
-        const snap = computeLiveFeatures({
+      const channelMask = liveEegHub.featureChannelMask(streamLabels)
+      const useAllSelectedChannels = liveEegHub.hasFeatureChannelSelection
+      const selection = JSON.stringify([streamLabels, channelTypes, channelMask, useAllSelectedChannels])
+      if (featureSelectionRef.current !== selection) {
+        setFeatureHistory([])
+        featureSelectionRef.current = selection
+      }
+      const snap = computeLiveFeatures({
         buffers: rawRingRef.current,
         writeHead: writeHeadRef.current,
         filled: filledRef.current,
         sampleRate,
         windowSec: featureWindowSec,
-        channelMask: visible,
+        channelMask,
+        useAllSelectedChannels,
         channelNames: streamLabels,
-        channelTypes: streamTypes,
+        channelTypes,
         enabledFeatures,
       })
-      if (!snap) return
       setFeatureLatest(snap)
+      if (!snap) return
       setFeatureHistory((prev) => {
         const next = [...prev, snap]
         return next.length > FEATURE_HISTORY ? next.slice(-FEATURE_HISTORY) : next
       })
     }, 400)
     return () => clearInterval(id)
-  }, [status, sampleRate, visible, enabledFeatures, featureWindowSec, streamLabels, streamTypes, featuresOpen])
+  }, [status, device, omniLink, sampleRate, enabledFeatures, featureWindowSec, streamLabels, streamTypes, featuresOpen])
 
   useEffect(() => {
-    liveEegHub.setChannelMask(visible)
-  }, [visible])
+    const filter = filterRef.current
+    if (viewFiltered && omniGuiFilter) {
+      const { sos, settlingSamples } = designOmniGuiFilter(sampleRate, bandLoHz, bandHiHz, useNotch)
+      filter.configure(sos, [], false, settlingSamples)
+    } else {
+      const band = viewFiltered ? designBandpassSos(bandLoHz, bandHiHz, sampleRate) : []
+      const notch = !useNotch ? [] : s04Filter ? designNotchSos(50, sampleRate) : designNotchCascade(sampleRate)
+      filter.configure(band, notch, viewFiltered && useNotch)
+    }
+    const filled = filledRef.current
+    if (!filled || !viewFiltered) return
 
-  useEffect(() => {
-    const lo = Math.min(bandLoHz, bandHiHz - 0.5)
-    const hi = Math.max(bandHiHz, lo + 0.5)
-    const band = designBandpassSos(lo, hi, sampleRate)
-    const notch = designNotchCascade(sampleRate, 50)
-    filterRef.current.configure(band.length ? band : DEFAULT_BAND_SOS, notch.length ? notch : DEFAULT_NOTCH_SOS, useNotch)
-  }, [useNotch, bandLoHz, bandHiHz, sampleRate])
+    // Refilter the retained waveform so the whole display uses the new settings.
+    const raw = rawRingRef.current
+    const cap = raw[0]!.length
+    const next = makeRing(raw.length, cap)
+    const sample = new Float32Array(raw.length)
+    const first = (writeHeadRef.current - filled + cap) % cap
+    for (let offset = 0; offset < filled; offset++) {
+      const i = (first + offset) % cap
+      for (let channel = 0; channel < raw.length; channel++) sample[channel] = raw[channel]![i]!
+      const sequence = sequenceRingRef.current[i]
+      const filtered = filter.processSample(sample, validRingRef.current[i] === 1, Number.isFinite(sequence) ? sequence : undefined)
+      for (let channel = 0; channel < raw.length; channel++) next[channel]![i] = filtered[channel]!
+    }
+    filtRingRef.current = next
+  }, [viewFiltered, useNotch, s04Filter, omniGuiFilter, bandLoHz, bandHiHz, sampleRate])
 
   const syncLsb = (next: ChannelConfig) => {
     const lsb = channelLsbUv(next.gains)
@@ -1116,6 +1217,7 @@ export function AcquisitionDebugPage() {
             device: 'neuracle',
             sampleRate: hello.sample_rate,
             channelNames: names,
+            channelTypes: hello.channel_types,
             detail: `已连接博睿康 ${hello.module || 'Neuracle'}`,
           })
           liveEegHub.markOpen(
@@ -1156,13 +1258,18 @@ export function AcquisitionDebugPage() {
       liveEegHub.markConnecting(sdk ? '正在连接 SDK BLE…' : gui ? '正在连接 OmniBCI GUI HTTP 服务…' : '正在启动 OmniBCI LSL 桥接…')
       setStatus('connecting')
       setDetail(sdk ? '正在连接 SDK BLE…' : gui ? '正在连接 OmniBCI GUI HTTP 服务…' : '正在启动 OmniBCI LSL 桥接…')
+      let guiPort: number | undefined
       try {
-        if (!gui) {
+        if (gui) {
+          guiPort = await resolveOmniGuiPort(guiPortInput)
+          acqRuntime.omniGuiPort = guiPort
+        } else {
           const ensured = await ensureBridge(sdk ? 'omni-sdk' : 'omni')
           if (ensured.message) setOmniProbe(ensured.message)
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
+        acqRuntime.status = 'error'
         setStatus('error')
         setDetail(msg)
         liveEegHub.markError(msg)
@@ -1259,6 +1366,7 @@ export function AcquisitionDebugPage() {
       const client = gui
         ? new OmniGuiSession({
             ...clientCallbacks,
+            port: guiPort,
             onGuiStatus: (s) => {
               acqRuntime.omniGuiStatus = s
               // Route through the mounted UI sink so a stale React setter from
@@ -1298,7 +1406,7 @@ export function AcquisitionDebugPage() {
     const n = batch.channels
     const samples = batch.samples
     if (n > 0 && n !== nChRef.current) filterRef.current.setChannelCount(n)
-    const filtered = filterRef.current.processInterleaved(batch.values, samples, n)
+    const filtered = filterRef.current.processInterleaved(batch.values, samples, n, batch.validFlags, batch.sequence)
     let head = writeHeadRef.current
     const cap = rawRingRef.current[0]?.length || capacityRef.current
     const nWrite = Math.min(n, nChRef.current)
@@ -1309,6 +1417,7 @@ export function AcquisitionDebugPage() {
         filtRingRef.current[c]![head] = filtered[off + c] ?? 0
       }
       validRingRef.current[head] = batch.validFlags ? batch.validFlags[s] ?? 1 : 1
+      sequenceRingRef.current[head] = batch.sequence?.[s] ?? Number.NaN
       head = (head + 1) % cap
     }
     writeHeadRef.current = head
@@ -1437,6 +1546,7 @@ export function AcquisitionDebugPage() {
             device: 'bcigo',
             sampleRate: hello.sample_rate,
             channelNames: names,
+            channelTypes: hello.channel_types,
             detail: msg,
           })
           liveEegHub.markOpen(msg)
@@ -1478,7 +1588,7 @@ export function AcquisitionDebugPage() {
         channelNames: names,
         ...(device === 'omni' ? { omniLink,
           ...(omniLink === 'sdk' ? { omniDeviceType: sdkDeviceType } : {}),
-          ...(omniLink === 'gui' ? { guiEndpoint: 'http://127.0.0.1:8766' } : {}),
+          ...(omniLink === 'gui' ? { guiEndpoint: omniGuiOrigin(acqRuntime.omniGuiPort) } : {}),
           // GUI link: channel layout comes from the GUI itself — don't write
           // local electrode positions when they may not match that layout.
           ...(omniLink === 'gui' ? {} : { electrodeNames: cfg.electrodeNames?.map(n => n.trim()),
@@ -2003,6 +2113,7 @@ export function AcquisitionDebugPage() {
                 : '未连接'
 
   const deviceLinked = status === 'open' || status === 'streaming'
+  const flexDefaultSourceNames = omniFlexVer2.enabled ? defaultOmniFlexVer2SourceNames(deviceLinked ? streamLabels : []) : []
   const deviceBusy = status === 'connecting' || status === 'streaming'
 
   const connectDevice = () => {
@@ -2017,8 +2128,8 @@ export function AcquisitionDebugPage() {
       ? channelLabels.map((_, i) => i === Math.min(singleChannel, Math.max(0, channelLabels.length - 1)))
       : visible
   const filterLabel = viewFiltered
-    ? `${bandLoHz}–${bandHiHz} Hz${useNotch ? ' + 50/100 Hz 谐波陷波' : ''}`
-    : '未滤波（不修改记录数据）'
+    ? `${bandLoHz}–${bandHiHz} Hz${useNotch && notchHz.length ? ` + ${notchHz.join('/')} Hz 陷波` : ''}`
+    : effectiveMode ? '不滤波' : '按权重配置 · 等待 REVE'
 
   return (
     <div className="acq-omni">
@@ -2033,14 +2144,6 @@ export function AcquisitionDebugPage() {
           <strong>全域智能</strong>
           <span>脑电测试 · EEG</span>
         </div>
-        <label className="acq-check">
-          <input
-            type="checkbox"
-            checked={viewFiltered}
-            onChange={(e) => setViewFiltered(e.target.checked)}
-          />
-          滤波后
-        </label>
         <label className="acq-field">
           时间窗
           <input
@@ -2129,9 +2232,20 @@ export function AcquisitionDebugPage() {
             </label>
           ) : null}
           {device === 'omni' && omniLink === 'gui' ? (
-            <span className="acq-hint" role="status">
-              只读 HTTP：http://127.0.0.1:8766/v1/status · /v1/data；需启用 api-control 的 GUI 构建并已开始在 GUI 采集。
-            </span>
+            <>
+              <label className="acq-field">GUI HTTP 端口
+                <input className="input" inputMode="numeric" value={guiPortInput} placeholder="自动"
+                  style={{ width: 92 }} disabled={deviceBusy || deviceLinked}
+                  onChange={e => {
+                    setGuiPortInput(e.target.value)
+                    saveOmniGuiPort(e.target.value)
+                  }} />
+              </label>
+              <span className="acq-hint" role="status">
+                {deviceLinked ? `GUI HTTP · ${omniGuiOrigin(acqRuntime.omniGuiPort)}`
+                  : `留空时探测本机 ${OMNI_GUI_PORT_CANDIDATES.join('、')}。请先在 GUI 中开始采集。`}
+              </span>
+            </>
           ) : null}
           {omniApi && !omniSdk && omniLink === 'api' ? (
             <>
@@ -2367,9 +2481,45 @@ export function AcquisitionDebugPage() {
           ) : null}
           <span className="acq-status">{detail}</span>
         </div>
+        {device === 'omni' && omniLink === 'gui' && <HardwareTriggerSettings disabled={recording} />}
         {device === 'omni' ? (
           <details style={{ marginTop: 8 }}>
             <summary>通道名称与电极位置（REVE）</summary>
+            {omniLink !== 'usb' && <label className="acq-field">REVE 电极布局
+              <select className="select" value={omniFlexVer2.enabled ? 'flex-ver2' : 'custom'}
+                disabled={recording || status === 'connecting' || status === 'streaming'}
+                onChange={event => updateOmniFlexVer2({ ...omniFlexVer2, enabled: event.target.value === 'flex-ver2' })}>
+                <option value="custom">标准或自定义布局</option>
+                <option value="flex-ver2">OmniBCI 柔性电极 Ver2（16 导）</option>
+              </select>
+            </label>}
+            {omniLink !== 'usb' && omniFlexVer2.enabled ? <>
+              <p className="acq-hint">留空时使用默认映射。CH 编号流按去掉接地 E201 和参考 E93 后的顺序匹配 CH1–CH16。带电极名的流按电极名匹配。</p>
+              {omniFlexVer2.channelNames.some(name => name.trim()) && <button type="button" className="btn"
+                disabled={recording || status === 'connecting' || status === 'streaming'}
+                onClick={() => updateOmniFlexVer2({ ...omniFlexVer2, channelNames: [] })}>恢复默认映射</button>}
+              {(status === 'open' || status === 'streaming') && <p className="acq-hint" role="status">
+                {matchOmniFlexVer2Channels(streamLabels, omniFlexVer2.channelNames)
+                  ? '已匹配 16 路 EEG 通道'
+                  : '当前数据流尚未匹配 16 路不同的 EEG 通道，请核对源通道名。'}
+              </p>}
+              <div className="acq-bar">
+                {OMNI_FLEX_VER2_ELECTRODES.map(({ number, name }, index) => <label className="acq-field" key={name}>
+                  {String(number).padStart(2, '0')} · {name}
+                  <input className="input" aria-label={`${name} 源通道`} placeholder={flexDefaultSourceNames[index]} list="omni-flex-source-channels"
+                    style={{ width: 110 }} value={omniFlexVer2.channelNames[index] ?? ''}
+                    disabled={recording || status === 'connecting' || status === 'streaming'}
+                    onChange={event => {
+                      const channelNames = OMNI_FLEX_VER2_ELECTRODES.map((_, i) =>
+                        i === index ? event.target.value : omniFlexVer2.channelNames[i] ?? '')
+                      updateOmniFlexVer2({ ...omniFlexVer2, channelNames })
+                    }} />
+                </label>)}
+              </div>
+              <datalist id="omni-flex-source-channels">
+                {(status === 'open' || status === 'streaming') && [...new Set(streamLabels)].map(name => <option key={name} value={name} />)}
+              </datalist>
+            </> : <>
             <p className="acq-hint">位置按 CH1–CH{cfg.labels.length} 接线顺序填写，例如 C3、C4；无需重命名通道。位置会单独保存并传给 REVE，更改后重新应用模型。暂不填写仍可采集；若未单独设置位置，模型沿用通道名称查找。</p>
             <label className="acq-field">位置输入
               <select className="select" aria-label="电极位置输入方式" value={cfg.positionMode ?? 'standard'} disabled={recording || status === 'connecting' || status === 'streaming'}
@@ -2403,6 +2553,7 @@ export function AcquisitionDebugPage() {
               ))}
             </div>
             <datalist id="omni-electrode-positions">{[...new Set(MONTAGE_PRESETS.filter(p => p.id !== 'ch').flatMap(p => p.names))].map(name => <option key={name} value={name} />)}</datalist>
+            </>}
           </details>
         ) : null}
       </section>
@@ -2410,36 +2561,40 @@ export function AcquisitionDebugPage() {
       <section className="acq-group">
         <div className="acq-group-title">滤波设置</div>
         <div className="acq-bar">
-          <label className="acq-field">
-            高通
-            <input
-              className="input"
-              type="number"
-              min={0.1}
-              max={30}
-              step={0.5}
-              value={bandLoHz}
-              onChange={(e) => setBandLoHz(Math.min(Number(e.target.value) || 0.5, bandHiHz - 0.5))}
-            />
-            <span className="muted">Hz</span>
+          <label className="acq-field">波形和 REVE
+            <select className="input" aria-label="波形和 REVE 滤波" value={editingFilterMode} disabled={filterApplying} onChange={event => {
+              const mode = event.target.value
+              if (!isReveFilterMode(mode)) return
+              setEditingFilterMode(mode)
+              setFilterError('')
+              const reveCustomFilter = filterSettings.reveCustomFilter ?? DEFAULT_REVE_BAND
+              if (mode === 'custom') setFilterDraft(reveCustomFilter)
+              else void applyFilterSettings({ reveFilterMode: mode, reveCustomFilter })
+            }}>
+              {Object.entries(REVE_FILTER_LABELS).map(([mode, label]) => <option key={mode} value={mode}>{label}</option>)}
+            </select>
           </label>
-          <label className="acq-field">
-            低通
-            <input
-              className="input"
-              type="number"
-              min={10}
-              max={Math.max(20, Math.floor(sampleRate / 2) - 1)}
-              step={1}
-              value={bandHiHz}
-              onChange={(e) => setBandHiHz(Math.max(Number(e.target.value) || 50, bandLoHz + 0.5))}
-            />
-            <span className="muted">Hz</span>
-          </label>
-          <label className="acq-check">
-            <input type="checkbox" checked={useNotch} onChange={(e) => setUseNotch(e.target.checked)} />
-            50/100 Hz 谐波陷波
-          </label>
+          {editingFilterMode === 'custom' && <>
+            <label className="acq-field">高通
+              <input className="input" type="number" min={0.05} max={30} step="any" value={filterDraft.lowHz || ''}
+                disabled={filterApplying} onChange={e => setFilterDraft(prev => ({ ...prev, lowHz: Number(e.target.value) }))} />
+              <span className="muted">Hz</span>
+            </label>
+            <label className="acq-field">低通
+              <input className="input" type="number" min={filterDraft.lowHz + 0.5} max={99.5} step="any" value={filterDraft.highHz || ''}
+                disabled={filterApplying} onChange={e => setFilterDraft(prev => ({ ...prev, highHz: Number(e.target.value) }))} />
+              <span className="muted">Hz</span>
+            </label>
+            <label className="acq-check">
+              <input type="checkbox" checked={filterDraft.useNotch} disabled={filterApplying}
+                onChange={e => setFilterDraft(prev => ({ ...prev, useNotch: e.target.checked }))} />
+              50/100 Hz 谐波陷波
+            </label>
+            <button type="button" className="btn" disabled={filterApplying || !parseReveCustomFilter(filterDraft)}
+              onClick={() => void applyFilterSettings({ reveFilterMode: 'custom', reveCustomFilter: filterDraft })}>应用滤波</button>
+          </>}
+          {filterApplying && <span role="status">正在应用滤波…</span>}
+          {filterError && <span role="alert" className="acq-status">{filterError}</span>}
           {usesBridgeStream(device, omniLink) ? (
             <>
               <button type="button" className="btn" onClick={() => setVisible(channelLabels.map(() => true))}>
@@ -2500,7 +2655,8 @@ export function AcquisitionDebugPage() {
               placeholder="CH4 CH10"
               onChange={(e) => {
                 setBadText(e.target.value)
-                liveEegHub.setBadChannelNames(e.target.value.split(/[\s,;、，；]+/).map((t) => t.trim()).filter(Boolean))
+                const { matched, missing } = resolveChannelMaskInput(e.target.value, channelLabels)
+                liveEegHub.setBadChannelNames([...matched.map((i) => channelLabels[i]!), ...missing])
               }}
             />
           </label>
@@ -2543,7 +2699,7 @@ export function AcquisitionDebugPage() {
             {viewFiltered ? (
               <div className="acq-banner">━ 滤波显示副本（不修改原始数据） · {filterLabel}</div>
             ) : (
-              <div className="acq-banner">━ 原始未滤波显示 · BIN 仍写原始样本</div>
+              <div className="acq-banner">━ {effectiveMode ? '原始波形 · 不滤波 · 按通道居中' : '按权重配置 · 等待 REVE 报告滤波设置'}</div>
             )}
             {viewMode === 'single' ? (
               <div className="acq-bar" style={{ padding: '6px 8px', borderBottom: '1px solid #d8dde3' }}>
@@ -2606,6 +2762,7 @@ export function AcquisitionDebugPage() {
                   fill
                   theme="omni"
                   scan={device === 'neuracle' ? 'sweep' : 'scroll'}
+                  centerRawChannels={!viewFiltered}
                   showChannelLabels={viewMode === 'single'}
                   onChannelDblClick={(i) => {
                     setSingleChannel(i)
@@ -2623,7 +2780,7 @@ export function AcquisitionDebugPage() {
               visibleChannels={visible}
               windowSec={windowSec}
               sampleRate={sampleRate}
-              fMaxHz={Math.min(65, Math.floor(sampleRate / 2))}
+              fMaxHz={Math.min(Math.max(100, Math.ceil(bandHiHz)), Math.floor(sampleRate / 2))}
               fill
               theme="omni"
             />
@@ -2749,6 +2906,8 @@ export function AcquisitionDebugPage() {
           analyzing={status === 'streaming' || status === 'demo'}
           enabledIds={enabledFeatures}
           onEnabledChange={onEnabledFeaturesChange}
+          channelNames={channelLabels}
+          channelTypes={usesBridgeStream(device, omniLink) && status !== 'demo' ? streamTypes : []}
         />
       </details>
 

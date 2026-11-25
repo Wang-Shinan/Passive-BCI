@@ -11,7 +11,10 @@ function option(argv, flag) {
 }
 
 export function resolveReveHeadMode({ task, argv = [], env = {} }) {
-  const stateFile = option(argv, '--state-file')
+  const selected = option(argv, '--state-file')
+  const resume = option(argv, '--resume-state-file')
+  if (selected && resume) throw new Error('state-file and resume-state-file are mutually exclusive')
+  const stateFile = selected || resume
   const explicitFresh = argv.includes('--fresh-head')
   const explicitCheckpoint = argv.includes('--checkpoint-head')
   if (stateFile && (explicitFresh || explicitCheckpoint)) throw new Error('state-file and head initialization flags are mutually exclusive')

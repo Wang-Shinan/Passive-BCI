@@ -1,7 +1,9 @@
 import { acqRuntime, omniRecordsAsFrames } from '../../acquisition/runtime'
+import { omniGuiOrigin } from '../../acquisition/omni/guiEndpoint'
 import { CHANNEL_NAMES, CHANNELS, FRAME_BYTES, FS } from '../../acquisition/protocol/constants'
 import { formatRecordBytes } from '../../acquisition/session/recorder'
 import { liveEegHub } from '../eeg/liveHub'
+import { matchModelSourceProfile } from '../model-runtime/sourceProfiles'
 import { sessionHub } from './sessionHub'
 
 export type RecordControlResult = {
@@ -32,6 +34,7 @@ export async function startExperimentRecording(opts: {
   experiment: string
   subjectId: string
   seed?: number
+  tongueAction?: string
 }): Promise<RecordControlResult> {
   if (acqRuntime.status === 'demo' || liveEegHub.meta.device === 'demo') {
     return { ok: false, message: '演示波形不会写入会话库' }
@@ -45,6 +48,7 @@ export async function startExperimentRecording(opts: {
       subjectId: opts.subjectId,
       game: opts.experiment,
       seed: opts.seed,
+      tongueAction: opts.tongueAction,
     })
     return {
       ok: true,
@@ -59,6 +63,15 @@ export async function startExperimentRecording(opts: {
     return { ok: false, message: '当前没有可用的 EEG 设备' }
   }
   const names = liveEegHub.meta.channelNames
+  const source = device === 'omni' && acqRuntime.omniFlexVer2.enabled
+    ? matchModelSourceProfile({ device, channelNames: names, channels: names.length,
+        omniFlexVer2Mapping: acqRuntime.omniFlexVer2.channelNames })
+    : null
+  const reveInput = source?.electrodePositions && {
+    indices: source.indices,
+    channelNames: source.profile.channelNames,
+    electrodePositions: source.electrodePositions,
+  }
   const badMark = (list: string[]) => {
     const indices = list.map((name, i) => (liveEegHub.isBad(name) ? i : -1)).filter((i) => i >= 0)
     return { badChannels: indices.map((i) => list[i]), badChannelIndices: indices }
@@ -72,6 +85,7 @@ export async function startExperimentRecording(opts: {
           sampleRate: FS,
           channels: CHANNELS,
           channelNames: names.length ? names : [...CHANNEL_NAMES],
+          ...(reveInput ? { reveInput } : {}),
           ...badMark(names.length ? names : [...CHANNEL_NAMES]),
         }
       : {
@@ -84,9 +98,10 @@ export async function startExperimentRecording(opts: {
           sampleRate: liveEegHub.meta.sampleRate,
           channels: names.length,
           channelNames: names,
+          ...(reveInput ? { reveInput } : {}),
           ...badMark(names),
           ...(device === 'omni'
-            ? { omniLink: acqRuntime.omniLink, ...(acqRuntime.omniLink === 'gui' ? { guiEndpoint: 'http://127.0.0.1:8766' } : {}) }
+            ? { omniLink: acqRuntime.omniLink, ...(acqRuntime.omniLink === 'gui' ? { guiEndpoint: omniGuiOrigin(acqRuntime.omniGuiPort) } : {}) }
             : {}),
         }
   const sink = await acqRuntime.recorder.start({
@@ -98,6 +113,7 @@ export async function startExperimentRecording(opts: {
     subjectId: opts.subjectId,
     game: opts.experiment,
     seed: opts.seed,
+    tongueAction: opts.tongueAction,
   })
   return {
     ok: true,

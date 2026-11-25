@@ -1,0 +1,3 @@
+Unmodified left.glb and right.glb from @webxr-input-profiles/assets 1.0.20,
+dist/profiles/generic-hand. See LICENSE.md for the accompanying MIT license.
+https://www.npmjs.com/package/@webxr-input-profiles/assets/v/1.0.20

@@ -26,11 +26,10 @@ describe('REVE vote cursor', () => {
   function voteFilter() {
     return new TemporalEvidenceFilter({ ...DEFAULT_TEMPORAL_FILTER, mode: 'vote', horizonSec: 1, stepSec: .5 })
   }
-  it('waits for enough observations and does not turn a tiny winning margin into full speed', () => {
+  it('moves from the first vote at a speed proportional to the small winning margin', () => {
     const filter = voteFilter()
     const observe = (id: string) => filter.observe({ observationId: id, classNames: names, probabilities: [.249, .251, .25, .25] })
-    expect(reveCursorDrive(observe('1'))).toEqual({ zH: 0, zV: 0 })
-    const decision = observe('2')
+    const decision = observe('1')
     expect(decision.probabilities).toEqual([0, 1, 0, 0])
     const axes = reveCursorDrive(decision)
     expect(axes.zH).toBeGreaterThan(0)

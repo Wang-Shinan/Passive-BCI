@@ -1,5 +1,6 @@
 """Export labeled SMR EEG and fit frozen-REVE linear probes from the exported H5."""
 import argparse
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -46,7 +47,8 @@ def main():
     import numpy as np
     import h5py
     from bci_dayloop.data.hdf5_dataset import EEGHDF5
-    from bci_dayloop.serving.smr_sessions import extract_all_labeled_windows, windows_to_hdf5
+    from bci_dayloop.serving.protocol import validate_electrode_positions
+    from bci_dayloop.serving.smr_sessions import extract_labeled_windows, windows_to_hdf5
 
     if job['kind'] == 'export':
         if config.get('history'):
@@ -58,7 +60,36 @@ def main():
         if window_sec not in (2, 4):
             raise ValueError('训练窗口只支持 2 秒或 4 秒')
         print(f'[export] extracting labeled {window_sec:g}s non-overlapping windows', flush=True)
-        windows = extract_all_labeled_windows([Path(p) for p in config['sessions']], window_sec=window_sec, hop_sec=window_sec, label_source=config['labelSource'])
+        windows = []
+        layouts = set()
+        for recording in map(Path, config['sessions']):
+            extracted = extract_labeled_windows(recording, window_sec=window_sec, hop_sec=window_sec,
+                                                 label_source=config['labelSource'])
+            if not any(not w.padded for w in extracted):
+                windows.extend(extracted)
+                continue
+            meta = json.loads((recording / 'eeg.json').read_text(encoding='utf-8'))
+            projection = meta.get('reveInput')
+            recovered_input = recording / 'reve-input.json'
+            if projection is None and recovered_input.is_file():
+                recovered = json.loads(recovered_input.read_text(encoding='utf-8'))
+                if recovered['sourceChannelNames'] != meta['channelNames']:
+                    raise ValueError(f'恢复的 REVE 映射与录制通道顺序不符：{recording.name}')
+                projection = recovered['projection']
+            if projection is None:
+                layouts.add(None)
+            else:
+                indices, names = projection['indices'], tuple(projection['channelNames'])
+                if (len(indices) != len(names) or len(set(indices)) != len(indices)
+                        or any(type(i) is not int or not 0 <= i < len(meta['channelNames']) for i in indices)):
+                    raise ValueError(f'录制的 REVE 通道映射无效：{recording.name}')
+                positions = validate_electrode_positions(projection['electrodePositions'], len(names))
+                layouts.add((names, positions))
+                extracted = [replace(w, channel_names=names, data=w.data[indices]) for w in extracted]
+            windows.extend(extracted)
+        if len(layouts) > 1:
+            raise ValueError('训练会话的 REVE 电极布局不一致')
+        layout = next(iter(layouts), None)
         kept = [w for w in windows if not w.padded]
         target = out / 'dataset.h5'
         windows_to_hdf5(kept, target, subject_id=config['subjectId'])
@@ -75,6 +106,8 @@ def main():
             raise ValueError('自动 probing 要求所有训练试次带有稳定的试次编号')
         with h5py.File(target, 'a') as handle:
             handle.create_dataset('source_trial_ids', data=np.array([-1 if w.session_id in session_groups else w.trial_index for w in kept], dtype=np.int64))
+            if layout:
+                handle.attrs['electrode_positions'] = np.asarray(layout[1], dtype=np.float64)
             if config.get('roundId'):
                 handle.attrs['acquisition_round_id'] = config['roundId']
                 handle.attrs['subject_label'] = config['subjectLabel']
@@ -93,10 +126,14 @@ def main():
     else:
         import torch
         from bci_dayloop.serving.reve import ReveModelBackend, default_checkpoint_root
+        from bci_dayloop.serving.reve_filter import DEFAULT_REVE_FILTER
         from fit_smr_control_head import encode_windows, train_linear_head
         dataset = EEGHDF5(config['dataset'])
         loaded = dataset.load()
         meta = dataset.metadata
+        with h5py.File(config['dataset'], 'r') as handle:
+            coordinates = handle.attrs.get('electrode_positions')
+        positions = None if coordinates is None else validate_electrode_positions(coordinates.tolist(), len(meta.channel_names))
         if meta.class_names != ['left_hand', 'right_hand', 'tongue', 'rest'] or meta.unit != 'uV':
             raise ValueError('训练只接受 SMR 四类、单位 uV 的 H5')
         if set(loaded['labels'].tolist()) != {0, 1, 2, 3}:
@@ -128,19 +165,27 @@ def main():
         print('[fit] grouped train/validation/test sizes:', [len(i) for i in indices], flush=True)
         torch.manual_seed(config['seed'])
         root = default_checkpoint_root()
-        backend = ReveModelBackend(model_dir=root / ('reve-' + config['size']), positions_dir=root / 'reve-positions',
+        duration = loaded['data'].shape[-1] / meta.sample_rate
+        backend = ReveModelBackend(model_dir=Path(config['modelDir']) if config.get('modelDir') else root / ('reve-' + config['size']),
+                                   positions_dir=root / 'reve-positions',
                                    device=config['device'], strategy='none', task='smr_control',
+                                   filter_mode=config.get('reveFilterMode') or DEFAULT_REVE_FILTER,
+                                   custom_filter=config.get('reveCustomFilter'),
+                                   window_sec=duration,
                                    state_file=Path(config['baselineStateFile']) if config.get('baselineStateFile') else None,
                                    cache_size=max(128, len(loaded['labels']) + 8),
                                    lora_checkpoint=Path(config['loraCheckpoint']) if config['loraCheckpoint'] else None)
         backend.load()
-        duration = loaded['data'].shape[-1] / meta.sample_rate
+        filter_mode = getattr(backend, 'effective_filter_mode', None)
+        filter_algorithm = getattr(backend, 'effective_filter_algorithm', None)
+        filter_band = getattr(backend, 'omni_gui_filter_settings', None)
+        custom_filter = getattr(backend, 'effective_custom_filter', None)
         if abs(duration - backend.window_sec) > 1 / meta.sample_rate:
             raise ValueError(f'训练数据窗口 {duration:g} 秒与模型窗口 {backend.window_sec:g} 秒不一致')
         if adaptive and backend.model_revision != config['baselineRevision']:
             raise ValueError('离线载入的基线与采集模型版本不一致，拒绝比较')
         windows = [SimpleNamespace(data=data, class_id=int(label), sample_rate=meta.sample_rate,
-                                   channel_names=tuple(meta.channel_names), session_id=str(session))
+                                   channel_names=tuple(meta.channel_names), session_id=str(session), electrode_positions=positions)
                    for data, label, session in zip(loaded['data'], loaded['labels'], loaded['session_ids'])]
         # The held-out test block is never encoded or scored during adaptive selection.
         if adaptive:
@@ -157,6 +202,10 @@ def main():
                                 'task': 'smr_control', 'encoder_id': backend.encoder_id, 'model_revision': backend.model_revision,
                                 'feature_normalization': backend.feature_normalization, 'input_clip': backend.input_clip,
                                 'preprocessing_profile': backend.preprocessing_profile,
+                                'filter_mode': filter_mode,
+                                'filter_algorithm': filter_algorithm,
+                                'filter_band': filter_band,
+                                'custom_filter': custom_filter,
                                 'input_channel_names': list(backend.input_channel_names),
                                 'input_window_sec': backend.window_sec,
                                 'lora_checkpoint': config['loraCheckpoint'], 'size': config['size']}
@@ -192,6 +241,10 @@ def main():
                         'feature_normalization': getattr(backend, 'feature_normalization', 'l2'),
                         'input_clip': getattr(backend, 'input_clip', None),
                         'preprocessing_profile': getattr(backend, 'preprocessing_profile', None),
+                        'filter_mode': filter_mode,
+                        'filter_algorithm': filter_algorithm,
+                        'filter_band': filter_band,
+                        'custom_filter': custom_filter,
                         'input_channel_names': list(getattr(backend, 'input_channel_names', ())),
                         'input_window_sec': getattr(backend, 'window_sec', loaded['data'].shape[-1] / meta.sample_rate),
                         'lora_checkpoint': config['adapterOutput'] if lora else config['loraCheckpoint'], 'size': config['size'],

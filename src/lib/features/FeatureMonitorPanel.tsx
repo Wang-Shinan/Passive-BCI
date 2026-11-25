@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Panel } from '../ui/Panel'
 import type { LiveFeatureSnapshot } from './bandFeatures'
 import type { FeatureOrigin } from './useFeatureMonitor'
+import { FeatureChannelPicker } from './FeatureChannelPicker'
 import {
   FEATURE_CATALOG,
   FEATURE_GROUPS,
@@ -95,6 +96,8 @@ export function FeatureMonitorPanel({
   note,
   defaultPickerOpen,
   origin,
+  channelNames,
+  channelTypes,
 }: {
   latest: LiveFeatureSnapshot | null
   history: LiveFeatureSnapshot[]
@@ -106,6 +109,8 @@ export function FeatureMonitorPanel({
   note?: string
   defaultPickerOpen?: boolean
   origin?: FeatureOrigin
+  channelNames?: string[]
+  channelTypes?: string[]
 }) {
   const [pickerOpen, setPickerOpen] = useState(
     defaultPickerOpen ?? !compact,
@@ -148,7 +153,7 @@ export function FeatureMonitorPanel({
               ? '合成 EEG'
               : analyzing
                 ? latest
-                  ? `滑窗 ${latest.windowSec.toFixed(1)}s · ${displayKeys.length} 项`
+                  ? `滑窗 ${latest.windowSec.toFixed(1)}s · ${latest.nChannels} 路 · ${displayKeys.length} 项`
                   : '分析中…'
                 : '未运行'}
         </span>
@@ -158,6 +163,8 @@ export function FeatureMonitorPanel({
         {note ??
           '与采集调试 / 离线 epoch_feature_extraction 同一套可勾选特征；勾选状态全站共用。'}
       </p>
+
+      <FeatureChannelPicker channelNames={channelNames} channelTypes={channelTypes} />
 
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
         <button

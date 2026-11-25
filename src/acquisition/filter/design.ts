@@ -2,6 +2,35 @@
 
 export type Sos = number[][] // [b0,b1,b2,a0,a1,a2] per section
 
+/** Sequential causal biquads and settling interval, following OmniBCI GUI 8dba492. */
+export function designOmniGuiFilter(fs: number, highpass: number, lowpass: number, notch: boolean) {
+  const q = 0.707
+  const sos: Sos = []
+  const append = (hz: number, kind: 'highpass' | 'lowpass' | 'notch') => {
+    if (hz <= 0 || hz >= fs / 2) return
+    const w = 2 * Math.PI * hz / fs
+    const cosine = Math.cos(w)
+    const alpha = Math.sin(w) / (2 * (kind === 'notch' ? 30 : q))
+    const a0 = 1 + alpha
+    const edge = kind === 'notch' ? 1 : (1 + (kind === 'highpass' ? cosine : -cosine)) / 2
+    const middle = kind === 'notch' ? -2 * cosine : (kind === 'highpass' ? -2 : 2) * edge
+    sos.push([edge / a0, middle / a0, edge / a0, 1, (-2 * cosine) / a0, (1 - alpha) / a0])
+  }
+  append(highpass, 'highpass')
+  append(lowpass, 'lowpass')
+  if (notch) for (const hz of displayNotchFrequencies(fs)) append(hz, 'notch')
+  const settlingSamples = Math.ceil(fs * Math.max(
+    8 / (2 * Math.PI * highpass * q),
+    8 / (2 * Math.PI * lowpass * q),
+    notch ? 8 * 30 / (Math.PI * 50) : 0,
+  ))
+  return { sos, settlingSamples }
+}
+
+export function maxBandpassHighHz(fs: number): number {
+  return fs / 2 - 0.5
+}
+
 type C = { re: number; im: number }
 
 const ZERO: C = { re: 0, im: 0 }
@@ -160,9 +189,10 @@ function zpk2sosButterBp(z: C[], p: C[], k: number): Sos {
  * `scipy.signal.butter(2, [low, high], btype='bandpass', fs, output='sos')`.
  */
 export function designBandpassSos(lowHz: number, highHz: number, fs: number, order = 2): Sos {
-  const nyq = fs * 0.49
-  const lo = Math.max(0.05, Math.min(lowHz, nyq - 0.5))
-  const hi = Math.max(lo + 0.5, Math.min(highHz, nyq))
+  const limit = maxBandpassHighHz(fs)
+  if (!Number.isFinite(limit) || limit <= 0.55) return []
+  const lo = Math.max(0.05, Math.min(lowHz, limit - 0.5))
+  const hi = Math.max(lo + 0.5, Math.min(highHz, limit))
   const analog = buttap(order)
   const wlow = 2 * fs * Math.tan((Math.PI * lo) / fs)
   const whigh = 2 * fs * Math.tan((Math.PI * hi) / fs)
@@ -190,8 +220,12 @@ export function designNotchSos(f0: number, fs: number, Q = 30): Sos {
   return [[b0, b1, b2, 1, a1, a2]]
 }
 
+export function displayNotchFrequencies(fs: number, mainsHz = 50): number[] {
+  return [mainsHz, mainsHz * 2].filter(hz => hz > 0 && hz < fs / 2)
+}
+
 export function designNotchCascade(fs: number, mainsHz = 50): Sos {
-  return [...designNotchSos(mainsHz, fs, 30), ...designNotchSos(mainsHz * 2, fs, 30)]
+  return displayNotchFrequencies(fs, mainsHz).flatMap(hz => designNotchSos(hz, fs))
 }
 
 /** scipy.signal.sosfilt_zi — DF-II transposed, input=1. */

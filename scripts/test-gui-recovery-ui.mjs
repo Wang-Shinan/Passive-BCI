@@ -72,14 +72,16 @@ try {
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) })
   })
 
-  await page.route('**/api/omni-gui/v1/status', route => {
+  await page.route('**/api/omni-gui/discover', route =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ port: 8769 }) }))
+  await page.route('**/api/omni-gui/8769/v1/status', route => {
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({
       schema_version: 1, api_control_enabled: !gui.apiOff, connected: true,
       streaming: gui.mode !== 'down', session_id: gui.sessionId,
       sample_rate_hz: FS, frames: gui.head, stale: false,
     }) })
   })
-  await page.route('**/api/omni-gui/v1/trigger', async route => {
+  await page.route('**/api/omni-gui/8769/v1/trigger', async route => {
     const body = route.request().postDataJSON()
     triggers.push(body)
     netLog.push(`POST /v1/trigger ${JSON.stringify(body)}`)
@@ -90,7 +92,7 @@ try {
       host_time: new Date().toISOString(),
     }) })
   })
-  await page.route('**/api/omni-gui/v1/data**', route => {
+  await page.route('**/api/omni-gui/8769/v1/data**', route => {
     const url = new URL(route.request().url())
     const limit = Number(url.searchParams.get('limit') ?? '1')
     const cursorQ = url.searchParams.get('cursor')

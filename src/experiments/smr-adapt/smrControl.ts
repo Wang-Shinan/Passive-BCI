@@ -1,5 +1,5 @@
 /** Stieger-style SMR cursor: C3/C4 Laplacian alpha → 2D velocity. */
-import { canLabelSmrHead } from './labels'
+import { labelIndexForTarget, smrModelAxes } from './labels'
 import type { TemporalDecision } from '../../lib/model-runtime/temporalEvidence'
 
 export const SMR_WINDOW_SEC = 0.16
@@ -205,11 +205,6 @@ export function smrFeatures(pC3: number, pC4: number): { horiz: number; vert: nu
   }
 }
 
-const RIGHT_NAMES = new Set(['right_hand', 'right'])
-const LEFT_NAMES = new Set(['left_hand', 'left'])
-const UP_NAMES = new Set(['tongue', 'up'])
-const DOWN_NAMES = new Set(['rest', 'down', 'idle'])
-
 export type SmrClassMasses = {
   left: number
   right: number
@@ -221,25 +216,17 @@ export function smrClassMasses(
   classNames: readonly string[],
   probabilities: readonly number[],
 ): SmrClassMasses {
-  if (!canLabelSmrHead(classNames) || classNames.length !== probabilities.length) {
+  if (!smrModelAxes(classNames) || classNames.length !== probabilities.length) {
     return { left: 0, right: 0, up: 0, down: 0 }
   }
-  let left = 0
-  let right = 0
-  let up = 0
-  let down = 0
-  for (let i = 0; i < classNames.length; i++) {
-    const value = probabilities[i] ?? 0
-    const name = classNames[i] ?? ''
-    if (RIGHT_NAMES.has(name)) right += value
-    else if (LEFT_NAMES.has(name)) left += value
-    else if (UP_NAMES.has(name)) up += value
-    else if (DOWN_NAMES.has(name)) down += value
+  const mass = (target: TargetDir) => {
+    const i = labelIndexForTarget(classNames, target)
+    return i == null ? 0 : probabilities[i] ?? 0
   }
-  return { left, right, up, down }
+  return { left: mass('left'), right: mass('right'), up: mass('up'), down: mass('down') }
 }
 
-/** Map a 4-class REVE prediction onto the same cursor axes as C3/C4 mu. */
+/** Map supported model probabilities onto the same cursor axes as C3/C4 mu. */
 export function reveCursorAxes(
   classNames: readonly string[],
   probabilities: readonly number[],

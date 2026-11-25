@@ -1,0 +1,67 @@
+.arm-studio {
+  position: fixed; inset: 0; z-index: 100; isolation: isolate; overflow: hidden;
+  color: #fff9e9; background: #727467; font: 15px/1.5 system-ui, "Microsoft YaHei", sans-serif;
+}
+.arm-studio canvas { display: block; width: 100%; height: 100%; }
+.arm-studio::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, #23251e66, transparent 18%, transparent 70%, #202a26a8);
+}
+.arm-studio .arm-header, .arm-studio .arm-dock {
+  position: absolute; left: clamp(18px, 4vw, 76px); right: clamp(18px, 4vw, 76px);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; z-index: 1;
+}
+.arm-header { top: max(23px, env(safe-area-inset-top)); }
+.arm-heading, .arm-controls, .arm-studio button { display: inline-flex; align-items: center; gap: 10px; }
+.arm-studio h1, .arm-studio h2, .arm-studio p { margin: 0; color: inherit; }
+.arm-studio .arm-heading h1 { font-size: 16px; letter-spacing: .05em; font-weight: 550; text-shadow: 0 1px 6px #292b24a8; }
+.arm-stamp { padding: 2px 7px; border: 1px solid #fff8; border-radius: 4px; font: 600 11px/1.7 ui-monospace,monospace; letter-spacing: .09em; background: #34433b6e; }
+.arm-studio button {
+  appearance: none; border: 1px solid #fff6; border-radius: 30px; background: #26372fbf;
+  color: #fff9e9; padding: 8px 15px; cursor: pointer; font: inherit; font-size: 13px;
+}
+.arm-studio button:hover { background: #394b40; }
+.arm-studio button:focus-visible { outline: 3px solid #f8d38f; outline-offset: 3px; }
+.arm-studio .arm-dock { bottom: max(25px, env(safe-area-inset-bottom)); align-items: flex-end; }
+.arm-instructions {
+  position: absolute; z-index: 1; inset-inline: 4%; top: 50%; text-align: center; pointer-events: none;
+  color: white; text-shadow: 0 1px 3px #17251e, 0 2px 14px #182920db;
+}
+.arm-instructions[data-fixation] { top: 62%; }
+.arm-round, .arm-time { font: 500 12px/1.5 ui-monospace,monospace; font-variant-numeric: tabular-nums; }
+.arm-studio .arm-instructions h2 {
+  font-size: clamp(26px, min(6.8vw, 7.5dvh), 88px); font-weight: 650; line-height: 1.15;
+  letter-spacing: .035em; transform: translateY(-50%); animation: arm-cue-in .28s ease-out;
+}
+.arm-studio .arm-instructions p {
+  max-width: 36em; margin: -.6em auto 0; font-size: clamp(13px, 2.1vmin, 22px);
+  color: #fff9e9; text-wrap: balance;
+}
+@keyframes arm-cue-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .arm-studio .arm-instructions h2 { animation: none; } }
+.arm-transport { width: 265px; flex-shrink: 0; }
+.arm-chapters, .arm-controls { display: flex; justify-content: space-between; gap: 5px; align-items: center; }
+.arm-studio .arm-chapters button {
+  position: relative; flex: 1; justify-content: center; height: 34px; margin-bottom: 5px; padding: 0 0 5px; border: 0; background: #28362d7d; border-radius: 4px; color: #fff9e9;
+}
+.arm-chapters button::before, .arm-chapters button span { position: absolute; left: 0; bottom: 0; height: 3px; border-radius: 3px; }
+.arm-chapters button[aria-current] { background: #394b40; }
+.arm-fixation { position: absolute; z-index: 1; top: 50%; left: 50%; width: 8px; height: 8px; transform: translate(-50%, -50%); border-radius: 50%; background: #fff9e9; box-shadow: 0 0 0 1px #36473f9e; }
+.arm-chapters button::before { content: ""; width: 100%; background: #fffa; }
+.arm-chapters button span { background: #d9aa60; }
+.arm-studio .arm-start { background: #fff4dd; border-color: transparent; color: #28352d; font-weight: 650; }
+.arm-studio .arm-start:hover { background: #ffdfad; }
+.arm-error, .arm-note { z-index: 2; position: absolute; background: #24352e; border-radius: 8px; padding: 12px 18px; left: 50%; transform: translateX(-50%); }
+.arm-error { top: 43%; } .arm-note { top: 75px; }
+@media(max-width: 620px) {
+  .arm-studio .arm-header { gap: 6px; }
+  .arm-header .arm-heading, .arm-header .arm-controls { gap: 6px; }
+  .arm-studio .arm-header h1 { font-size: 14px; }
+  .arm-header .arm-controls { font-size: 12px; }
+  .arm-studio .arm-header button { padding: 7px 10px; white-space: nowrap; }
+  .arm-studio .arm-dock { align-items: stretch; flex-direction: column; gap: 9px; }
+  .arm-transport { width: 100%; }
+}
+@media(max-height: 470px) {
+  .arm-header { top: 10px; } .arm-studio .arm-dock { bottom: 10px; }
+}

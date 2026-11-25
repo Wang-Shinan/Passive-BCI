@@ -3,10 +3,11 @@ import { liveEegHub } from '../eeg/liveHub'
 import { modelRuntimeHub, modelUrlPresets } from './modelRuntimeHub'
 import { ensureModelService, modelServiceStatus } from './modelServiceApi'
 import { ensureGridBcigoStream } from '../../experiments/smr-grid/ensureBcigoStream'
+import { smrModelAxes } from '../../experiments/smr-adapt/labels'
 
 function checkCancelled(signal: AbortSignal): void { signal.throwIfAborted() }
 
-/** Await actual readiness, not just an open socket/bridge hello. Every wait is cancellable. */
+/** Wait for the model handshake with a cancellable timeout. */
 async function waitFor(check: () => boolean, signal: AbortSignal, timeoutMs: number, message: () => string): Promise<void> {
   checkCancelled(signal)
   if (check()) return
@@ -79,46 +80,41 @@ export async function connectSmrModel(signal: AbortSignal, progress: (message: s
     await ensureGridBcigoStream(signal)
     checkCancelled(signal)
   }
-  progress('正在等待 EEG 窗口和首个新预测…')
-  const previousId = modelRuntimeHub.snapshot.latestPrediction?.observation_id
-  await waitFor(() => {
-    const snapshot = modelRuntimeHub.snapshot
-    const prediction = snapshot.latestPrediction
-    return snapshot.status === 'ready' && Boolean(prediction && prediction.observation_id !== previousId &&
-      performance.now() - prediction.received_at_ms < 1500)
-  }, signal, 20000, () => `模型已连接，但未收到新预测。${modelRuntimeHub.snapshot.lastError || modelRuntimeHub.snapshot.sourceDetail}`)
-  progress('已接入现有模型 · 正在接收 EEG 四分类预测')
+  checkCancelled(signal)
+  progress('模型与 EEG 来源已接入')
 }
 
-const SMR_CLASS_NAMES = 'left_hand,right_hand,tongue,rest'
-
-/** Grouped SMR acquisition uses the random EEGNet, not the REVE service. */
-export async function connectEegnetSmr(signal: AbortSignal, progress: (message: string) => void): Promise<void> {
-  progress('正在连接选定的 EEGNet…')
-  const status = await modelServiceStatus(signal)
-  if (status.running && status.backend !== 'eegnet') throw new Error('请先在模型设置中选择 EEGNet 并应用；不会自动替换当前模型')
-  if (!status.running) await ensureModelService({ backend: 'eegnet', eegnetChannels: liveEegHub.meta.channelNames.length || 32, signal })
-  const url = modelUrlPresets().find(item => item.id === 'proxy')!.url
-  await modelRuntimeHub.setUrl(url)
+/** Attach to the applied model for grouped recording, or start the SMR default when idle. */
+export async function connectGroupedSmrModel(
+  signal: AbortSignal, progress: (message: string) => void, headId?: string, appliedOnly = false,
+): Promise<void> {
+  progress('正在连接当前 SMR 模型…')
+  const presets = modelUrlPresets()
+  const proxyUrl = presets.find(item => item.id === 'proxy')!.url
+  if (headId || presets.some(item => item.url === modelRuntimeHub.snapshot.url)) {
+    const status = await modelServiceStatus(signal)
+    checkCancelled(signal)
+    if (headId || (!status.running && !status.starting)) {
+      if (appliedOnly) throw new Error('请先在模型设置应用左手、右手、舌头、放松四分类模型，再开始光标控制。')
+      progress(headId ? '正在应用所选 SMR 分类头…' : '正在启动默认 SMR 模型…')
+      await ensureModelService({ backend: 'reve', task: 'smr_control', headId, stepSec: 0.1, signal })
+    }
+    if (headId) await modelRuntimeHub.setUrl(proxyUrl)
+  }
   checkCancelled(signal)
   const previous = modelRuntimeHub.snapshot
   if (!previous.enabled) modelRuntimeHub.setEnabled(true)
-  else if (previous.status !== 'ready') modelRuntimeHub.connect()
+  else if (previous.status !== 'ready' && previous.status !== 'connecting') modelRuntimeHub.connect()
   await waitFor(() => modelRuntimeHub.snapshot.status === 'ready', signal, 15000,
-    () => modelRuntimeHub.snapshot.lastError || 'EEGNet 握手超时，请确认托管服务仍在运行')
+    () => modelRuntimeHub.snapshot.lastError || '模型握手超时，请确认服务正在运行')
   const hello = modelRuntimeHub.snapshot.serviceHello
-  if (hello?.model_type !== 'eegnet' || hello.class_names?.join(',') !== SMR_CLASS_NAMES) {
-    throw new Error(`当前服务不是四分类 EEGNet：${hello?.class_names?.join(' / ') || '未报告类别'}`)
+  const names = hello?.class_names
+  if (!names || !smrModelAxes(names)) {
+    throw new Error(`当前模型类别为 ${names?.join(' / ') || '未报告'}。请选择四分类 SMR 模型、左右二分类模型或舌头／放松二分类模型。`)
   }
   if (!(acqRuntime.streaming && liveEegHub.isFresh())) {
-    throw new Error('EEGNet 已连接，但没有可录制的原始 EEG。请先在采集页开流。')
+    throw new Error('请先在采集调试页开流，分组采集需要可录制的原始 EEG。')
   }
-  progress('正在等待 EEG 窗口和首个新预测…')
-  const previousId = modelRuntimeHub.snapshot.latestPrediction?.observation_id
-  await waitFor(() => {
-    const prediction = modelRuntimeHub.snapshot.latestPrediction
-    return modelRuntimeHub.snapshot.status === 'ready' && Boolean(prediction && prediction.observation_id !== previousId &&
-      performance.now() - prediction.received_at_ms < 1500)
-  }, signal, 20000, () => `EEGNet 已连接，但未收到新预测。${modelRuntimeHub.snapshot.lastError || modelRuntimeHub.snapshot.sourceDetail}`)
-  progress('已接入选定的 EEGNet · 左手 / 右手 / 舌头 / 休息')
+  checkCancelled(signal)
+  progress(`已接入当前 ${names.length} 类 SMR 模型与原始 EEG`)
 }

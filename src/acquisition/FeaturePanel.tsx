@@ -8,12 +8,16 @@ export function FeaturePanel({
   analyzing,
   enabledIds,
   onEnabledChange,
+  channelNames,
+  channelTypes,
 }: {
   latest: LiveFeatureSnapshot | null
   history: LiveFeatureSnapshot[]
   analyzing: boolean
   enabledIds: string[]
   onEnabledChange: (ids: string[]) => void
+  channelNames: string[]
+  channelTypes: string[]
 }) {
   return (
     <FeatureMonitorPanel
@@ -22,9 +26,11 @@ export function FeaturePanel({
       analyzing={analyzing}
       enabledIds={enabledIds}
       onEnabledChange={onEnabledChange}
+      channelNames={channelNames}
+      channelTypes={channelTypes}
       compact={false}
       defaultPickerOpen
-      note="滑窗 FFT 走原始环（未做 5–50 Hz 显示滤波），否则 θ/δ 被滤掉、focus_score 几乎不变。勾选与实验页共用。"
+      note="特征从原始 EEG 滑窗计算。"
     />
   )
 }

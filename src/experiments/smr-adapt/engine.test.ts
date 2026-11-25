@@ -13,7 +13,7 @@ import {
   groupedPlan,
   resumeGroup,
 } from './engine'
-import { canLabelSmrHead, labelIndexForTarget } from './labels'
+import { canLabelSmrHead, labelIndexForTarget, smrModelAxes } from './labels'
 import type { TrialOutcome } from './smrControl'
 import { reveCursorAxes } from './smrControl'
 
@@ -28,6 +28,14 @@ it('requires tongue imagery and never relabels the former both-hand class', () =
 })
 
 describe('session plan', () => {
+  it('balances left and right for a horizontal two-class round', () => {
+    const trials = buildTrials(groupedPlan(2, 6, 'LR'), 7)
+    for (const run of [1, 2]) {
+      const group = trials.filter(trial => trial.run === run)
+      expect(group.every(trial => trial.task === 'LR')).toBe(true)
+      expect(group.map(trial => trial.target).sort()).toEqual(['left', 'left', 'left', 'right', 'right', 'right'])
+    }
+  })
   it('randomizes reproducibly with exactly equal directions within each group', () => {
     const plan = groupedPlan(3, 20)
     const trials = buildTrials(plan, 42)
@@ -156,6 +164,13 @@ describe('session plan', () => {
     ])
     expect(hint).toMatch(/符号反了/)
   })
+})
+
+it('maps binary probabilities by label and moves only along the supported axis', () => {
+  expect(smrModelAxes(['right-hand', 'LEFT_HAND'])).toBe('LR')
+  expect(smrModelAxes(['idle', 'tongue'])).toBe('UD')
+  expect(reveCursorAxes(['right-hand', 'LEFT_HAND'], [0.875, 0.125])).toEqual({ zH: 0.75, zV: 0 })
+  expect(reveCursorAxes(['idle', 'tongue'], [0.25, 0.75])).toEqual({ zH: 0, zV: 0.5 })
 })
 
 describe('REVE label mapping', () => {

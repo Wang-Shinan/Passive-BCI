@@ -451,7 +451,13 @@ class ModelRuntimeHub {
       this.sourceDraining = false
       return
     }
-    const matched = matchModelSourceProfile(batch)
+    const hello = this.snapshotValue.serviceHello
+    if (batch.omniFlexVer2Mapping !== undefined && !hello) {
+      setTimeout(() => this.drainSource(), 0)
+      return
+    }
+    const useOmniFlexVer2 = batch.omniFlexVer2Mapping !== undefined && hello?.model_type === 'reve'
+    const matched = matchModelSourceProfile(batch, useOmniFlexVer2)
     if (!matched) {
       this.pending = []
       this.sentWindowKeys.clear()
@@ -459,13 +465,22 @@ class ModelRuntimeHub {
       this.patch({
         sourceCompatible: false,
         sourceDetail:
-          batch.device === 'neuracle' || batch.device === 'bcigo' || batch.device === 'omni'
+          useOmniFlexVer2
+            ? 'OmniBCI 柔性 Ver2 需要匹配 16 路不同的 EEG 通道，请在采集调试核对接线映射'
+            : batch.device === 'neuracle' || batch.device === 'bcigo' || batch.device === 'omni'
             ? `${batch.device} 通道布局未匹配已知模型源（${batch.channels} 导）`
             : `模型旁路暂不接收 ${batch.device}`,
       })
     } else {
       const projected = projectRawBatchToProfile(batch, matched)
-      const sourceDetail = describeModelSource(matched.profile, projected, batch.channels)
+      let sourceDetail = describeModelSource(matched.profile, projected, batch.channels)
+      const required = hello?.required_electrodes
+      if (required?.length) {
+        const names = projected.electrodeNames ?? projected.channelNames
+        const used = new Set(required.map(name => name.trim().toLowerCase()))
+        const excluded = names.filter(name => !used.has(name.trim().toLowerCase()))
+        sourceDetail += ` · 推理 ${required.length} 导${excluded.length ? `（排除 ${excluded.join('、')}）` : ''}`
+      }
       if (!this.snapshotValue.sourceCompatible || this.snapshotValue.sourceDetail !== sourceDetail) {
         this.patch({ sourceCompatible: true, sourceDetail })
       }

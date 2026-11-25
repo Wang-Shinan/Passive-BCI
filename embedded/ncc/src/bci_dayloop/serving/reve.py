@@ -36,6 +36,18 @@ from bci_dayloop.serving.reve_lora import (
     merge_peft_lora_state_dict,
     seed_linear_head_from_labels,
 )
+from bci_dayloop.serving.reve_filter import (
+    DEFAULT_REVE_FILTER,
+    DEFAULT_REVE_BAND,
+    LEGACY_REVE_BAND,
+    REVE_FILTER_MODES,
+    CustomFilter,
+    apply_reve_custom_band,
+    apply_reve_pretraining_band,
+    resample_reve_band_input,
+    validate_custom_filter,
+)
+from bci_dayloop.serving.omni_gui_filter import OMNI_GUI_FILTER_ALGORITHM, OmniGuiCausalFilter
 
 ORDINAL_CLASS_NAMES: tuple[str, ...] = ("任务一", "任务二", "任务三")
 TETRIS_ACTION_CLASS_NAMES: tuple[str, ...] = (
@@ -259,6 +271,10 @@ def prepare_reve_window(
     target_hz: float = REVE_TARGET_HZ,
     electrode_positions: Sequence[Sequence[float]] | None = None,
     require_all_channels: bool = False,
+    filter_mode: str = "none",
+    custom_filter: CustomFilter | None = None,
+    omni_gui_settings: CustomFilter | None = None,
+    omni_gui_filtered: bool = False,
 ) -> tuple[np.ndarray, tuple[str, ...]]:
     if electrode_positions is not None:
         if data.ndim != 2 or data.shape[0] != len(channel_names) or len(channel_names) < 4:
@@ -270,7 +286,17 @@ def prepare_reve_window(
         if require_all_channels and (len(names) != len(channel_names) or len(set(names)) != len(names)):
             raise ValueError("Every explicit electrode name must map to a distinct REVE position")
     dst_samples = int(round(window_sec * target_hz))
-    if abs(sample_rate - target_hz) > 1e-6 or selected.shape[1] != dst_samples:
+    if omni_gui_settings is not None:
+        if not omni_gui_filtered:
+            selected = OmniGuiCausalFilter(sample_rate, omni_gui_settings).apply(selected)
+        selected = resample_reve_band_input(selected, dst_samples)
+    elif filter_mode == "pretraining":
+        selected = resample_reve_band_input(selected, dst_samples)
+        selected = apply_reve_pretraining_band(selected, target_hz)
+    elif filter_mode == "custom" and custom_filter is not None:
+        selected = apply_reve_custom_band(selected, sample_rate, custom_filter)
+        selected = resample_reve_band_input(selected, dst_samples)
+    elif abs(sample_rate - target_hz) > 1e-6 or selected.shape[1] != dst_samples:
         selected = resample_to_length(selected, dst_samples)
     return zscore_channels(selected), names
 
@@ -324,16 +350,25 @@ class ReveModelBackend:
     input_clip: float | None = None
     preprocessing_profile: str | None = None
     input_channel_names: tuple[str, ...] = ()
+    filter_mode: str = DEFAULT_REVE_FILTER
+    custom_filter: CustomFilter | None = None
+    _checkpoint_filter_mode: str | None = field(default=None, init=False, repr=False)
+    _checkpoint_filter_algorithm: str | None = field(default=None, init=False, repr=False)
+    _checkpoint_filter_band: CustomFilter | None = field(default=None, init=False, repr=False)
+    _checkpoint_custom_filter: CustomFilter | None = field(default=None, init=False, repr=False)
     _model: Any = field(default=None, init=False, repr=False)
     _pos_bank: Any = field(default=None, init=False, repr=False)
     _head: nn.Linear | None = field(default=None, init=False, repr=False)
     _lookup: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    required_electrodes: tuple[str, ...] = field(default=(), init=False)
     _torch_device: torch.device | None = field(default=None, init=False, repr=False)
     _cache: OrderedDict[str, torch.Tensor] = field(default_factory=OrderedDict, init=False, repr=False)
     _replay: list[list[torch.Tensor]] = field(default_factory=list, init=False, repr=False)
     _update_step: int = field(default=0, init=False, repr=False)
     _head_source: str = field(default='untrained', init=False, repr=False)
     head_initialization: dict[str, Any] | None = field(default=None, init=False)
+    allow_missing_state_file: bool = False
+    require_lora_head: bool = False
 
     def __post_init__(self) -> None:
         spec = get_reve_task(self.task)
@@ -358,6 +393,12 @@ class ReveModelBackend:
         return encoder_id_for_lora(self.lora_checkpoint, self.model_dir.name)
 
     def load(self) -> None:
+        if self.state_file is not None and not self.allow_missing_state_file and not self.state_file.is_file():
+            raise FileNotFoundError(f"REVE 分类头文件不存在：{self.state_file}")
+        if self.filter_mode not in REVE_FILTER_MODES:
+            raise ValueError(f"Unsupported REVE filter mode: {self.filter_mode}")
+        if self.filter_mode == 'custom':
+            self.custom_filter = validate_custom_filter(self.custom_filter)
         try:
             from transformers import AutoModel
         except ImportError as error:
@@ -396,6 +437,8 @@ class ReveModelBackend:
         init_linear_head(self._head, seed)
         self.head_initialization = {'source': 'random', 'seed': seed, 'range': 0.15}
         self._apply_lora_checkpoint()
+        if self.require_lora_head and self._head_source != 'lora-checkpoint':
+            raise ValueError('指定的 LoRA 缺少与当前任务完整配套的分类头')
         self._head.eval()
         self.model_revision = self.encoder_id
         self._load_state_file()
@@ -406,6 +449,7 @@ class ReveModelBackend:
         if not self.lora_checkpoint.is_file():
             raise FileNotFoundError(f"REVE LoRA checkpoint not found: {self.lora_checkpoint}")
         payload = load_reve_lora_payload(self.lora_checkpoint)
+        self._load_required_electrodes(payload.meta.get('required_electrodes'))
         merged = merge_peft_lora_state_dict(payload.state_dict, rank=payload.rank, alpha=payload.alpha)
         stats = apply_merged_state_dict(self._model, merged)
         if payload.head_weight is not None and payload.head_bias is not None and payload.label_names:
@@ -470,7 +514,91 @@ class ReveModelBackend:
                 'input_clip': self.input_clip, 'channel_names': list(self.input_channel_names),
                 'target_hz': self.target_hz,
             }
+        payload['input']['filter_mode'] = self.filter_mode
+        if self.required_electrodes:
+            payload['input']['required_electrodes'] = list(self.required_electrodes)
+        payload['input']['effective_filter_mode'] = self.effective_filter_mode
+        if self.effective_filter_algorithm:
+            payload['input']['effective_filter_algorithm'] = self.effective_filter_algorithm
+        if self.omni_gui_filter_settings is not None:
+            payload['input']['effective_filter_band'] = self.omni_gui_filter_settings
+        if self.effective_custom_filter is not None:
+            payload['input']['effective_custom_filter'] = self.effective_custom_filter
         return payload
+
+    @property
+    def effective_filter_mode(self) -> str:
+        if self.filter_mode != 'checkpoint':
+            return self.filter_mode
+        return self._checkpoint_filter_mode or ('checkpoint' if self.preprocessing_profile else 'none')
+
+    @property
+    def effective_custom_filter(self) -> CustomFilter | None:
+        if self.effective_filter_mode != 'custom':
+            return None
+        return self._checkpoint_custom_filter if self.filter_mode == 'checkpoint' else self.custom_filter
+
+    @property
+    def effective_filter_algorithm(self) -> str | None:
+        if self.effective_filter_mode not in ('pretraining', 'custom'):
+            return None
+        return self._checkpoint_filter_algorithm if self.filter_mode == 'checkpoint' else OMNI_GUI_FILTER_ALGORITHM
+
+    @property
+    def omni_gui_filter_settings(self) -> CustomFilter | None:
+        if self.effective_filter_algorithm != OMNI_GUI_FILTER_ALGORITHM:
+            return None
+        if self.effective_filter_mode == 'custom':
+            return self.effective_custom_filter
+        return self._checkpoint_filter_band if self.filter_mode == 'checkpoint' else DEFAULT_REVE_BAND
+
+    def project_model_electrodes(
+        self,
+        data: np.ndarray,
+        channel_names: Sequence[str],
+        electrode_positions: Sequence[Sequence[float]] | None,
+        electrode_names: Sequence[str] | None = None,
+    ) -> tuple[np.ndarray, Sequence[str], Sequence[Sequence[float]] | None]:
+        if not self.required_electrodes:
+            return data, channel_names, electrode_positions
+        names = electrode_names if electrode_names is not None else channel_names
+        if electrode_positions is None or len(electrode_positions) != len(names) or data.shape[0] != len(names):
+            raise ValueError('当前 REVE 模型需要带电极坐标的输入')
+        indices = {name.strip().casefold(): i for i, name in enumerate(names)}
+        if len(indices) != len(names):
+            raise ValueError('输入电极名称重复')
+        missing = [name for name in self.required_electrodes if name.casefold() not in indices]
+        if missing:
+            raise ValueError('当前 REVE 模型缺少电极：' + '、'.join(missing))
+        keep = [indices[name.casefold()] for name in self.required_electrodes]
+        return data[keep], self.required_electrodes, tuple(electrode_positions[i] for i in keep)
+
+    def prepare_input(
+        self, data: np.ndarray, channel_names: Sequence[str], sample_rate: float, *,
+        electrode_names: Sequence[str] | None = None,
+        electrode_positions: Sequence[Sequence[float]] | None = None,
+        omni_gui_filtered: bool = False,
+    ) -> tuple[np.ndarray, tuple[str, ...]]:
+        if self.preprocessing_profile == 's04-mne-4s-v1':
+            from bci_dayloop.serving.reve_s04 import prepare_s04_window
+            prepared, names = prepare_s04_window(
+                data, channel_names, sample_rate, self.input_channel_names,
+                window_sec=self.window_sec, filter_mode=self.effective_filter_mode,
+                custom_filter=self.effective_custom_filter, omni_gui_settings=self.omni_gui_filter_settings,
+                omni_gui_filtered=omni_gui_filtered,
+            )
+        else:
+            prepared, names = prepare_reve_window(
+                data, electrode_names if electrode_positions is None and electrode_names is not None else channel_names,
+                sample_rate, self._lookup, window_sec=self.window_sec, target_hz=self.target_hz,
+                electrode_positions=electrode_positions, require_all_channels=electrode_names is not None,
+                filter_mode=self.effective_filter_mode, custom_filter=self.effective_custom_filter,
+                omni_gui_settings=self.omni_gui_filter_settings,
+                omni_gui_filtered=omni_gui_filtered,
+            )
+        if self.input_clip is not None:
+            prepared = np.clip(prepared, -self.input_clip, self.input_clip)
+        return prepared, names
 
     def predict(self, window: ParsedWindow) -> PredictionResult:
         if self._model is None or self._pos_bank is None or self._head is None:
@@ -484,29 +612,21 @@ class ReveModelBackend:
             )
         started = time.perf_counter()
         try:
-            if self.preprocessing_profile == 's04-mne-4s-v1':
-                from bci_dayloop.serving.reve_s04 import prepare_s04_window
-                prepared, names = prepare_s04_window(window.data, window.channel_names,
-                    window.sample_rate, self.input_channel_names, window_sec=self.window_sec)
-            else:
-                prepared, names = prepare_reve_window(
-                    window.data,
-                    window.electrode_names if window.electrode_positions is None and window.electrode_names is not None else window.channel_names,
-                    window.sample_rate,
-                    self._lookup,
-                    window_sec=self.window_sec,
-                    target_hz=self.target_hz,
-                    electrode_positions=window.electrode_positions,
-                    require_all_channels=window.electrode_names is not None,
-                )
+            data, channel_names, electrode_positions = self.project_model_electrodes(
+                window.data, window.channel_names, window.electrode_positions, window.electrode_names,
+            )
+            prepared, names = self.prepare_input(
+                data, channel_names, window.sample_rate,
+                electrode_names=None if self.required_electrodes else window.electrode_names,
+                electrode_positions=electrode_positions,
+                omni_gui_filtered=window.omni_gui_filtered,
+            )
         except ValueError as error:
             raise ProtocolError(
                 str(error),
                 code="invalid_window",
                 request_id=window.request_id,
             ) from error
-        if self.input_clip is not None:
-            prepared = np.clip(prepared, -self.input_clip, self.input_clip)
         prepare_ms = (time.perf_counter() - started) * 1000.0
 
         inferred = time.perf_counter()
@@ -514,8 +634,8 @@ class ReveModelBackend:
         eeg = eeg.to(self._torch_device, dtype=torch.float32)
         with torch.no_grad():
             positions = (
-                torch.tensor(window.electrode_positions, dtype=torch.float32, device=self._torch_device)
-                if window.electrode_positions is not None and self.preprocessing_profile is None
+                torch.tensor(electrode_positions, dtype=torch.float32, device=self._torch_device)
+                if electrode_positions is not None and self.preprocessing_profile is None
                 else self._pos_bank(list(names)).to(self._torch_device)
             )
             if positions.ndim == 2:
@@ -674,26 +794,54 @@ class ReveModelBackend:
         norms = weight.norm(dim=1, keepdim=True).clamp_min(1e-6)
         weight.mul_(max_norm / norms.clamp_min(max_norm))
 
-    def _load_state_file(self) -> None:
-        if self.state_file is None or self._head is None or not self.state_file.is_file():
+    def _load_required_electrodes(self, required: object) -> None:
+        if required is None:
             return
-        payload = torch.load(self.state_file, map_location=self._torch_device)
+        if (not isinstance(required, (list, tuple)) or len(required) < 4
+                or any(not isinstance(name, str) or not name.strip() for name in required)
+                or len({name.strip().casefold() for name in required}) != len(required)):
+            raise ValueError('Invalid REVE checkpoint electrode list')
+        ordered = tuple(name.strip() for name in required)
+        if self.required_electrodes and tuple(map(str.casefold, self.required_electrodes)) != tuple(map(str.casefold, ordered)):
+            raise ValueError('The REVE head and encoder require different electrodes')
+        self.required_electrodes = ordered
+
+    def _load_state_file(self) -> None:
+        if self.state_file is None:
+            return
+        if self._head is None:
+            raise RuntimeError('REVE 分类头尚未构建')
+        if self.allow_missing_state_file and not self.state_file.exists():
+            return
+        if not self.state_file.is_file():
+            raise FileNotFoundError(f"REVE 分类头文件不存在：{self.state_file}")
+        try:
+            payload = torch.load(self.state_file, map_location=self._torch_device, weights_only=True)
+        except Exception as error:
+            raise ValueError(f"无法读取 REVE 分类头 {self.state_file.name}：{error}") from error
+        if not isinstance(payload, dict):
+            raise ValueError(f"REVE 分类头格式无效：{self.state_file.name}")
         saved_task = str(payload.get("task", "passive_rating"))
         if normalize_reve_task(saved_task) != self.task:
-            return
-        if self.task == 'smr_control' and payload.get('class_names') != list(self.class_names):
-            raise ValueError('SMR head class_names mismatch: require left_hand/right_hand/tongue/rest; legacy both-hand heads must be retrained')
+            raise ValueError(f"REVE 分类头任务不匹配：权重 {saved_task}，当前 {self.task}")
+        saved_classes = payload.get('class_names')
+        if (saved_classes is not None or self.task == 'smr_control') and (
+            not isinstance(saved_classes, (list, tuple)) or tuple(saved_classes) != self.class_names
+        ):
+            raise ValueError(f"REVE 分类头类别或顺序不匹配：当前需要 {', '.join(self.class_names)}")
         saved_encoder = str(payload.get("encoder_id", self.model_dir.name))
         if saved_encoder != self.encoder_id:
-            print(
-                f"[reve] state-file skipped encoder mismatch "
-                f"saved={saved_encoder} serving={self.encoder_id}"
-            )
-            return
+            raise ValueError(f"REVE 分类头编码器不匹配：权重 {saved_encoder}，当前 {self.encoder_id}")
+        self._load_required_electrodes(payload.get('required_electrodes'))
+        head_state = payload.get("head")
+        if not isinstance(head_state, dict) or any(not torch.is_tensor(head_state.get(key)) for key in ('weight', 'bias')):
+            raise ValueError(f"REVE 分类头缺少权重或偏置：{self.state_file.name}")
+        if any(not torch.isfinite(head_state[key]).all() for key in ('weight', 'bias')):
+            raise ValueError(f"REVE 分类头包含非有限数值：{self.state_file.name}")
         try:
-            self._head.load_state_dict(payload["head"])
-        except RuntimeError:
-            return
+            self._head.load_state_dict(head_state)
+        except RuntimeError as error:
+            raise ValueError(f"REVE 分类头维度不匹配：{self.state_file.name}。{error}") from error
         self._update_step = int(payload.get("step", 0))
         self.model_revision = str(payload.get("model_revision", self.model_revision))
         normalization = payload.get('feature_normalization', 'l2')
@@ -710,6 +858,15 @@ class ReveModelBackend:
         if profile not in (None, 's04-mne-4s-v1'):
             raise ValueError('Unsupported REVE preprocessing profile')
         self.preprocessing_profile = profile
+        saved_filter = payload.get('filter_mode')
+        if saved_filter not in (None, *REVE_FILTER_MODES):
+            raise ValueError('Unsupported saved REVE filter mode')
+        self._checkpoint_filter_mode = saved_filter
+        algorithm = payload.get('filter_algorithm')
+        self._checkpoint_filter_algorithm = OMNI_GUI_FILTER_ALGORITHM if algorithm == OMNI_GUI_FILTER_ALGORITHM else None
+        if saved_filter == 'pretraining' and self._checkpoint_filter_algorithm:
+            self._checkpoint_filter_band = validate_custom_filter(payload.get('filter_band') or LEGACY_REVE_BAND)
+        self._checkpoint_custom_filter = validate_custom_filter(payload.get('custom_filter')) if saved_filter == 'custom' else None
         if profile == 's04-mne-4s-v1':
             names = payload.get('input_channel_names', [])
             if (self.task != 'smr_control' or self.strategy != 'none' or normalization != 'none'
@@ -724,13 +881,21 @@ class ReveModelBackend:
             if not 0 < float(self.step_sec) <= self.window_sec:
                 raise ValueError('Invalid S04 prediction hop')
         self._head_source = 'state-file'
-        self.head_initialization = payload.get('head_initialization')
+        self.head_initialization = {
+            'source': 'state-file',
+            'state_file': self.state_file.name,
+            'encoder_id': saved_encoder,
+        }
         print(
             f"[reve] state-file loaded encoder={saved_encoder} "
             f"step={self._update_step} {self.state_file}"
         )
         saved_replay = payload.get("replay")
-        if isinstance(saved_replay, list) and len(saved_replay) == len(self.class_names):
+        if (self.effective_filter_mode == (saved_filter or ('checkpoint' if profile else 'none'))
+            and self.effective_custom_filter == self._checkpoint_custom_filter
+            and self.effective_filter_algorithm == self._checkpoint_filter_algorithm
+            and (saved_filter != 'pretraining' or self.omni_gui_filter_settings == self._checkpoint_filter_band)
+            and isinstance(saved_replay, list) and len(saved_replay) == len(self.class_names)):
             restored: list[list[torch.Tensor]] = []
             for bucket in saved_replay:
                 items = []
@@ -754,10 +919,15 @@ class ReveModelBackend:
             "head_initialization": self.head_initialization,
             "encoder_id": self.encoder_id,
             "lora_checkpoint": str(self.lora_checkpoint) if self.lora_checkpoint else None,
+            "required_electrodes": list(self.required_electrodes) if self.required_electrodes else None,
             "size": self.model_dir.name.removeprefix('reve-'),
             "feature_normalization": self.feature_normalization,
             "input_clip": self.input_clip,
             "preprocessing_profile": self.preprocessing_profile,
+            "filter_mode": self.effective_filter_mode,
+            "filter_algorithm": self.effective_filter_algorithm,
+            "filter_band": self.omni_gui_filter_settings,
+            "custom_filter": self.effective_custom_filter,
             "input_channel_names": list(self.input_channel_names),
             "input_window_sec": self.window_sec,
             "replay": [[item.detach().cpu() for item in bucket] for bucket in self._replay],

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { VideoExperiment } from './experiments/video'
 import { Home } from './Home'
@@ -25,6 +25,8 @@ import { GazeTetrisPage } from './experiments/smr-gaze/GazeTetris'
 import { TetrisAdaptPage } from './experiments/tetris-adapt'
 import { RecordingsPage } from './recordings/RecordingsPage'
 
+const ArmchairPreview = lazy(() => import('./experiments/armchair'))
+
 export default function App({ home, autoStartModels = true, pageHeader }: { home?: ReactNode; autoStartModels?: boolean; pageHeader?: ReactNode } = {}) {
   return (
     <HashRouter>
@@ -37,6 +39,7 @@ export default function App({ home, autoStartModels = true, pageHeader }: { home
         <Route path="/online-learn" element={<OnlineLearnPage />} />
         <Route path="/smr" element={<SmrPage autoStartModel={autoStartModels} />} />
         <Route path="/smr-acquisition" element={<SmrAcquisitionPage autoStartModel={autoStartModels} />} />
+        <Route path="/armchair-preview" element={<Suspense fallback={null}><ArmchairPreview /></Suspense>} />
         <Route path="/jaw-clench" element={<JawClenchPage />} />
         <Route path="/focus" element={<FocusAcquisitionPage />} />
         <Route path="/smr-adapt" element={<Navigate to="/smr?mode=smr" replace />} />

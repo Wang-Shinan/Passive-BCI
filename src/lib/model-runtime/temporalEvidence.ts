@@ -198,6 +198,7 @@ export class TemporalEvidenceFilter {
 
     let outLogits: number[]
     let outProbs: number[]
+    let votedClassId: number | undefined
     const mode = this.config.mode
 
     if (mode === 'ema') {
@@ -211,10 +212,15 @@ export class TemporalEvidenceFilter {
     } else if (mode === 'vote') {
       const rows = this.logitHistory.slice(-nKeep)
       const counts = new Array<number>(classNames.length).fill(0)
+      const votes: number[] = []
       for (const row of rows) {
         const winner = argmax(row)
-        if (row.filter(value => value === row[winner]).length === 1) counts[winner]! += 1
+        if (row.filter(value => value === row[winner]).length !== 1) continue
+        counts[winner]! += 1
+        votes.push(winner)
       }
+      const mostVotes = Math.max(...counts)
+      votedClassId = votes.findLast(winner => counts[winner] === mostVotes)
       outProbs = counts.map(count => count / rows.length)
       outLogits = logitsFromProbabilities(outProbs)
     } else if (mode === 'window') {
@@ -232,9 +238,9 @@ export class TemporalEvidenceFilter {
       outProbs = rawProbs
     }
 
-    const classId = argmax(outProbs)
+    const classId = votedClassId ?? argmax(outProbs)
     const decision: TemporalDecision = {
-      ready: mode !== 'vote' || (this.logitHistory.length >= nKeep && (outProbs[classId] ?? 0) > 0.5),
+      ready: mode !== 'vote' || votedClassId !== undefined,
       classId,
       className: classNames[classId] ?? '',
       classNames,

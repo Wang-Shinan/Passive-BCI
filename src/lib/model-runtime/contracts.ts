@@ -1,3 +1,5 @@
+import { isReveFilterMode, parseReveCustomFilter, type ReveCustomFilter, type ReveFilterMode } from './reveFilter'
+
 export const MODEL_PROTOCOL_VERSION = 1
 
 export type ModelServiceStatus =
@@ -40,6 +42,11 @@ export type ModelWindowPacket = {
 
 export type ModelServiceHello = {
   type: 'hello'
+  filter_mode?: ReveFilterMode
+  effective_filter_mode?: ReveFilterMode
+  effective_filter_algorithm?: 'omni_gui'
+  effective_filter_band?: ReveCustomFilter
+  effective_custom_filter?: ReveCustomFilter
   schema_version: number
   service?: string
   warning?: string
@@ -53,6 +60,7 @@ export type ModelServiceHello = {
   step_sec?: number
   slide_sec?: number
   supports_group_training?: boolean
+  required_electrodes?: string[]
   /** Absolute path of the loaded checkpoint file (e.g. EEGNet service). */
   checkpoint?: string
   input_source?: 'omni-sdk'
@@ -192,8 +200,16 @@ function parseHello(value: Record<string, unknown>): ModelServiceHello {
       (typeof online?.strategy === 'string' ? online.strategy : undefined),
     window_sec: windowSec && windowSec > 0 ? windowSec : undefined,
     step_sec: stepSec && stepSec > 0 ? stepSec : undefined,
+    filter_mode: isReveFilterMode(input?.filter_mode) ? input.filter_mode : undefined,
+    effective_filter_mode: isReveFilterMode(input?.effective_filter_mode) ? input.effective_filter_mode : undefined,
+    effective_filter_algorithm: input?.effective_filter_algorithm === 'omni_gui' ? 'omni_gui' : undefined,
+    effective_filter_band: parseReveCustomFilter(input?.effective_filter_band),
+    effective_custom_filter: parseReveCustomFilter(input?.effective_custom_filter),
     slide_sec: finiteNumber(input?.slide_sec) && Number(input.slide_sec) > 0 ? Number(input.slide_sec) : undefined,
     supports_group_training: typeof value.supports_group_training === 'boolean' ? value.supports_group_training : undefined,
+    required_electrodes: Array.isArray(input?.required_electrodes)
+      && input.required_electrodes.every((name): name is string => typeof name === 'string')
+      ? input.required_electrodes : undefined,
     checkpoint: typeof value.checkpoint === 'string' ? value.checkpoint : undefined,
     input_source: input?.source === 'omni-sdk' ? 'omni-sdk' : undefined,
     follow: parseFollow(value.follow),

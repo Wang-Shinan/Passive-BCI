@@ -16,6 +16,7 @@ import torch
 
 from .protocol import PredictionResult, ProtocolError, feedback_ack_message, hello_message, new_observation_id
 from .reve import ReveModelBackend, ReveTaskSpec
+from .reve_filter import CustomFilter, DEFAULT_REVE_FILTER
 from .reve_lora import apply_merged_state_dict, merge_peft_lora_state_dict
 
 DUAL_TASK = 'smr_dual_axis'
@@ -126,9 +127,13 @@ class DualAxisReveBackend:
     window_sec = 4
     target_hz = 200
 
-    def __init__(self, model_dir: Path, positions_dir: Path, state_file: Path, *, device: str = 'auto', step_sec: float = .5):
+    def __init__(self, model_dir: Path, positions_dir: Path, state_file: Path, *,
+                 device: str = 'auto', step_sec: float = .5, filter_mode: str = DEFAULT_REVE_FILTER,
+                 custom_filter: CustomFilter | None = None):
         self.model_dir, self.positions_dir, self.state_file = model_dir, positions_dir, state_file
         self.device, self.step_sec = device, step_sec
+        self.filter_mode = filter_mode
+        self.custom_filter = custom_filter
         self.axes: dict[str, BinaryAxisBackend] = {}
         self.model_revision = ''
 
@@ -136,13 +141,23 @@ class DualAxisReveBackend:
     def torch_device_name(self) -> str:
         return self.axes['left_right'].torch_device_name
 
+    @property
+    def effective_filter_mode(self) -> str:
+        return self.axes['left_right'].effective_filter_mode
+
+    @property
+    def omni_gui_filter_settings(self) -> CustomFilter | None:
+        horizontal = self.axes['left_right'].omni_gui_filter_settings
+        return horizontal if self.axes['up_down'].omni_gui_filter_settings == horizontal else None
+
     def load(self) -> None:
         manifest = read_dual_axis_manifest(self.state_file, verify_hash=True)
         revisions = []
         for axis in AXIS_CLASSES:
             item = manifest['axes'][axis]
             backend = BinaryAxisBackend(self.model_dir, self.positions_dir, device=self.device,
-                task=axis, strategy='none', step_sec=self.step_sec, lora_checkpoint=Path(item['checkpoint']))
+                task=axis, strategy='none', step_sec=self.step_sec, lora_checkpoint=Path(item['checkpoint']),
+                filter_mode=self.filter_mode, custom_filter=self.custom_filter)
             backend.load()
             self.axes[axis] = backend
             revisions.append(f'{axis}:{item["sha256"][:12]}')
@@ -155,6 +170,15 @@ class DualAxisReveBackend:
         payload = hello_message(service='ncc-reve-dual-axis', model_name='S04 REVE · LR + UD binary', model_type='reve',
             task=self.task, class_names=self.class_names, model_revision=self.model_revision, strategy='none', window_sec=4, step_sec=self.step_sec)
         payload['input']['slide_sec'] = .1
+        payload['input']['filter_mode'] = self.filter_mode
+        payload['input']['effective_filter_mode'] = self.effective_filter_mode
+        algorithm = self.axes['left_right'].effective_filter_algorithm
+        if algorithm:
+            payload['input']['effective_filter_algorithm'] = algorithm
+        if self.omni_gui_filter_settings is not None:
+            payload['input']['effective_filter_band'] = self.omni_gui_filter_settings
+        if self.axes['left_right'].effective_custom_filter is not None:
+            payload['input']['effective_custom_filter'] = self.axes['left_right'].effective_custom_filter
         payload['supports_group_training'] = False
         payload['warning'] = '左右／上下為獨立二分類，每軸機率各自合計 100%；雙軸同時控制屬探索性使用，並非四分類。'
         payload['output_semantics'] = DUAL_SEMANTICS

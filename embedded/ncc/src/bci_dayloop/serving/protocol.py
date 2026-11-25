@@ -53,6 +53,8 @@ class ParsedWindow:
     profile: DeviceProfile | None
     electrode_names: tuple[str, ...] | None = None
     electrode_positions: tuple[tuple[float, float, float], ...] | None = None
+    reported_missing_samples_total: int | None = None
+    omni_gui_filtered: bool = False
 
 
 def validate_electrode_positions(value: Any, channels: int) -> tuple[tuple[float, float, float], ...]:
@@ -322,6 +324,8 @@ def parse_window_header(payload: dict[str, Any]) -> dict[str, Any]:
             electrode_names = tuple(n.strip() for n in electrode_names)
     except ValueError as error:
         raise ProtocolError(str(error), code="invalid_window", request_id=request_id) from error
+    quality = payload.get("source_quality")
+    missing_total = quality.get("reported_missing_samples_total") if isinstance(quality, dict) else None
     return {
         "request_id": request_id,
         "window_id": coerce_window_id(payload.get("window_id")),
@@ -334,6 +338,7 @@ def parse_window_header(payload: dict[str, Any]) -> dict[str, Any]:
         "samples": samples,
         "start_time_sec": _finite_number(payload.get("start_time_sec")),
         "end_time_sec": _finite_number(payload.get("end_time_sec")),
+        "reported_missing_samples_total": missing_total if type(missing_total) is int and missing_total >= 0 else None,
     }
 
 
@@ -398,6 +403,7 @@ def complete_window(
         profile=profile,
         electrode_names=header.get("electrode_names"),
         electrode_positions=header.get("electrode_positions"),
+        reported_missing_samples_total=header.get("reported_missing_samples_total"),
     )
 
 

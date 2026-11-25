@@ -84,6 +84,14 @@ node scripts/run-gaze-fit.mjs --help
 
 需要保留旧 runtime package 时，设置 `MODEL_PACKAGE` 为该模型包路径后启动服务。loader 及支持的模型实现已内置，模型包资产仍需单独提供。
 
+## OmniBCI 柔性电极 Ver2
+
+在「采集调试 → OmniBCI → 通道名称与电极位置（REVE）」选择「OmniBCI 柔性电极 Ver2（16 导）」。默认映射按流标签决定。带电极名的流按名称匹配。编号流依图号顺序跳过 04/E201（GND）和 15/E93（REF），其余依次对应 `CH1`–`CH16`。例如 05/E190 对应 `CH4`，16/E92 对应 `CH14`。源通道输入框可以覆盖默认映射，点击「恢复默认映射」可清除覆盖。
+
+开流后应用支持自定义电极坐标的 REVE 模型，比如「被动评级」任务的基础模型。GUI HTTP、LSL 和 STM32 32 导 SDK 采集均可经浏览器切窗，将匹配的 16 路及其 XYZ 坐标送给 REVE。原始录制仍按采集源通道保存。S04 等固定训练导联的分类头需要训练时的通道布局。基础模型的随机头可验证推理链路，实际分类需用该布局的数据训练或验证分类头。
+
+坐标来自 MNE 1.12.1。10–5 使用 `standard_1005` 原生坐标。HydroCel 电极从 `GSN-HydroCel-256` 取点，通过鼻根和左右耳前点拟合至同一参考头坐标系，再换算回 REVE 位置库采用的 `standard_1005` 原生坐标系，单位为米。
+
 ## 验证边界
 
 2026 年 10 月 26 日在现有 macOS Python 环境完成：
@@ -109,11 +117,13 @@ node scripts/run-gaze-fit.mjs --help
 共用模型面板现可选择 REVE 或 EEGNet，并独立选择模型权重。选择配置后点击应用才生效；录制中的应用继续走保存旧段、切换、开启新段的流程。
 
 - REVE：权重目录下的完整基座（`checkpoints/backbones/<目录>/model.safetensors`）和 adapter（`checkpoints/adapters/**/*.pt`）会出现在权重列表。未显式选权重时沿用所选分类头的配套 encoder。显式选择与分类头不一致的 encoder 会报错，不静默混用。
+- 在「采集调试 → 滤波设置」统一选择波形和网页托管 REVE 的滤波。默认使用 0.5–99.5 Hz 带通和 50/100 Hz 陷波，可选「不滤波」「按权重配置」或「自定义」。选项保存在浏览器中。「不滤波」跳过额外的带通和陷波，保留模型所需的重采样与标准化。旧 S04 权重的「按权重配置」使用 0.5–40 Hz 带通和 50 Hz 陷波。命令行可用 `--filter-mode none` 或 `--filter-mode checkpoint`。
+- 默认和自定义滤波使用 OmniBCI GUI 上游 `8dba492` 的因果滤波算法，按设置串联二阶高通、二阶低通和可选的 50/100 Hz 陷波。滤波状态以首个有效样本初始化，波形在启动与断点后显示稳定期空缺。REVE 按原始采样率滤波，再重采样和标准化。独立训练窗口从首样本初始化。
 - EEGNet：选择“重新随机初始化”不读取历史文件。种子可配置，通道数采用当前 EEG 通道数，未连接时为 32。生成的完整 checkpoint 保存到 `recordings/.eegnet/`，以后可重新选择。
 - 已有 EEGNet：将 `.pt`／`.pth` 放入 `checkpoints/eegnet/` 或 `recordings/.eegnet/`，点击“刷新权重”后选择。载入 encoder 与 classifier 的完整 `state_dict`；推理版本由文件内容确定。
 
 EEGNet checkpoint 使用本仓库 `EEGNet` 结构，并包含 `architecture: "eegnet"`、`n_channels`、`n_samples`、`sample_rate`、`class_names` 和 `state_dict`。当前类别固定为 `left_hand, right_hand, tongue, rest`；预处理为每通道 z-score。历史 `smr-random.pt` 格式可读取。其他 EEGNet 变体／无元数据的裸 state dict 不能假定兼容，需要先转换为匹配格式。通道数不符时拒绝推理，不再静默补零或截断；通道语义及顺序仍需与训练一致。
 
-网页托管的 EEGNet 与 REVE 使用同一管理端口 8768；独立 `model-service:eegnet` CLI 仍默认 8773。分组 SMR 连接器复用已选择的托管 EEGNet，不再强制连接另一个旧端口。
+网页托管的 EEGNet 与 REVE 共用 8768 端口，独立 `model-service:eegnet` CLI 默认使用 8773。分组 SMR 使用当前连接的模型，四分类可采水平和垂直，二分类按左右或舌头／放松采集对应的单轴。托管服务空闲时启动配置的 REVE SMR 分类头。组间自动训练需要兼容的托管模型和四类数据。
 
 测试命令：`python scripts/test_eegnet_weights.py` 验证初始化／重载／不兼容输入；`python scripts/test_eegnet_service.py` 验证真实 WebSocket 随机权重保存后重新载入的版本和输出一致。这些是合成输入测试，不是训练有效性或被试准确率验证。

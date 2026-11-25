@@ -9,6 +9,7 @@ export const LIVE_STALE_MS = 15000
 const HUB_SECONDS = 6
 const HIDDEN_CH_KEY = 'passive-bci.hidden-channel-names'
 const BAD_CH_KEY = 'passive-bci.bad-channel-names'
+const FEATURE_CH_KEY = 'passive-bci.feature-excluded-channel-names'
 /** Off by default (EOG / unused on BCIGo 32-ch). */
 export const DEFAULT_HIDDEN_CHANNELS = ['IO']
 
@@ -67,6 +68,18 @@ export function saveBadChannelNames(names: string[]): void {
   localStorage.setItem(BAD_CH_KEY, JSON.stringify([...new Set(names.map(normalizeChannelName))]))
 }
 
+function loadFeatureExcludedChannels(): ReadonlySet<string> | null {
+  try {
+    const names: unknown = JSON.parse(localStorage.getItem(FEATURE_CH_KEY) ?? 'null')
+    if (Array.isArray(names) && names.every((name) => typeof name === 'string')) {
+      return new Set(names.map(normalizeChannelName))
+    }
+  } catch {
+    /* Use the automatic selection when storage is unavailable. */
+  }
+  return null
+}
+
 /**
  * Resolve a free-form channel list (names or numbers, e.g. "CH1 9 16") into a
  * boolean mask aligned to `channelNames`. Numbers match a `CH<n>` name first,
@@ -102,6 +115,7 @@ export type LiveEegMeta = {
   link: LiveEegLink
   sampleRate: number
   channelNames: string[]
+  channelTypes: string[]
   lastAt: number
   detail: string
 }
@@ -112,6 +126,7 @@ export type LiveEegRing = {
   filled: number
   capacity: number
   sampleRate: number
+  lastSampleAt: number
 }
 
 class LiveEegHub {
@@ -121,38 +136,40 @@ class LiveEegHub {
   filled = 0
   sampleRate = 250
   channelNames: string[] = []
+  channelTypes: string[] = []
   device: LiveEegDevice = null
   link: LiveEegLink = 'idle'
   lastAt = 0
+  private lastSampleAt = 0
   detail = ''
-  channelMask: boolean[] = []
   badChannels = new Set<string>(loadBadChannelNames())
+  private featureExcludedChannels = loadFeatureExcludedChannels()
   private liveLatch = false
   private listeners = new Set<() => void>()
 
   configure(opts: {
     sampleRate?: number
     channelNames?: string[]
+    channelTypes?: string[]
     device?: LiveEegDevice
     detail?: string
   }): void {
     if (opts.sampleRate != null && opts.sampleRate > 0) this.sampleRate = opts.sampleRate
     if (opts.channelNames) {
+      const sameNames = this.channelNames.length === opts.channelNames.length &&
+        this.channelNames.every((name, i) => name === opts.channelNames?.[i])
+      if (!sameNames || (opts.device !== undefined && opts.device !== this.device)) {
+        this.channelTypes = []
+      }
       this.channelNames = [...opts.channelNames]
       this.ensureRing(opts.channelNames.length)
-      if (this.channelMask.length !== opts.channelNames.length) {
-        this.channelMask = visibleMaskForNames(opts.channelNames)
-      }
     } else if (opts.sampleRate != null && this.buffers.length) {
       this.ensureRing(this.buffers.length)
     }
+    if (opts.channelTypes) this.channelTypes = [...opts.channelTypes]
     if (opts.device !== undefined) this.device = opts.device
     if (opts.detail !== undefined) this.detail = opts.detail
     this.emit()
-  }
-
-  setChannelMask(mask: boolean[]): void {
-    this.channelMask = [...mask]
   }
 
   setBadChannelNames(names: string[]): void {
@@ -165,16 +182,34 @@ class LiveEegHub {
     return !!name && this.badChannels.has(normalizeChannelName(name))
   }
 
-  /** Mask aligned to current ring length: visible channels minus marked bad channels. */
-  featureChannelMask(): boolean[] | undefined {
-    const n = this.buffers.length
-    if (!n) return undefined
-    const hasBad = this.channelNames.some((name) => this.isBad(name))
-    if (!this.channelMask.length && !hasBad) return undefined
-    const base = this.channelMask.length === n
-      ? this.channelMask
-      : Array.from({ length: n }, (_, i) => this.channelMask[i] !== false)
-    return Array.from({ length: n }, (_, i) => base[i] !== false && !this.isBad(this.channelNames[i]))
+  get hasFeatureChannelSelection(): boolean {
+    return this.featureExcludedChannels !== null
+  }
+
+  setFeatureChannelSelection(names: string[], mask: boolean[] | null): void {
+    const excluded = new Set(this.featureExcludedChannels)
+    names.forEach((name, i) => {
+      const key = normalizeChannelName(name)
+      if (mask?.[i] === false) excluded.add(key)
+      else excluded.delete(key)
+    })
+    this.featureExcludedChannels = mask ? excluded : null
+    try {
+      if (mask) localStorage.setItem(FEATURE_CH_KEY, JSON.stringify([...excluded]))
+      else localStorage.removeItem(FEATURE_CH_KEY)
+    } catch {
+      /* Keep the current session's selection in memory. */
+    }
+    this.emit()
+  }
+
+  selectedFeatureChannels(names = this.channelNames, subset?: boolean[] | null): boolean[] {
+    return names.map((name, i) =>
+      (!subset || subset[i] === true) && !this.featureExcludedChannels?.has(normalizeChannelName(name)))
+  }
+
+  featureChannelMask(names = this.channelNames, subset?: boolean[] | null): boolean[] {
+    return this.selectedFeatureChannels(names, subset).map((selected, i) => selected && !this.isBad(names[i]))
   }
 
   ensureRing(nChannels: number): void {
@@ -185,6 +220,7 @@ class LiveEegHub {
     this.capacity = cap
     this.writeHead = 0
     this.filled = 0
+    this.lastSampleAt = 0
   }
 
   pushFrame(sample: ArrayLike<number>): void {
@@ -203,6 +239,7 @@ class LiveEegHub {
     this.writeHead = (i + 1) % this.capacity
     this.filled = Math.min(this.capacity, this.filled + 1)
     this.lastAt = performance.now()
+    this.lastSampleAt = this.lastAt
     this.liveLatch = true
   }
 
@@ -229,6 +266,7 @@ class LiveEegHub {
     this.writeHead = head
     this.filled = Math.min(cap, this.filled + samples)
     this.lastAt = performance.now()
+    this.lastSampleAt = this.lastAt
     this.liveLatch = true
   }
 
@@ -266,6 +304,7 @@ class LiveEegHub {
     this.link = 'idle'
     this.device = null
     this.lastAt = 0
+    this.lastSampleAt = 0
     this.liveLatch = false
     this.writeHead = 0
     this.filled = 0
@@ -278,6 +317,7 @@ class LiveEegHub {
     this.writeHead = 0
     this.filled = 0
     this.lastAt = 0
+    this.lastSampleAt = 0
     this.liveLatch = false
     for (const buf of this.buffers) buf.fill(0)
     this.emit()
@@ -305,6 +345,7 @@ class LiveEegHub {
       link: this.link,
       sampleRate: this.sampleRate,
       channelNames: this.channelNames,
+      channelTypes: this.channelTypes,
       lastAt: this.lastAt,
       detail: this.detail,
     }
@@ -317,6 +358,7 @@ class LiveEegHub {
       filled: this.filled,
       capacity: this.capacity,
       sampleRate: this.sampleRate,
+      lastSampleAt: this.lastSampleAt,
     }
   }
 

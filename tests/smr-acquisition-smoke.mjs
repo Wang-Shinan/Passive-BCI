@@ -22,7 +22,7 @@ try {
   })
   await page.route('**/api/**', async route => {
     if (route.request().method() === 'POST') mutations.push(route.request().url())
-    await route.fulfill({ json: { ok: true, running: false, heads: [], id: null } })
+    await route.fulfill({ json: { ok: true, running: false, heads: [], weights: [], id: null } })
   })
   await page.route('**/src/lib/session/recordControl.ts*', route => route.fulfill({ contentType: 'text/javascript', body: `
     const state = window.testRecords;
@@ -54,10 +54,11 @@ try {
       send(); clearInterval(window.testFeed); window.testFeed = setInterval(send,100);
       progress('test: prediction ready');
     }
+    export const connectGroupedSmrModel = connectSmrModel;
   ` }))
-  await page.goto(`${process.env.NEUROSLIDE_URL || 'http://127.0.0.1:5173'}/#/smr-acquisition`)
+  await page.goto(`${process.env.NEUROSLIDE_URL || 'http://127.0.0.1:5173'}/#/smr-acquisition?mode=grouped`)
   await page.getByRole('button', { name: '实验员设置', exact: true }).click()
-  await page.getByRole('button', { name: '连接 EEG 与所选模型', exact: true }).click()
+  await page.getByRole('button', { name: '使用 S04 个体化模型', exact: true }).click()
   await page.getByTestId('smr-model-revision').filter({ hasText: 's04-test-4s' }).waitFor()
   assert.equal(await page.evaluate(() => window.testHead), 'smr_control_lp_093f1a91-f720-4773-b87f-4c2f8a5daea3.pt')
   assert.equal(await page.getByLabel('组间自动训练并评估接管').isChecked(), false)

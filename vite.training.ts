@@ -6,9 +6,11 @@ import path from 'node:path'
 import { onDevProcessExit, persistentDevStore } from './vite.process-hooks.ts'
 import { summarizeSessionDir } from './vite.record-library.ts'
 import { listModelHeads, selectModelHead } from './vite.model-heads.ts'
+import { modelWeightArgs, selectModelWeight } from './vite.model-weights.ts'
 import { adapterRoot } from './scripts/backend-paths.mjs'
 import { operationGate } from './vite.operation-gate.ts'
-import { appendRound, createRound, readRound, roundDirectory, loraHistory } from './vite.training-rounds.ts'
+import { isReveFilterMode, parseReveCustomFilter } from './src/lib/model-runtime/reveFilter.ts'
+import { appendRound, createRound, readRound, readSavedGroupBoundary, roundDirectory, loraHistory } from './vite.training-rounds.ts'
 
 type Job = {
   id: string; kind: 'export' | 'fit' | 'lora' | 'eegnet'; status: 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
@@ -56,6 +58,10 @@ export function trainingPlugin(): Plugin {
             if (roundRoute) {
               const roundId = roundRoute[1]
               if (req.method === 'GET' && roundId) { send(200, { ok: true, round: readRound(root, roundId) }); return }
+              if (req.method === 'GET') {
+                const subjectId = new URL(req.url ?? '', 'http://localhost').searchParams.get('subjectId')
+                send(200, { ok: true, saved: subjectId ? readSavedGroupBoundary(root, subjectId) : null }); return
+              }
               if (req.method !== 'POST') { send(405, { ok: false }); return }
               let raw = ''
               for await (const chunk of req) { raw += chunk.toString(); if (raw.length > 65536) throw new Error('请求过大') }
@@ -130,7 +136,10 @@ export function trainingPlugin(): Plugin {
                   const info = summarizeSessionDir(path.join(root, 'recordings'), stem)
                   if (!info || info.status !== 'complete' || info.eegBytes <= 0 || !info.events) throw new Error('需要已完成且包含 EEG 和标签事件的会话')
                   if (round) {
-                    const events = readFileSync(path.join(root, 'recordings', stem, 'events.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
+                    const events = readFileSync(path.join(root, 'recordings', stem, 'events.jsonl'), 'utf8')
+                      .split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
+                      .filter(e => !(e.experiment === 'gui-trigger' && e.subjectId === 'ledger'
+                        && ['trigger_request', 'trigger_ack', 'trigger_error'].includes(e.type)))
                     const ownerId = history?.rounds.find(r => r.sessions.includes(path.join(root, 'recordings', stem)))?.id ?? roundId
                     if (!events.some(e => e.type === 'group_end' && e.data?.complete === true && e.data?.roundId === ownerId)
                       || events.some(e => e.type === 'group_interrupted' || e.type === 'trial_invalid' || e.data?.valid === false)
@@ -152,23 +161,31 @@ export function trainingPlugin(): Plugin {
                 if (source.kind !== 'export' || source.status !== 'complete') throw new Error('请选择已完成导出的 H5')
                 if (!['session', 'trial'].includes(String(body.splitBy))) throw new Error('无效分组方式')
                 if (!['cpu', 'auto', 'cuda'].includes(String(body.device))) throw new Error('无效计算设备')
+                if (body.reveFilterMode !== undefined && !isReveFilterMode(body.reveFilterMode)) throw new Error('REVE 输入滤波选项无效')
+                const reveCustomFilter = body.reveFilterMode === 'custom' ? parseReveCustomFilter(body.reveCustomFilter) : undefined
+                if (body.reveFilterMode === 'custom' && !reveCustomFilter) throw new Error('REVE 自定义滤波参数无效')
                 const head = body.headId ? selectModelHead(await listModelHeads(root), String(body.headId), 'smr_control') : null
                 config = { dataset: path.join(jobsRoot(), source.id, 'dataset.h5'), sourceJobId: source.id,
                   headOutput: path.join(root, 'recordings', '.reve-heads', `smr_control_${body.kind === 'lora' ? 'lora' : 'lp'}_${id}.pt`),
                   loraCheckpoint: head?.loraCheckpoint ?? null, size: head?.size ?? 'base',
+                  ...(head?.modelDir ? { modelDir: head.modelDir } : {}),
                   epochs: trainingNumber(body.epochs, 1, body.kind === 'lora' ? 100 : 5000, true), lr: trainingNumber(body.lr, .000001, body.kind === 'lora' ? .01 : 1),
-                  seed: trainingNumber(body.seed, 0, 0xffffffff, true), splitBy: body.splitBy, device: body.device }
+                  seed: trainingNumber(body.seed, 0, 0xffffffff, true), splitBy: body.splitBy, device: body.device,
+                  reveFilterMode: body.reveFilterMode, reveCustomFilter }
                 if (round) {
                   if (source.config.roundId !== roundId || body.splitBy !== 'trial') throw new Error('训练数据不属于当前轮次')
                   if ((body.kind === 'lora') !== (source.config.scope === 'history')) throw new Error('LoRA 必须使用历史快照，probing 必须使用本轮数据')
                   if (typeof body.baselineRevision !== 'string' || !/^[\w.-]+$/.test(body.baselineRevision)) throw new Error('需要采集模型的实际版本')
-                  let lora = head?.loraCheckpoint ?? null
+                  const weight = selectModelWeight(root, typeof body.weightId === 'string' ? body.weightId : '', 'reve')
+                  modelWeightArgs(weight, head)
+                  let lora = weight?.kind === 'adapter' ? weight.file : head?.loraCheckpoint ?? null
                   const size = head?.size ?? (body.modelName === 'reve-large' ? 'large' : 'base')
-                  if (!head && body.baselineRevision !== `reve-${size}`) {
+                  if (!head && !weight && body.baselineRevision !== `reve-${size}`) {
                     lora = process.env.MODEL_REVE_LORA || path.join(adapterRoot, body.baselineRevision, 'best.pt')
                     if (!existsSync(lora) || path.basename(path.dirname(lora)) !== body.baselineRevision) throw new Error('无法定位当前模型的 LoRA，请选择明确的分类头')
                   }
                   config = { ...config, roundId, seed: round.seed, splitBy: 'trial', size, loraCheckpoint: lora,
+                    ...(weight?.kind === 'backbone' ? { modelDir: path.dirname(weight.file) } : {}),
                     baselineRevision: body.baselineRevision, baselineStateFile: head?.stateFile ?? null,
                     baselineOutput: path.join(root, 'recordings', '.reve-heads', `smr_control_baseline_${id}.pt`),
                     splitLedger: path.join(roundDirectory(root, round.id), 'split.json'),

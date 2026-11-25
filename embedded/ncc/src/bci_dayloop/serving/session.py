@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from bci_dayloop.serving.backends import ServingBackend
+from bci_dayloop.serving.omni_gui_filter import OmniGuiWindowFilter
 from bci_dayloop.serving.profiles import DeviceProfile
 from bci_dayloop.serving.protocol import (
     ProtocolError,
@@ -35,6 +36,8 @@ class ClientSession:
         self._seen_feedback_ids: set[str] = set()
         self._segment_id: str | None = None
         self._last_window_id: int | None = None
+        filter_settings = getattr(backend, "omni_gui_filter_settings", None)
+        self._omni_gui_filter = OmniGuiWindowFilter(filter_settings) if filter_settings is not None else None
 
     def handle_message(self, message: str | bytes) -> list[str]:
         try:
@@ -103,6 +106,8 @@ class ClientSession:
                 )
         self._seen_request_ids.add(window.request_id)
         self._last_window_id = window.window_id
+        if self._omni_gui_filter is not None:
+            window = self._omni_gui_filter.apply(window)
         result = self.backend.predict(window)
         payload = prediction_message(result)
         self._broadcast(payload)

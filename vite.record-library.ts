@@ -9,6 +9,7 @@ export const SESSION_FILES = [
   'session.json',
   'eeg.bin',
   'eeg.json',
+  'reve-input.json',
   'eeg.idx.json',
   'events.jsonl',
   'context.jsonl',

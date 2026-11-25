@@ -2,7 +2,8 @@ import { afterEach, expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { appendRound, createRound, readRound, roundDirectory, loraHistory } from './vite.training-rounds'
+import { appendRound, createRound, readRound, readSavedGroupBoundary, roundDirectory, loraHistory } from './vite.training-rounds'
+import { createSession, groupedPlan, restoreSavedSession } from './src/experiments/smr-adapt/engine'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -16,6 +17,32 @@ it('persists independent subject rounds and append-only workflow decisions', () 
     entries: [{ type: 'group_saved' }, { type: 'model_decision' }] })
   expect(() => createRound(root, id, 'another-person', 0)).toThrow('已存在')
   expect(() => roundDirectory(root, '../outside')).toThrow()
+})
+
+it('rebuilds the next group at its original trial index, using the journaled model decision', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'recover-saved-group-')); roots.push(root)
+  const id = '11111111-1111-1111-1111-111111111111'
+  const subjectId = 'participant-X'
+  const plan = groupedPlan(2, 4)
+  const session = createSession(plan, 23)
+  createRound(root, id, subjectId, session.seed)
+  const events = [{ type: 'group_start', data: { roundId: id, plan } },
+    ...session.trials.slice(0, 4).map(({ index, target }) => ({ type: 'trial', data: { index, target, outcome: 'timeout', hit: null, feedbackSec: 6 } })),
+    { type: 'group_end', data: { roundId: id, run: 1, complete: true } }]
+  const folder = path.join(root, 'recordings', 'group1')
+  mkdirSync(folder)
+  writeFileSync(path.join(folder, 'events.jsonl'), events.map(event => JSON.stringify({ ...event, subjectId, experiment: 'smr-adapt' })).join('\n'))
+  appendRound(root, id, 'group_saved', { session: 'recordings/group1', model: { revision: 'baseline' } })
+  expect(readSavedGroupBoundary(root, subjectId)).toMatchObject({ needsProcessing: true })
+  appendRound(root, id, 'model_decision', { selected: { revision: 'updated' } })
+  const saved = readSavedGroupBoundary(root, subjectId)!
+  expect(saved).toMatchObject({ round: { baseline: { revision: 'updated' }, sessions: ['group1'] }, needsProcessing: false })
+  const restored = restoreSavedSession(saved.plan, saved.round.seed, saved.results)
+  expect(restored).toMatchObject({ phase: 'rest', cursor: 4 })
+  expect(restored.trials[4]).toEqual(session.trials[4])
+  expect(readSavedGroupBoundary(root, 'other')).toBeNull()
+  appendRound(root, id, 'interrupted', {})
+  expect(readSavedGroupBoundary(root, subjectId)).toBeNull()
 })
 
 it('selects only compatible completed subject rounds and requires the current final group', () => {

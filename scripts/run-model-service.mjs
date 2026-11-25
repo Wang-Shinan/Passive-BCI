@@ -78,9 +78,15 @@ function main() {
   const task = argValue('--task') || process.env.MODEL_REVE_TASK || 'passive_rating'
   const stepSec = argValue('--step-sec') || process.env.MODEL_STEP_SEC || defaultStepSec(task)
   const windowSec = argValue('--window-sec') || process.env.MODEL_WINDOW_SEC
+  const reveFilterMode = argValue('--filter-mode') || process.env.MODEL_REVE_FILTER_MODE
+  const reveCustomFilter = argValue('--custom-filter')
   const { freshHead, checkpointHead } = resolveReveHeadMode({ task, argv: process.argv.slice(2), env: process.env })
   if (freshHead && task === 'gaze_smr') throw new Error('gaze_smr requires a fitted subject head; fresh-head is for SMR plumbing only')
-  const requestedStateFile = argValue('--state-file') || (!freshHead && !checkpointHead &&
+  const resumeStateFile = argValue('--resume-state-file')
+  if (resumeStateFile && (backend !== 'reve' || pkg || task === 'gaze_smr')) {
+    throw new Error('resume-state-file requires a REVE task that can initialize a fresh head')
+  }
+  const requestedStateFile = argValue('--state-file') || resumeStateFile || (!freshHead && !checkpointHead &&
     (task === 'gaze_smr' ? defaultStateFile(task) : process.env.MODEL_STATE_FILE || defaultStateFile(task))
   )
   const stateFile = requestedStateFile ? path.resolve(passiveRoot, requestedStateFile) : undefined
@@ -124,7 +130,10 @@ function main() {
           task,
           ...(stepSec ? ['--step-sec', String(stepSec)] : []),
           ...(windowSec ? ['--window-sec', String(windowSec)] : []),
-          ...(stateFile ? ['--state-file', stateFile] : []),
+          ...(reveFilterMode ? ['--filter-mode', reveFilterMode] : []),
+          ...(reveCustomFilter ? ['--custom-filter', reveCustomFilter] : []),
+          ...(stateFile ? [resumeStateFile ? '--resume-state-file' : '--state-file', stateFile] : []),
+          ...(checkpointHead ? ['--require-lora-head'] : []),
           ...loraArgs,
           ...(omniEndpoint ? ['--omni-endpoint', omniEndpoint, '--omni-channels', omniChannels, '--omni-device-type', omniDeviceType] : []),
           ...(omniEndpoint && process.argv.includes('--omni-relay') ? ['--omni-relay'] : []),

@@ -36,6 +36,36 @@ class BundledBackendTests(unittest.TestCase):
             train_linear_head(head, features, torch.tensor(labels), epochs=40, lr=.05)
             self.assertTrue(torch.equal(head(features).argmax(1), torch.tensor(labels)))
 
+    def test_explicit_reve_head_does_not_fall_back(self):
+        from bci_dayloop.serving.reve import ReveModelBackend
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / 'selected.pt'
+            backend = ReveModelBackend(Path('reve-base'), Path('reve-positions'),
+                                       task='smr_control', state_file=checkpoint)
+            with self.assertRaises(FileNotFoundError):
+                backend.load()
+
+            backend._head = torch.nn.Linear(3, 4)
+            head = {'weight': torch.ones(4, 3), 'bias': torch.zeros(4)}
+            saved = {'head': head, 'task': 'smr_control', 'encoder_id': 'reve-base',
+                     'class_names': list(backend.class_names),
+                     'head_initialization': {'source': 'random'}}
+            for field, invalid in (
+                ('task', 'passive_rating'),
+                ('encoder_id', 'other-encoder'),
+                ('class_names', list(reversed(backend.class_names))),
+                ('head', {**head, 'weight': torch.ones(4, 2)}),
+            ):
+                with self.subTest(field=field):
+                    torch.save({**saved, field: invalid}, checkpoint)
+                    with self.assertRaises(ValueError):
+                        backend._load_state_file()
+
+            torch.save(saved, checkpoint)
+            backend._load_state_file()
+            self.assertTrue(torch.equal(backend._head.weight, head['weight']))
+            self.assertEqual(backend.hello_payload()['head_initialization']['state_file'], checkpoint.name)
+
     def test_cli_entries(self):
         for script in ('serve_runtime_model.py', 'serve_dev_mock_model.py', 'fit_smr_control_head.py', 'fit_gaze_smr_head.py', 'export_smr_control_hdf5.py'):
             with self.subTest(script=script):

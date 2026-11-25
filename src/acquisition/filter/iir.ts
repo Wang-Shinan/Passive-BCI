@@ -1,27 +1,10 @@
-import { sosfiltZi, type Sos } from './design'
+import { FS } from '../protocol/constants'
+import { DEFAULT_REVE_BAND } from '../../lib/model-runtime/reveFilter'
+import { designOmniGuiFilter, sosfiltZi, type Sos } from './design'
 
 export type { Sos }
 
-/** Default OmniBCI display band: Butterworth order-2, 5–50 Hz @ 250 SPS. */
-export const DEFAULT_BAND_SOS: Sos = [
-  [
-    0.1750876436721008, 0.3501752873442016, 0.1750876436721008, 1.0,
-    -0.47338545635197227, 0.26070108314598184,
-  ],
-  [1.0, -2.0, 1.0, 1.0, -1.8256698996865246, 0.8425510982273042],
-]
-
-/** Cascaded 50 Hz + 100 Hz iirnotch Q=30 @ 250 SPS. */
-export const DEFAULT_NOTCH_SOS: Sos = [
-  [
-    0.9794827609814495, -0.605353637681125, 0.9794827609814492, 1.0,
-    -0.6053536376811253, 0.958965521962899,
-  ],
-  [
-    0.95977356895352, 1.552946256070586, 0.9597735689535198, 1.0,
-    1.552946256070586, 0.9195471379070399,
-  ],
-]
+const DEFAULT_FILTER = designOmniGuiFilter(FS, DEFAULT_REVE_BAND.lowHz, DEFAULT_REVE_BAND.highHz, DEFAULT_REVE_BAND.useNotch)
 
 interface Zi {
   band: Float64Array
@@ -85,18 +68,25 @@ export class LiveIirFilter {
   private nChannels: number
   private scratch: Float32Array
   private batchScratch: Float32Array
+  private settlingSamples: number | null = null
+  private settlingLeft = new Uint32Array(0)
+  private previousSequence: number | null = null
 
   constructor(
     nChannels = 8,
-    bandSos: Sos = DEFAULT_BAND_SOS,
-    notchSos: Sos = DEFAULT_NOTCH_SOS,
-    useNotch = true,
+    bandSos: Sos = DEFAULT_FILTER.sos,
+    notchSos: Sos = [],
+    useNotch = false,
   ) {
     this.nChannels = nChannels
     this.bandSos = bandSos
     this.notchSos = notchSos
     this.useNotch = useNotch
     this.zi = allocZi(nChannels, bandSos.length, notchSos.length)
+    if (bandSos === DEFAULT_FILTER.sos) {
+      this.settlingSamples = DEFAULT_FILTER.settlingSamples
+      this.settlingLeft = new Uint32Array(nChannels).fill(this.settlingSamples)
+    }
     this.scratch = new Float32Array(nChannels)
     this.batchScratch = new Float32Array(0)
   }
@@ -104,22 +94,24 @@ export class LiveIirFilter {
   setChannelCount(n: number): void {
     if (n === this.nChannels) return
     this.nChannels = n
-    this.zi = allocZi(n, this.bandSos.length, this.notchSos.length)
+    this.reset()
     this.scratch = new Float32Array(n)
     this.batchScratch = new Float32Array(0)
-    this.generation += 1
   }
 
-  configure(bandSos: Sos, notchSos: Sos, useNotch: boolean): void {
+  configure(bandSos: Sos, notchSos: Sos, useNotch: boolean, settlingSamples: number | null = null): void {
     this.bandSos = bandSos
     this.notchSos = notchSos
     this.useNotch = useNotch
-    this.zi = allocZi(this.nChannels, bandSos.length, notchSos.length)
-    this.generation += 1
+    this.settlingSamples = settlingSamples
+    this.reset()
   }
 
   reset(): void {
     this.zi = allocZi(this.nChannels, this.bandSos.length, this.notchSos.length)
+    this.settlingLeft = new Uint32Array(this.settlingSamples === null ? 0 : this.nChannels)
+    this.settlingLeft.fill(this.settlingSamples ?? 0)
+    this.previousSequence = null
     this.generation += 1
   }
 
@@ -127,41 +119,53 @@ export class LiveIirFilter {
     return this.generation
   }
 
-  processSample(uv: Float32Array, valid: boolean): Float32Array {
+  private noteFrame(sequence: number | undefined, valid: boolean): void {
+    if (this.settlingSamples === null) return
+    if (!valid || (sequence !== undefined && (this.previousSequence === null ||
+        sequence !== ((this.previousSequence + 1) >>> 0)))) {
+      this.zi.have.fill(false)
+      this.settlingLeft.fill(this.settlingSamples)
+    }
+    this.previousSequence = valid ? sequence ?? null : null
+  }
+
+  private processValue(value: number, valid: boolean, ch: number): number {
+    const zi = this.zi
+    const finite = valid && Number.isFinite(value)
+    if (this.settlingSamples !== null && !finite) {
+      zi.have[ch] = false
+      this.settlingLeft[ch] = this.settlingSamples
+      this.previousSequence = null
+      return Number.NaN
+    }
+
+    const x = finite ? value : zi.have[ch] ? zi.last[ch]! : 0
+    if (finite) {
+      if (!zi.have[ch]) primeBandZi(zi, ch, x, this.bandSos)
+      zi.last[ch] = x
+      zi.have[ch] = true
+    }
+    const band = sosfiltOne(this.bandSos, zi.band, ch * zi.bandSections * 2, x)
+    const y = this.useNotch ? sosfiltOne(this.notchSos, zi.notch, ch * zi.notchSections * 2, band) : band
+    if (!finite) return Number.NaN
+    if (this.settlingSamples !== null && this.settlingLeft[ch]! > 0) {
+      this.settlingLeft[ch] = this.settlingLeft[ch]! - 1
+      if (this.settlingLeft[ch]! > 0) return Number.NaN
+    }
+    return y
+  }
+
+  processSample(uv: Float32Array, valid: boolean, sequence?: number): Float32Array {
     const n = Math.min(this.nChannels, uv.length)
     if (this.scratch.length !== this.nChannels) this.scratch = new Float32Array(this.nChannels)
     const out = this.scratch
-    for (let ch = 0; ch < n; ch++) {
-      let x = uv[ch]!
-      if (!valid || !Number.isFinite(x)) {
-        x = this.zi.have[ch] ? this.zi.last[ch]! : 0
-      } else {
-        if (!this.zi.have[ch]) primeBandZi(this.zi, ch, x, this.bandSos)
-        this.zi.last[ch] = x
-        this.zi.have[ch] = true
-      }
-
-      let y = sosfiltOne(
-        this.bandSos,
-        this.zi.band,
-        ch * this.zi.bandSections * 2,
-        x,
-      )
-      if (this.useNotch) {
-        y = sosfiltOne(
-          this.notchSos,
-          this.zi.notch,
-          ch * this.zi.notchSections * 2,
-          y,
-        )
-      }
-      out[ch] = valid && Number.isFinite(uv[ch]!) ? y : Number.NaN
-    }
+    this.noteFrame(sequence, valid)
+    for (let ch = 0; ch < n; ch++) out[ch] = this.processValue(uv[ch]!, valid, ch)
     return out
   }
 
   /** Filter an interleaved (sample-major) batch in place of per-sample calls. */
-  processInterleaved(values: Float32Array, samples: number, channels: number): Float32Array {
+  processInterleaved(values: Float32Array, samples: number, channels: number, validFlags?: Uint8Array, sequence?: Uint32Array): Float32Array {
     const n = Math.max(1, channels)
     if (n !== this.nChannels) this.setChannelCount(n)
     const need = samples * n
@@ -169,22 +173,9 @@ export class LiveIirFilter {
     const out = this.batchScratch
     for (let s = 0; s < samples; s++) {
       const off = s * n
-      for (let ch = 0; ch < n; ch++) {
-        let x = values[off + ch]!
-        const finite = Number.isFinite(x)
-        if (!finite) {
-          x = this.zi.have[ch] ? this.zi.last[ch]! : 0
-        } else {
-          if (!this.zi.have[ch]) primeBandZi(this.zi, ch, x, this.bandSos)
-          this.zi.last[ch] = x
-          this.zi.have[ch] = true
-        }
-        let y = sosfiltOne(this.bandSos, this.zi.band, ch * this.zi.bandSections * 2, x)
-        if (this.useNotch) {
-          y = sosfiltOne(this.notchSos, this.zi.notch, ch * this.zi.notchSections * 2, y)
-        }
-        out[off + ch] = finite ? y : Number.NaN
-      }
+      const valid = this.settlingSamples === null || (validFlags?.[s] ?? 1) === 1
+      this.noteFrame(sequence?.[s], valid)
+      for (let ch = 0; ch < n; ch++) out[off + ch] = this.processValue(values[off + ch]!, valid, ch)
     }
     return this.batchScratch.subarray(0, need)
   }

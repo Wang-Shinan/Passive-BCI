@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useLiveEeg } from '../eeg/useLiveEeg'
 import type { ModelWeightOption } from './modelServiceTypes'
 import {
@@ -17,6 +18,7 @@ import { useModelRuntime } from './useModelRuntime'
 import { HeadSelector } from './HeadSelector'
 import { knownS04Revision } from './subjectModels'
 import { useModelConfiguration, useAppliedModel } from './useModelConfiguration'
+import { describeReveFilter } from './reveFilter'
 
 function latency(value: number | null): string {
   return value == null ? '—' : `${value.toFixed(1)} ms`
@@ -207,6 +209,7 @@ function ModelServiceLaunchBar({
   const canStop = Boolean(proc?.owned || proc?.starting || operationBusy || busy)
   const starting = busy || operationBusy || Boolean(proc?.starting)
   const runtime = useModelRuntime()
+  const activeFilter = runtime.serviceHello?.effective_filter_mode
   const defaultHeadLabel = task === 'smr_control' ? 'LoRA 自带线性头' : '默认配置'
   const loadedId = proc?.headId || ''
   const desiredId = selectedHead || (task === 'gaze_smr' ? 'gaze_smr_active.pt' : '')
@@ -217,7 +220,8 @@ function ModelServiceLaunchBar({
     (wantedWindow != null && proc.windowSec != null && proc.windowSec !== wantedWindow) ||
     (architecture === 'reve' && !sameWeights && (proc.task !== task || desiredId !== loadedId ||
       (selectedOption?.configurationKey && proc.configurationKey && !proc.configurationKey.startsWith(selectedOption.configurationKey))))))
-  const runningLabel = !proc?.running ? '未运行' : proc.backend === 'eegnet' ? (proc.modelRevision || 'EEGNet') : sameWeights ? (selectedHead || defaultHeadLabel) : (proc.headId || proc.loadedHead || defaultHeadLabel)
+  const runningDefaultHeadLabel = proc?.task === 'smr_control' ? 'LoRA 自带线性头' : '默认配置'
+  const runningLabel = !proc?.running ? '未运行' : proc.backend === 'eegnet' ? (proc.modelRevision || 'EEGNet') : (proc.headId || proc.loadedHead || runningDefaultHeadLabel)
 
   return (
     <div className="mb-3 space-y-2">
@@ -291,10 +295,19 @@ function ModelServiceLaunchBar({
             : details?.message || '开发服务可一键拉起本地模型'}
         </span>
       </div>
-      <p className="muted m-0 text-xs">已运行：{proc?.backend} / {proc?.weightId || (proc?.backend === 'eegnet' ? '随机初始化' : '默认权重')} / {runningLabel}。待应用：{architecture} / {weightId || (architecture === 'eegnet' ? '重新随机初始化' : selectedHead || defaultHeadLabel)}。{sameWeights ? '当前连接的模型版本与所选分类头相同。' : leavePort ? `页面连接 ${proc?.proxyPort}，${proc?.port} 上的原服务保持运行。` : pendingSelection ? (serviceActive ? '改动应用中将自动重启服务。' : '选择尚未生效；点击应用后切换。') : serviceActive ? '改动会直接应用到运行中的服务。' : '选择后点击启动按钮生效。'}</p>
+      <p className="muted m-0 text-xs">
+        已运行 · {proc?.backend} / {proc?.weightId || (proc?.backend === 'eegnet' ? '随机初始化' : '默认权重')} / {runningLabel}。
+        待应用 · {architecture} / {weightId || (architecture === 'eegnet' ? '重新随机初始化' : '跟随分类头／默认权重')}
+        {architecture === 'reve' && ` / ${selectedHead || defaultHeadLabel}`}。
+        {sameWeights ? '当前连接的模型版本与所选分类头相同。' : leavePort ? `页面连接 ${proc?.proxyPort}。` : pendingSelection ? '待应用配置与运行版本不同。' : serviceActive ? '改动会直接应用到运行中的服务。' : '选择后点击启动按钮生效。'}
+      </p>
       {weightError && <p role="alert" className="m-0 text-xs" style={{ color: 'var(--danger)' }}>{weightError}</p>}
       {architecture === 'eegnet' && <p className="muted m-0 text-xs">完整 checkpoint 同时加载编码器和分类器。文件放入 checkpoints/eegnet 或 recordings/.eegnet 后刷新。随机初始化使用当前 EEG 通道数（未连接时为 32），固定种子可复现，不代表已训练的脑控模型。</p>}
       {architecture === 'reve' && <p className="muted m-0 text-xs">可选基座或 LoRA 权重；独立分类头须与编码器配套。基座无配套头时使用未训练头。</p>}
+      {architecture === 'reve' && <p className="muted m-0 text-xs">
+        {activeFilter && <>当前 REVE 输入滤波 · {describeReveFilter(activeFilter, runtime.serviceHello?.effective_filter_band ?? runtime.serviceHello?.effective_custom_filter)} · </>}
+        <Link to="/acquisition">采集页滤波设置</Link>
+      </p>}
       {recording && <p role="status" className="muted m-0 text-xs">录制中可更换模型：应用时自动保存当前段，切换后从新段开始录制。停止服务会中断脑控，但不会删除数据。</p>}
       {architecture === 'reve' && selectedOption && <p className="muted m-0 text-xs">配套编码器：{selectedOption.encoderId} · {selectedOption.classes} 类。启动时自动匹配。</p>}
       {architecture === 'reve' && !headsLoading && !taskHeads.length && <p className="muted m-0 text-xs">当前任务暂无已保存线性头。将文件放入 recordings/.reve-heads 后刷新列表。</p>}

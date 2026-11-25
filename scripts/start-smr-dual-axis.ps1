@@ -1,4 +1,7 @@
-param([int]$Port = 8769, [string]$Device = 'auto', [double]$StepSec = 0.1)
+param(
+    [int]$Port = 8769, [string]$Device = 'auto', [double]$StepSec = 0.1,
+    [ValidateSet('pretraining', 'none', 'checkpoint')][string]$FilterMode = 'pretraining'
+)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $pythonPath = if ($env:PASSIVE_BCI_PYTHON) { $env:PASSIVE_BCI_PYTHON } else { Join-Path $projectRoot '.venv/Scripts/python.exe' }
@@ -7,5 +10,5 @@ if (-not (Test-Path -LiteralPath $manifest)) { throw 'Run scripts/import-s04-dua
 $env:PYTHONUTF8 = '1'
 $env:HF_HUB_OFFLINE = '1'
 $env:TRANSFORMERS_OFFLINE = '1'
-& $pythonPath (Join-Path $projectRoot 'embedded/ncc/serve_reve_model.py') --task smr_dual_axis --state-file $manifest --device $Device --step-sec $StepSec --port $Port --host 127.0.0.1 --no-tcp
+& $pythonPath (Join-Path $projectRoot 'embedded/ncc/serve_reve_model.py') --task smr_dual_axis --state-file $manifest --device $Device --step-sec $StepSec --filter-mode $FilterMode --port $Port --host 127.0.0.1 --no-tcp
 exit $LASTEXITCODE
